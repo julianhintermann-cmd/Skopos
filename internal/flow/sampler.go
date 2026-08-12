@@ -64,9 +64,9 @@ func (s *Sampler) Keep() bool {
 	return n%step == 0
 }
 
-// measure recomputes the keep-rate from the packets seen since the last call
-// and the elapsed time. It is called by Run once per window.
-func (s *Sampler) measure(elapsed time.Duration) {
+// Measure recomputes the keep-rate from the packets seen since the last call
+// and the elapsed time. The runtime calls it once per second.
+func (s *Sampler) Measure(elapsed time.Duration) {
 	seen := s.counter.Swap(0)
 	if elapsed <= 0 {
 		return

@@ -20,7 +20,7 @@ func TestSamplerBelowThresholdKeepsAll(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		s.Keep()
 	}
-	s.measure(time.Second)
+	s.Measure(time.Second)
 	if st := s.State(); st.Sampling {
 		t.Errorf("should not sample at %d pps below threshold", st.ObservedPPS)
 	}
@@ -41,7 +41,7 @@ func TestSamplerAboveThresholdSamplesAndReports(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		s.Keep()
 	}
-	s.measure(time.Second)
+	s.Measure(time.Second)
 
 	st := s.State()
 	if !st.Sampling {
@@ -67,7 +67,7 @@ func TestSamplerAboveThresholdSamplesAndReports(t *testing.T) {
 	}
 
 	// Drop back below threshold → must report the transition out.
-	s.measure(time.Second) // counter was ~4000 from the loop above... reset first
+	s.Measure(time.Second) // counter was ~4000 from the loop above... reset first
 }
 
 func TestSamplerReportsTransitionOut(t *testing.T) {
@@ -79,13 +79,13 @@ func TestSamplerReportsTransitionOut(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		s.Keep()
 	}
-	s.measure(time.Second) // into sampling
+	s.Measure(time.Second) // into sampling
 
 	// Next window: quiet traffic, below threshold.
 	for i := 0; i < 100; i++ {
 		s.Keep()
 	}
-	s.measure(time.Second) // out of sampling
+	s.Measure(time.Second) // out of sampling
 
 	if len(transitions) != 2 {
 		t.Fatalf("expected 2 transitions (in, out), got %d: %+v", len(transitions), transitions)

@@ -4,6 +4,7 @@ import { useSSE } from '../lib/sse'
 import { Card, CardHeader, StatTile, Pill, TextInput } from '../components/ui'
 import { Sparkline } from '../components/Sparkline'
 import { useDeviceNames } from '../lib/deviceNames'
+import { useIsMobile } from '../lib/useIsMobile'
 import { formatBits, formatBytes, formatPPS, formatCount } from '../lib/format'
 
 const MAX_ROWS = 200
@@ -26,6 +27,7 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
   const pausedRef = useRef(false)
   const bufferRef = useRef<Row[]>([])
   const names = useDeviceNames(onUnauthorized)
+  const isMobile = useIsMobile()
 
   // Initial back-fill so the table isn't empty while waiting for the next flush.
   useEffect(() => {
@@ -131,62 +133,69 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
         <CardHeader
           title="Traffic feed"
           sub="every conversation as it completes"
-          right={
-            <div className="flex items-center gap-2">
-              <div className="w-48">
-                <TextInput
-                  value={filter}
-                  onChange={setFilter}
-                  placeholder="Filter: device, IP, port, proto…"
-                  className="!px-2.5 !py-1 !text-xs"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={togglePause}
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
-                style={
-                  paused
-                    ? { background: 'var(--warn-tint)', color: 'var(--warn)' }
-                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
-                }
-              >
-                {paused ? `Resume${bufferedCount ? ` (+${bufferedCount})` : ''}` : 'Pause'}
-              </button>
-              <Pill tone="neutral">{formatCount(visible.length)} shown</Pill>
-            </div>
-          }
+          right={!isMobile ? <Pill tone="neutral">{formatCount(visible.length)} shown</Pill> : undefined}
         />
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ color: 'var(--muted)' }}>
-                <Hd>Time</Hd>
-                <Hd>Source</Hd>
-                <Hd>Destination</Hd>
-                <Hd>Proto</Hd>
-                <Hd right>Volume</Hd>
-                <Hd right>Packets</Hd>
-                <Hd>Direction</Hd>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm" style={{ color: 'var(--muted)' }}>
-                    {rows.length > 0
-                      ? 'No flows match the filter.'
-                      : connected
-                        ? 'Listening for traffic…'
-                        : 'Connecting to the live stream…'}
-                  </td>
-                </tr>
-              ) : (
-                visible.map((r) => <FlowRow key={r._id} row={r} names={names} />)
-              )}
-            </tbody>
-          </table>
+        {/* Controls: one row that wraps into a full-width filter on phones. */}
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-2.5">
+          <div className="min-w-40 flex-1">
+            <TextInput
+              value={filter}
+              onChange={setFilter}
+              placeholder="Filter: device, IP, port, proto…"
+              className="!px-2.5 !py-1.5 !text-xs"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={togglePause}
+            className="rounded-md px-3 py-1.5 text-xs font-medium"
+            style={
+              paused
+                ? { background: 'var(--warn-tint)', color: 'var(--warn)' }
+                : { background: 'var(--surface-2)', color: 'var(--muted)' }
+            }
+          >
+            {paused ? `Resume${bufferedCount ? ` (+${bufferedCount})` : ''}` : 'Pause'}
+          </button>
+          {isMobile && <Pill tone="neutral">{formatCount(visible.length)}</Pill>}
         </div>
+
+        {visible.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm" style={{ color: 'var(--muted)' }}>
+            {rows.length > 0
+              ? 'No flows match the filter.'
+              : connected
+                ? 'Listening for traffic…'
+                : 'Connecting to the live stream…'}
+          </div>
+        ) : isMobile ? (
+          <div>
+            {visible.map((r) => (
+              <FlowCard key={r._id} row={r} names={names} />
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: 'var(--muted)' }}>
+                  <Hd>Time</Hd>
+                  <Hd>Source</Hd>
+                  <Hd>Destination</Hd>
+                  <Hd>Proto</Hd>
+                  <Hd right>Volume</Hd>
+                  <Hd right>Packets</Hd>
+                  <Hd>Direction</Hd>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((r) => (
+                  <FlowRow key={r._id} row={r} names={names} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </div>
   )
@@ -217,6 +226,39 @@ function FlowRow({ row, names }: { row: Row; names: Map<string, string> }) {
         <DirectionBadge dir={row.dir} />
       </Cell>
     </tr>
+  )
+}
+
+// FlowCard is the phone rendering of one conversation: endpoints on the first
+// line, the numbers underneath — no horizontal scrolling, thumb-sized rows.
+function FlowCard({ row, names }: { row: Row; names: Map<string, string> }) {
+  const src = names.get(row.src) || row.src
+  const dst = row.dst_name || names.get(row.dst) || row.dst
+  return (
+    <div
+      className="px-4 py-2.5"
+      style={{
+        borderTop: '1px solid var(--border)',
+        background: row._fresh ? 'var(--accent-tint)' : undefined,
+        transition: 'background 1.2s ease-out',
+      }}
+    >
+      <div className="flex items-center gap-1.5 text-[13px] font-medium">
+        <span className="min-w-0 flex-1 truncate">{src}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M5 12h14M13 6l6 6-6 6" />
+        </svg>
+        <span className="min-w-0 flex-1 truncate text-right">{dst}<span className="font-mono text-[0.7rem]" style={{ color: 'var(--muted)' }}>:{row.dst_port}</span></span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 font-mono text-[0.68rem]" style={{ color: 'var(--muted)' }}>
+        <span>{clock(row.end)}</span>
+        <span>{row.proto}</span>
+        <span className="tabnums">{formatBytes(row.bytes)}</span>
+        <span className="ml-auto">
+          <DirectionBadge dir={row.dir} />
+        </span>
+      </div>
+    </div>
   )
 }
 

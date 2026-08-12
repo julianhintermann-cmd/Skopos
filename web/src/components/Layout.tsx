@@ -2,6 +2,8 @@ import { NavLink, Outlet } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { Logo } from './Logo'
 import { ThemeToggle } from './ThemeToggle'
+import { MobileShell } from './mobile'
+import { useIsMobile } from '../lib/useIsMobile'
 import { t } from '../lib/i18n'
 import type { Me } from '../lib/api'
 
@@ -34,14 +36,18 @@ const sections: { title: Parameters<typeof t>[0]; items: NavItem[] }[] = [
   },
 ]
 
-const flatNav = sections.flatMap((s) => s.items)
-
 export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () => void; banner?: ReactNode }) {
+  const isMobile = useIsMobile()
+  if (isMobile) {
+    // Phones get their own shell: bottom tabs, sheets, card layouts — not a
+    // squeezed sidebar.
+    return <MobileShell me={me} onLogout={onLogout} banner={banner} />
+  }
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
       <aside
-        className="hidden w-56 shrink-0 flex-col border-r sm:flex"
+        className="flex w-56 shrink-0 flex-col border-r"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
       >
         <div className="flex items-center gap-2.5 px-5 py-4">
@@ -85,14 +91,10 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="flex items-center justify-between gap-3 border-b px-4 py-2.5 sm:px-6"
+          className="flex items-center justify-between gap-3 border-b px-6 py-2.5"
           style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
         >
-          <div className="flex items-center gap-2 sm:hidden">
-            <Logo size={22} />
-            <span className="font-mono text-xs font-semibold uppercase tracking-[0.25em]">Skopos</span>
-          </div>
-          <div className="hidden sm:block" />
+          <div />
           <div className="flex items-center gap-3">
             {me?.enforcing !== undefined && (
               <span
@@ -125,29 +127,7 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
 
         {banner}
 
-        {/* Mobile nav */}
-        <nav
-          className="flex gap-1 overflow-x-auto border-b px-2 py-1.5 sm:hidden"
-          style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
-          {flatNav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className="whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium"
-              style={({ isActive }) =>
-                isActive
-                  ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                  : { color: 'var(--muted)' }
-              }
-            >
-              {t(item.key)}
-            </NavLink>
-          ))}
-        </nav>
-
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-5 sm:px-6">
+        <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-5">
           <Outlet />
         </main>
       </div>

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type CFAnalytics, type CFStatus, type CFZone } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Button, Pill, Toggle, TextInput } from '../components/ui'
 import { CFAnalyticsChart } from '../components/CFAnalyticsChart'
+import { SheetSelect } from '../components/mobile'
+import { useIsMobile } from '../lib/useIsMobile'
 import { formatBytes, formatCount } from '../lib/format'
 
 const TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tokens'
@@ -187,13 +189,14 @@ function Connected({ status, canWrite, onChange }: { status: CFStatus; canWrite:
 }
 
 const windows = [
-  { label: '24h', value: '24h' },
-  { label: '7d', value: '168h' },
-  { label: '30d', value: '720h' },
+  { label: '24h', value: '24h', hint: 'Last 24 hours' },
+  { label: '7d', value: '168h', hint: 'Last 7 days' },
+  { label: '30d', value: '720h', hint: 'Last 30 days' },
 ]
 
 function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthorized: () => void }) {
   const [win, setWin] = useState(windows[0])
+  const isMobile = useIsMobile()
   const [data, setData] = useState<CFAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -238,20 +241,29 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-1.5">
-        {windows.map((wnd) => (
-          <button
-            key={wnd.value}
-            onClick={() => setWin(wnd)}
-            className="rounded-md px-3 py-1 text-xs font-medium"
-            style={
-              wnd.value === win.value
-                ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                : { background: 'var(--surface-2)', color: 'var(--muted)' }
-            }
-          >
-            {wnd.label}
-          </button>
-        ))}
+        {isMobile ? (
+          <SheetSelect
+            value={win.value}
+            label="Time window"
+            options={windows.map((w) => ({ value: w.value, label: w.label, hint: w.hint }))}
+            onChange={(v) => setWin(windows.find((w) => w.value === v) ?? windows[0])}
+          />
+        ) : (
+          windows.map((wnd) => (
+            <button
+              key={wnd.value}
+              onClick={() => setWin(wnd)}
+              className="rounded-md px-3 py-1 text-xs font-medium"
+              style={
+                wnd.value === win.value
+                  ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
+                  : { background: 'var(--surface-2)', color: 'var(--muted)' }
+              }
+            >
+              {wnd.label}
+            </button>
+          ))
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

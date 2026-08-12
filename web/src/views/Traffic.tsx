@@ -5,7 +5,9 @@ import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
 import { CountryBars } from '../components/CountryBars'
+import { SheetSelect } from '../components/mobile'
 import { useDeviceNames } from '../lib/deviceNames'
+import { useIsMobile } from '../lib/useIsMobile'
 import { formatBytes } from '../lib/format'
 
 interface FlowsResponse {
@@ -17,10 +19,10 @@ interface FlowsResponse {
 }
 
 const ranges = [
-  { label: '1h', ms: 3600_000 },
-  { label: '6h', ms: 6 * 3600_000 },
-  { label: '24h', ms: 24 * 3600_000 },
-  { label: '7d', ms: 7 * 24 * 3600_000 },
+  { label: '1h', hint: 'Last hour', ms: 3600_000 },
+  { label: '6h', hint: 'Last 6 hours', ms: 6 * 3600_000 },
+  { label: '24h', hint: 'Last 24 hours', ms: 24 * 3600_000 },
+  { label: '7d', hint: 'Last 7 days', ms: 7 * 24 * 3600_000 },
 ]
 
 export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
@@ -39,30 +41,43 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
     onUnauthorized,
   })
 
+  const isMobile = useIsMobile()
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-1.5">
-        {ranges.map((r) => (
-          <button
-            key={r.label}
-            onClick={() => setRange(r)}
-            className="rounded-md px-3 py-1 text-xs font-medium"
-            style={
-              r.label === range.label
-                ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                : { background: 'var(--surface-2)', color: 'var(--muted)' }
-            }
-          >
-            {r.label}
-          </button>
-        ))}
-        <span className="ml-2 font-mono text-xs" style={{ color: 'var(--muted)' }}>
-          {data ? `resolution ${data.resolution}` : ''}
-        </span>
+        {isMobile ? (
+          <SheetSelect
+            value={range.label}
+            label="Time range"
+            options={ranges.map((r) => ({ value: r.label, label: r.label, hint: r.hint }))}
+            onChange={(v) => setRange(ranges.find((r) => r.label === v) ?? ranges[0])}
+          />
+        ) : (
+          ranges.map((r) => (
+            <button
+              key={r.label}
+              onClick={() => setRange(r)}
+              className="rounded-md px-3 py-1 text-xs font-medium"
+              style={
+                r.label === range.label
+                  ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
+                  : { background: 'var(--surface-2)', color: 'var(--muted)' }
+              }
+            >
+              {r.label}
+            </button>
+          ))
+        )}
+        {!isMobile && (
+          <span className="ml-2 font-mono text-xs" style={{ color: 'var(--muted)' }}>
+            {data ? `resolution ${data.resolution}` : ''}
+          </span>
+        )}
         <a
           href={exportHref}
           download
-          className="ml-auto rounded-md px-3 py-1 text-xs font-medium"
+          className="ml-auto rounded-md px-3 py-1.5 text-xs font-medium"
           style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
           title="Download the raw flows of this range as CSV"
         >

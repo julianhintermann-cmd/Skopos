@@ -5,18 +5,21 @@ import { deviceName, type DeviceDetail as Detail } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
+import { SheetSelect } from '../components/mobile'
+import { useIsMobile } from '../lib/useIsMobile'
 import { Th, Td } from './Devices'
 import { formatBytes, formatCount, formatRelative } from '../lib/format'
 
 const windows = [
-  { label: '24h', value: '24h' },
-  { label: '7d', value: '168h' },
-  { label: '30d', value: '720h' },
+  { label: '24h', value: '24h', hint: 'Last 24 hours' },
+  { label: '7d', value: '168h', hint: 'Last 7 days' },
+  { label: '30d', value: '720h', hint: 'Last 30 days' },
 ]
 
 export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void }) {
   const { mac = '' } = useParams()
   const [win, setWin] = useState(windows[0])
+  const isMobile = useIsMobile()
   const { data, loading, error } = useFetch<Detail>(
     `/api/devices/${encodeURIComponent(mac)}/detail?window=${win.value}`,
     { pollMs: 15000, onUnauthorized },
@@ -65,23 +68,34 @@ export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void })
       </Card>
 
       <div className="flex items-center gap-1.5">
-        {windows.map((w) => (
-          <button
-            key={w.value}
-            onClick={() => setWin(w)}
-            className="rounded-md px-3 py-1 text-xs font-medium"
-            style={
-              w.value === win.value
-                ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                : { background: 'var(--surface-2)', color: 'var(--muted)' }
-            }
-          >
-            {w.label}
-          </button>
-        ))}
-        <span className="ml-2 font-mono text-xs" style={{ color: 'var(--muted)' }}>
-          resolution {data.resolution}
-        </span>
+        {isMobile ? (
+          <SheetSelect
+            value={win.value}
+            label="Time window"
+            options={windows.map((w) => ({ value: w.value, label: w.label, hint: w.hint }))}
+            onChange={(v) => setWin(windows.find((w) => w.value === v) ?? windows[0])}
+          />
+        ) : (
+          <>
+            {windows.map((w) => (
+              <button
+                key={w.value}
+                onClick={() => setWin(w)}
+                className="rounded-md px-3 py-1 text-xs font-medium"
+                style={
+                  w.value === win.value
+                    ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
+                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
+                }
+              >
+                {w.label}
+              </button>
+            ))}
+            <span className="ml-2 font-mono text-xs" style={{ color: 'var(--muted)' }}>
+              resolution {data.resolution}
+            </span>
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

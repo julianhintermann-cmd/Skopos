@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, deviceName, type Device } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
+import { useIsMobile } from '../lib/useIsMobile'
 import { formatRelative } from '../lib/format'
 
 export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
@@ -13,6 +14,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
 
   const devices = data?.devices ?? []
   const named = devices.filter((d) => d.Label).length
+  const isMobile = useIsMobile()
 
   return (
     <Card>
@@ -36,6 +38,12 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
         <EmptyState>Could not load devices: {error}</EmptyState>
       ) : devices.length === 0 ? (
         <EmptyState>No devices inventoried yet.</EmptyState>
+      ) : isMobile ? (
+        <div>
+          {devices.map((d) => (
+            <DeviceCard key={d.ID} device={d} canWrite={canWrite} onChanged={refresh} onUnauthorized={onUnauthorized} />
+          ))}
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -85,6 +93,50 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
         </div>
       )}
     </Card>
+  )
+}
+
+// DeviceCard is the phone rendering of one device: identity block with the
+// inline rename, meta lines, and a thumb-sized action row.
+function DeviceCard({
+  device,
+  canWrite,
+  onChanged,
+  onUnauthorized,
+}: {
+  device: Device
+  canWrite: boolean
+  onChanged: () => void
+  onUnauthorized: () => void
+}) {
+  return (
+    <div className="px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="flex items-start justify-between gap-2">
+        <NameCell device={device} onSaved={onChanged} onUnauthorized={onUnauthorized} />
+        <Link
+          to={`/devices/${encodeURIComponent(device.MAC)}`}
+          className="flex items-center gap-0.5 rounded-md px-2 py-1 text-xs font-medium"
+          style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
+        >
+          Details
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </Link>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.7rem]" style={{ color: 'var(--muted)' }}>
+        <span>{device.IP}</span>
+        <span>{device.MAC}</span>
+        {device.Vendor && <span>{device.Vendor}</span>}
+        <span>seen {formatRelative(device.LastSeen)}</span>
+      </div>
+      {canWrite && (
+        <div className="mt-2 flex items-center gap-1">
+          <PresenceToggle device={device} onChanged={onChanged} onUnauthorized={onUnauthorized} />
+          <WakeButton mac={device.MAC} onUnauthorized={onUnauthorized} />
+        </div>
+      )}
+    </div>
   )
 }
 

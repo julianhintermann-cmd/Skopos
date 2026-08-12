@@ -23,6 +23,16 @@ in a single container configured by a single YAML file.
   (AF_PACKET), aggregated into flows, with a LAN device inventory and readable
   names from DNS/SNI. Time-series that stay fast for months via rolled-up
   aggregates.
+- **Live view** — every conversation as it completes, with throughput updating
+  once a second over a push stream (no busy-polling), device names resolved
+  inline. Watch your whole network in real time.
+- **Name your devices** — give any host on the network a friendly name straight
+  from the dashboard; it sticks across sightings and takes precedence over the
+  discovered hostname everywhere.
+- **Cloudflare** — connect a read-only API token in the UI (not the YAML) and
+  monitor request traffic, cache hit rate and edge-blocked threats for your own
+  domains, next to your LAN. The token is sealed with AES-GCM and never leaves
+  the NAS.
 - **Firewall management** — block and unblock IPs and CIDRs through a dedicated
   nftables table with in-kernel TTL expiry. State is declarative and restored on
   every start, so reboots and updates never drop your protection. Ships in
@@ -33,10 +43,13 @@ in a single container configured by a single YAML file.
   one notification, not five hundred.
 - **ntfy alerts** — push to your self-hosted ntfy or ntfy.sh, with severity
   mapped to priority, tap-through to the alert, and a generic webhook too.
-- **Web dashboard** — live throughput, traffic explorer, devices, firewall,
-  alert history and system health. Light and dark, English UI.
+- **Web dashboard** — overview, a real-time Live view, traffic explorer,
+  devices, firewall, alert history, Cloudflare, settings and system health.
+  Light and dark, English UI.
 - **One YAML file** — every path, interface, threshold, topic and credential
-  comes from `config.yaml`. Nothing about your environment is hardcoded.
+  comes from `config.yaml`. Nothing about your environment is hardcoded. The one
+  deliberate exception is the Cloudflare token, which you connect in the UI and
+  Skopos stores encrypted — secrets like that never belong in a config file.
 
 <div align="center">
 <img src="docs/screenshots/alerts.png" alt="Alerts" width="49%">
@@ -135,19 +148,35 @@ option, its type and its default — generated from the source, so it never
 drifts. A fully-commented example lives in
 [`deploy/config.example.yaml`](deploy/config.example.yaml).
 
+### Connect Cloudflare (in the UI, not the YAML)
+
+To watch traffic for your own domains, open **Cloudflare** in the dashboard and
+paste a scoped API token — there is nothing to add to `config.yaml`. Create the
+token from your [Cloudflare API tokens](https://dash.cloudflare.com/profile/api-tokens)
+page as a **Custom token** with two read-only permissions, **Zone · Analytics ·
+Read** and **Zone · Zone · Read**. Skopos verifies it, seals it with AES-GCM
+(the key lives in the database's `meta` table, like the session key), and never
+returns it or writes it to disk in the clear. Toggle which zones to monitor, and
+revoke the token from Cloudflare at any time.
+
 ## How it works
 
 ```
-interfaces → capture (AF_PACKET) → flow aggregator → detectors → policy ┬→ ntfy / webhook
-                                          │                              └→ nftables (inet skopos)
+interfaces → capture (AF_PACKET) → flow aggregator ┬→ detectors → policy ┬→ ntfy / webhook
+                                          │         │                     └→ nftables (inet skopos)
+                                          │         └→ live stream ────────→ SSE → Live view
                                           └→ SQLite (hot) → Parquet archive (cold)
                                                      ↑
                                             REST + SSE API → React dashboard (embedded)
+                                                     ↑
+                    Cloudflare GraphQL analytics (token sealed at rest) ────┘
 ```
 
 A single Go binary runs the whole pipeline; the React dashboard is embedded
 into it, so the image is one self-contained file. Packet **headers** and
-DNS/SNI **names** are processed — raw packets are never written to disk.
+DNS/SNI **names** are processed — raw packets are never written to disk. The
+flow sink is teed so every completed flow both persists and streams to the Live
+view; throughput is pushed once a second so open dashboards never busy-poll.
 
 - **Backend:** Go (native AF_PACKET capture and nftables via netlink; a small,
   static, multi-arch image).

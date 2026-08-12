@@ -1,12 +1,15 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/config"
+	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 )
 
@@ -96,6 +99,50 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+// handleSetDeviceLabel assigns an operator-chosen name to a device. An empty
+// label clears it, falling back to the discovered hostname.
+func (s *Server) handleSetDeviceLabel(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+
+	mac := strings.TrimSpace(r.PathValue("mac"))
+	if mac == "" {
+		writeError(w, http.StatusBadRequest, "missing device mac")
+		return
+	}
+	var req struct {
+		Label string `json:"label"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if len(label) > 64 {
+		writeError(w, http.StatusBadRequest, "label too long (max 64 characters)")
+		return
+	}
+
+	switch err := s.deps.Store.SetDeviceLabel(ctx, mac, label); {
+	case errors.Is(err, store.ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "no device with that mac")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	id, _ := identityFrom(r)
+	detail := "cleared label"
+	if label != "" {
+		detail = "renamed to " + label
+	}
+	_ = s.deps.Store.Audit(ctx, model.AuditEntry{
+		Actor: id.name, Action: "device_label", Target: mac, Detail: detail,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mac": mac, "label": label})
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {

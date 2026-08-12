@@ -136,13 +136,27 @@ func (b Block) Expired(now time.Time) bool {
 
 // Device is a host observed on the LAN.
 type Device struct {
-	ID        int64
-	MAC       string
-	IP        netip.Addr
+	ID  int64
+	MAC string
+	IP  netip.Addr
+	// Label is an operator-assigned name. It is set only through the UI and is
+	// never overwritten by capture, so it takes precedence over the discovered
+	// hostname wherever a device needs a human-readable name.
+	Label     string
 	Hostname  string
 	Vendor    string
 	FirstSeen time.Time
 	LastSeen  time.Time
+}
+
+// Name is the best human-readable label for the device: the operator's label
+// if set, otherwise the discovered hostname, otherwise the empty string (the
+// UI renders that as "unknown").
+func (d Device) Name() string {
+	if d.Label != "" {
+		return d.Label
+	}
+	return d.Hostname
 }
 
 // AuditEntry records a security-relevant action for the audit log.

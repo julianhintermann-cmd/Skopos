@@ -76,6 +76,27 @@ paths:
       summary: LAN device inventory
       responses:
         "200": { description: Devices }
+  /api/devices/{mac}/label:
+    post:
+      summary: Set or clear a device's operator-assigned name
+      description: >
+        The label is set only through this endpoint and is never overwritten by
+        auto-discovery; it takes precedence over the discovered hostname. An
+        empty label clears it. Requires write scope.
+      parameters:
+        - { name: mac, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 64 }
+      responses:
+        "200": { description: Label updated }
+        "400": { description: Missing mac or label too long }
+        "404": { description: No device with that mac }
   /api/alerts:
     get:
       summary: Alert history

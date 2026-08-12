@@ -95,10 +95,17 @@ export interface Device {
   ID: number
   MAC: string
   IP: string
+  Label: string
   Hostname: string
   Vendor: string
   FirstSeen: string
   LastSeen: string
+}
+
+// deviceName is the best display name for a device: the operator label wins,
+// then the discovered hostname. Mirrors model.Device.Name on the backend.
+export function deviceName(d: Device): string {
+  return d.Label || d.Hostname || ''
 }
 
 export interface AuditEntry {

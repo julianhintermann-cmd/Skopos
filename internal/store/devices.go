@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
@@ -56,7 +57,7 @@ func (s *Store) UpsertDevice(ctx context.Context, mac, ip, hostname, vendor stri
 // ListDevices returns known devices, most recently seen first.
 func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mac, ip, hostname, vendor, first_seen_ms, last_seen_ms
+		SELECT id, mac, ip, label, hostname, vendor, first_seen_ms, last_seen_ms
 		FROM devices ORDER BY last_seen_ms DESC`)
 	if err != nil {
 		return nil, err
@@ -68,7 +69,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 		var d model.Device
 		var ip string
 		var first, last int64
-		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Hostname, &d.Vendor, &first, &last); err != nil {
+		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &first, &last); err != nil {
 			return nil, err
 		}
 		d.IP, _ = netip.ParseAddr(ip)
@@ -77,4 +78,27 @@ func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// ErrDeviceNotFound is returned by SetDeviceLabel when no device carries the
+// given MAC.
+var ErrDeviceNotFound = errors.New("device not found")
+
+// SetDeviceLabel assigns (or, with an empty label, clears) the operator label
+// for the device with the given MAC. The label is left untouched by
+// UpsertDevice, so auto-discovery never overwrites it.
+func (s *Store) SetDeviceLabel(ctx context.Context, mac, label string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET label = ? WHERE mac = ?`, label, mac)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
 }

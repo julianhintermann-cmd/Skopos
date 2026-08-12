@@ -1,1 +1,122 @@
 @import "tailwindcss";
+
+/* IBM Plex — bundled locally so the dashboard works offline on a NAS. */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+/*
+  Skopos design tokens. Sonar-teal accent on a deep green-black, motif σκοπός —
+  the watcher. Dark is the default (monitoring lives on a second screen); light
+  is a deliberate, separately-tuned set, not an inversion.
+*/
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+:root {
+  --bg: #f2f6f5;
+  --surface: #ffffff;
+  --surface-2: #e9efed;
+  --surface-3: #dde7e4;
+  --text: #182220;
+  --muted: #5c6d68;
+  --border: #d5e0dc;
+  --border-strong: #c2d1cc;
+  --accent: #0d7268;
+  --accent-strong: #095e55;
+  --accent-tint: #e0edea;
+  --good: #2f7d55;
+  --good-tint: #dcefe3;
+  --warn: #8a5a0a;
+  --warn-tint: #f7efdd;
+  --crit: #b23b3b;
+  --crit-tint: #f7e0de;
+  --chart-grid: #e2ebe8;
+}
+
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0c1211;
+    --surface: #121a18;
+    --surface-2: #1a2422;
+    --surface-3: #22302c;
+    --text: #dde8e4;
+    --muted: #8ba39b;
+    --border: #253530;
+    --border-strong: #33473f;
+    --accent: #4cbcae;
+    --accent-strong: #6fd2c5;
+    --accent-tint: #15302c;
+    --good: #57c08a;
+    --good-tint: #14261d;
+    --warn: #d9a94a;
+    --warn-tint: #241d10;
+    --crit: #e5766e;
+    --crit-tint: #2a1513;
+    --chart-grid: #1e2a27;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c1211;
+  --surface: #121a18;
+  --surface-2: #1a2422;
+  --surface-3: #22302c;
+  --text: #dde8e4;
+  --muted: #8ba39b;
+  --border: #253530;
+  --border-strong: #33473f;
+  --accent: #4cbcae;
+  --accent-strong: #6fd2c5;
+  --accent-tint: #15302c;
+  --good: #57c08a;
+  --good-tint: #14261d;
+  --warn: #d9a94a;
+  --warn-tint: #241d10;
+  --crit: #e5766e;
+  --crit-tint: #2a1513;
+  --chart-grid: #1e2a27;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Focus ring for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* uPlot theming hooks. */
+.uplot { font-family: var(--font-mono); }
+.u-axis { color: var(--muted); }
+.u-legend { display: none; }
+
+/* Utility layer for the tokens (Tailwind v4 reads these via arbitrary values). */
+.tabnums { font-variant-numeric: tabular-nums; }

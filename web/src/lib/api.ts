@@ -1,0 +1,128 @@
+// Typed client for the Skopos API. Thin wrappers over fetch with JSON handling
+// and a shared error shape; every view calls through here.
+
+export class APIError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method, headers: {} }
+  if (body !== undefined) {
+    ;(init.headers as Record<string, string>)['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const resp = await fetch(path, init)
+  if (resp.status === 401) throw new APIError(401, 'unauthorized')
+  const text = await resp.text()
+  const data = text ? JSON.parse(text) : {}
+  if (!resp.ok) throw new APIError(resp.status, data.error || resp.statusText)
+  return data as T
+}
+
+export const api = {
+  get: <T>(path: string) => request<T>('GET', path),
+  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  del: <T>(path: string) => request<T>('DELETE', path),
+  postText: async (path: string, text: string) => {
+    const resp = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
+    return resp.json()
+  },
+}
+
+// ---- shared types (mirror the Go JSON shapes) ----
+
+export type Severity = 'info' | 'warning' | 'critical'
+
+export interface LiveStats {
+  bits_per_second: number
+  packets_per_second: number
+  sampling: boolean
+  observed_pps: number
+}
+
+export interface TimePoint {
+  time: string
+  bytes: number
+  packets: number
+  flows: number
+}
+
+export interface Talker {
+  address: string
+  name?: string
+  bytes: number
+  packets: number
+  flows: number
+}
+
+export interface Overview {
+  live: LiveStats
+  throughput_1h: TimePoint[] | null
+  top_talkers: Talker[] | null
+  active_blocks: number
+  unacked_alerts: number
+  enforcing: boolean
+}
+
+export interface Alert {
+  ID: number
+  Time: string
+  Detector: string
+  Severity: Severity
+  Source: string
+  Title: string
+  Detail: string
+  Count: number
+  Ack: boolean
+  AckTime: string | null
+}
+
+export interface Block {
+  ID: number
+  Prefix: string
+  Origin: string
+  Reason: string
+  Created: string
+  Expires: string | null
+  Active: boolean
+}
+
+export interface Device {
+  ID: number
+  MAC: string
+  IP: string
+  Hostname: string
+  Vendor: string
+  FirstSeen: string
+  LastSeen: string
+}
+
+export interface AuditEntry {
+  ID: number
+  Time: string
+  Actor: string
+  Action: string
+  Target: string
+  Detail: string
+}
+
+export interface Me {
+  username: string
+  scope: string
+  auth: boolean
+  enforcing: boolean
+}
+
+export interface Health {
+  ok: boolean
+  version: string
+  capture: string
+  firewall: string
+  enforcing: boolean
+  cold_storage_ok: boolean
+  detail?: string
+}

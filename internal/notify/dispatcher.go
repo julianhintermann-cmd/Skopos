@@ -14,7 +14,7 @@ import (
 // == nil once boxed in the Channel interface, so guard against it explicitly.
 func isNil(c Channel) bool {
 	v := reflect.ValueOf(c)
-	return v.Kind() == reflect.Ptr && v.IsNil()
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // Dispatcher fans a message out to every configured channel. It implements

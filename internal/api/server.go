@@ -8,6 +8,7 @@ import (
 
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/firewall"
+	"github.com/julianhintermann-cmd/skopos/internal/geoip"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
@@ -43,6 +44,11 @@ type Deps struct {
 	// Speedtest runs one measurement and persists it (nil disables the
 	// endpoint). The runtime injects the real runner or the demo fake.
 	Speedtest func(ctx context.Context) (model.SpeedtestResult, error)
+	// GeoIP resolves addresses to countries (nil or unavailable → the country
+	// view reports itself as not ready).
+	GeoIP geoip.Provider
+	// Countries is the operator's blocked-country list.
+	Countries *geoip.Blocklist
 	// Health reports subsystem health for /api/health.
 	Health func() Health
 }
@@ -128,12 +134,14 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/export/devices.csv", s.requireRead(http.HandlerFunc(s.handleExportDevices)))
 	s.mux.Handle("GET /api/export/alerts.csv", s.requireRead(http.HandlerFunc(s.handleExportAlerts)))
 	s.mux.Handle("GET /api/speedtest", s.requireRead(http.HandlerFunc(s.handleSpeedtestHistory)))
+	s.mux.Handle("GET /api/geoip/summary", s.requireRead(http.HandlerFunc(s.handleGeoIPSummary)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
 	s.mux.Handle("POST /api/devices/{mac}/wake", s.requireWrite(http.HandlerFunc(s.handleWakeDevice)))
 	s.mux.Handle("POST /api/devices/{mac}/presence", s.requireWrite(http.HandlerFunc(s.handleSetDevicePresence)))
 	s.mux.Handle("POST /api/speedtest/run", s.requireWrite(http.HandlerFunc(s.handleSpeedtestRun)))
+	s.mux.Handle("POST /api/geoip/blocked", s.requireWrite(http.HandlerFunc(s.handleSetBlockedCountries)))
 	s.mux.Handle("POST /api/alerts/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckAlert)))
 	s.mux.Handle("POST /api/blocks", s.requireWrite(http.HandlerFunc(s.handleAddBlock)))
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))

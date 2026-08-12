@@ -145,6 +145,37 @@ export interface DeviceDetail {
   ports: PortUsage[] | null
 }
 
+export interface CountryStat {
+  country: string
+  bytes: number
+  flows: number
+}
+
+export interface GeoIPSummary {
+  available: boolean
+  out: CountryStat[]
+  in: CountryStat[]
+  blocked: string[]
+}
+
+// countryFlag renders an ISO 3166-1 alpha-2 code as its emoji flag.
+export function countryFlag(code: string): string {
+  if (!/^[A-Z]{2}$/.test(code)) return '🌐'
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+}
+
+const regionNames = typeof Intl !== 'undefined' ? new Intl.DisplayNames(['en'], { type: 'region' }) : null
+
+// countryName resolves an ISO code to a readable name via the browser's own
+// locale data — no shipped country table.
+export function countryName(code: string): string {
+  try {
+    return regionNames?.of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
 export interface SpeedtestResult {
   ID: number
   Time: string

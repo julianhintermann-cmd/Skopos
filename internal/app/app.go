@@ -13,14 +13,17 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/api"
 	"github.com/julianhintermann-cmd/skopos/internal/cloudflare"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
+	"github.com/julianhintermann-cmd/skopos/internal/detect"
 	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/flow"
+	"github.com/julianhintermann-cmd/skopos/internal/geoip"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
@@ -76,6 +79,23 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("opening secret store: %w", err)
 	}
 	cf := cloudflare.NewManager(st, secretBox, cloudflare.NewClient(), a.clock)
+
+	// --- geoip -------------------------------------------------------------
+	// Country lookups run locally against the DB-IP Lite database, refreshed
+	// like the blocklist feeds. Demo mode ships a static mapping instead.
+	countries, err := geoip.NewBlocklist(st)
+	if err != nil {
+		return fmt.Errorf("loading country blocklist: %w", err)
+	}
+	var geo geoip.Provider
+	if a.demo {
+		geo = geoip.NewDemoProvider()
+	} else {
+		gm := geoip.NewManager(filepath.Join(a.cfg.Storage.Hot, "geoip"), a.clock)
+		gm.SetLogger(a.warnf)
+		gm.Start(ctx)
+		geo = gm
+	}
 
 	classifier := flow.NewClassifier(a.cfg.Network.PrivateRanges)
 
@@ -134,6 +154,14 @@ func (a *App) Run(ctx context.Context) error {
 
 	live := newLiveMeter(a.clock, sampler.State)
 	observers := a.buildObservers(a.cfg, classifier, st, pol, live)
+	// Blocked-country watch: reactive blocking of inbound sources from listed
+	// countries, throttled per source; policy still owns cooldown/allowlist.
+	observers.all = append(observers.all, detect.NewCountryBlock(detect.CountryBlockConfig{
+		Lookup:     geo.Lookup,
+		Blocked:    countries.Contains,
+		Empty:      countries.Empty,
+		IsInternal: classifier.Internal,
+	}, pol, a.clock))
 
 	// Tee the flow sink: every flushed batch is written to the store as before
 	// and, in addition, projected for the live view — streamed to dashboards
@@ -156,6 +184,8 @@ func (a *App) Run(ctx context.Context) error {
 		LiveFlows:  liveSink,
 		Cloudflare: cf,
 		Speedtest:  runSpeedtest,
+		GeoIP:      geo,
+		Countries:  countries,
 		Clock:      a.clock,
 		Health:     a.healthFunc(st, backend, fw),
 	})

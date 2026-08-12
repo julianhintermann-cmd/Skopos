@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type Block } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
+import { api, countryFlag, countryName, type Block, type GeoIPSummary } from '../lib/api'
+import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput } from '../components/ui'
 import { Th, Td } from './Devices'
 import { useDeviceNames } from '../lib/deviceNames'
 import { formatRelative, formatTime } from '../lib/format'
@@ -65,6 +65,8 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
         </Card>
       )}
 
+      <CountryBlocking canWrite={canWrite} onUnauthorized={onUnauthorized} />
+
       <Card>
         <CardHeader title="Active blocks" sub={`${blocks.length} in effect`} />
         {loading && !data ? (
@@ -122,6 +124,84 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
         )}
       </Card>
     </div>
+  )
+}
+
+// CountryBlocking manages the blocked-country list. Blocking is reactive:
+// inbound sources from listed countries are blocked the moment they appear
+// (once enforcement is on), instead of loading half the internet's prefixes
+// into the kernel.
+function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUnauthorized: () => void }) {
+  const { data, refresh } = useFetch<GeoIPSummary>('/api/geoip/summary?window=1h', { onUnauthorized })
+  const [input, setInput] = useState('')
+  const [err, setErr] = useState('')
+  const blocked = data?.blocked ?? []
+
+  const save = async (countries: string[]) => {
+    setErr('')
+    try {
+      await api.post('/api/geoip/blocked', { countries })
+      setInput('')
+      refresh()
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+      setErr((e as Error).message)
+    }
+  }
+
+  const add = () => {
+    const code = input.trim().toUpperCase()
+    if (!code) return
+    save([...blocked, code])
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Country blocking"
+        sub="inbound sources from these countries are blocked on sight (when enforcement is on)"
+      />
+      <div className="flex flex-col gap-2.5 px-4 pb-4">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {blocked.length === 0 && (
+            <span className="text-sm" style={{ color: 'var(--muted)' }}>No countries blocked.</span>
+          )}
+          {blocked.map((c) => (
+            <span
+              key={c}
+              className="inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-1 text-xs font-medium"
+              style={{ background: 'var(--crit-tint)', color: 'var(--crit)' }}
+            >
+              {countryFlag(c)} {countryName(c)}
+              {canWrite && (
+                <button
+                  onClick={() => save(blocked.filter((x) => x !== c))}
+                  aria-label={`Unblock ${countryName(c)}`}
+                  className="rounded-full px-1 font-mono"
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+        {canWrite && (
+          <div className="flex items-center gap-2">
+            <div className="w-40">
+              <TextInput
+                value={input}
+                onChange={setInput}
+                mono
+                placeholder="ISO code, e.g. RU"
+                onKeyDown={(e) => e.key === 'Enter' && add()}
+              />
+            </div>
+            <Button onClick={add} disabled={!input.trim()}>Block country</Button>
+            {err && <span className="text-xs" style={{ color: 'var(--crit)' }}>{err}</span>}
+          </div>
+        )}
+      </div>
+    </Card>
   )
 }
 

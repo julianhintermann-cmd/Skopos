@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import type { TimePoint, Talker } from '../lib/api'
+import type { GeoIPSummary, TimePoint, Talker } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
+import { CountryBars } from '../components/CountryBars'
 import { useDeviceNames } from '../lib/deviceNames'
 import { formatBytes } from '../lib/format'
 
@@ -33,6 +34,10 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
 
   const { data, loading, error } = useFetch<FlowsResponse>(path, { pollMs: 5000, onUnauthorized })
   const names = useDeviceNames(onUnauthorized)
+  const geo = useFetch<GeoIPSummary>(`/api/geoip/summary?window=${Math.round(range.ms / 3600_000)}h`, {
+    pollMs: 60000,
+    onUnauthorized,
+  })
 
   return (
     <div className="flex flex-col gap-4">
@@ -91,6 +96,33 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
               )}
             </div>
           </Card>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader title="Destination countries" sub={`${range.label} · where your traffic goes`} />
+              <div className="px-4 pb-4">
+                {!geo.data?.available ? (
+                  <EmptyState>GeoIP database is still downloading — check back in a minute.</EmptyState>
+                ) : geo.data.out.length > 0 ? (
+                  <CountryBars stats={geo.data.out.slice(0, 12)} />
+                ) : (
+                  <EmptyState>No outbound traffic in this range.</EmptyState>
+                )}
+              </div>
+            </Card>
+            <Card>
+              <CardHeader title="Source countries" sub={`${range.label} · who is knocking from outside`} />
+              <div className="px-4 pb-4">
+                {!geo.data?.available ? (
+                  <EmptyState>GeoIP database is still downloading — check back in a minute.</EmptyState>
+                ) : geo.data.in.length > 0 ? (
+                  <CountryBars stats={geo.data.in.slice(0, 12)} />
+                ) : (
+                  <EmptyState>No inbound traffic in this range.</EmptyState>
+                )}
+              </div>
+            </Card>
+          </div>
         </>
       )}
     </div>

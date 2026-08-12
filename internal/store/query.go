@@ -123,6 +123,43 @@ func (s *Store) TopTalkers(ctx context.Context, from, to time.Time, res Resoluti
 	return out, rows.Err()
 }
 
+// TopExternal returns the busiest external peers for one traffic direction:
+// destinations for lan_wan (where is my traffic going), sources for wan_lan
+// (who is knocking). Used by the country statistics, which aggregate the rows
+// by GeoIP in the API layer.
+func (s *Store) TopExternal(ctx context.Context, from, to time.Time, res Resolution, dir string, n int) ([]Talker, error) {
+	table, _, err := res.table()
+	if err != nil {
+		return nil, err
+	}
+	col := "dst_ip"
+	if dir == "wan_lan" {
+		col = "src_ip"
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s, SUM(bytes), SUM(packets), SUM(flows)
+		FROM %s
+		WHERE bucket_ms >= ? AND bucket_ms < ? AND direction = ?
+		GROUP BY %s
+		ORDER BY SUM(bytes) DESC
+		LIMIT ?`, col, table, col),
+		toMs(from), toMs(to), dir, n)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Talker
+	for rows.Next() {
+		var t Talker
+		if err := rows.Scan(&t.Address, &t.Bytes, &t.Packets, &t.Flows); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // CountFlows returns the number of raw flow rows currently stored (used by
 // tests and the system view).
 func (s *Store) CountFlows(ctx context.Context) (int64, error) {

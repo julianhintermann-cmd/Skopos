@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/netip"
 
@@ -83,6 +84,27 @@ func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 // ErrDeviceNotFound is returned by SetDeviceLabel when no device carries the
 // given MAC.
 var ErrDeviceNotFound = errors.New("device not found")
+
+// DeviceNameByIP returns the best display name (operator label, else
+// discovered hostname) for the device currently holding ip, or "" when the
+// address is unknown or nameless. Used to annotate notifications so an alert
+// reads "192.168.1.23 (Living-room TV)" instead of a bare address.
+func (s *Store) DeviceNameByIP(ctx context.Context, ip string) (string, error) {
+	var label, hostname string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT label, hostname FROM devices
+		WHERE ip = ? ORDER BY last_seen_ms DESC LIMIT 1`, ip).Scan(&label, &hostname)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if label != "" {
+		return label, nil
+	}
+	return hostname, nil
+}
 
 // SetDeviceLabel assigns (or, with an empty label, clears) the operator label
 // for the device with the given MAC. The label is left untouched by

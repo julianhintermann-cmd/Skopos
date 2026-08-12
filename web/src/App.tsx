@@ -66,7 +66,7 @@ export default function App() {
           <Route index element={<Overview onUnauthorized={onUnauthorized} />} />
           <Route path="live" element={<Live onUnauthorized={onUnauthorized} />} />
           <Route path="traffic" element={<Traffic onUnauthorized={onUnauthorized} />} />
-          <Route path="devices" element={<Devices onUnauthorized={onUnauthorized} />} />
+          <Route path="devices" element={<Devices onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="firewall" element={<Firewall onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="alerts" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="cloudflare" element={<Cloudflare onUnauthorized={onUnauthorized} canWrite={canWrite} />} />

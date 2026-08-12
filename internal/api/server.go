@@ -36,6 +36,9 @@ type Deps struct {
 	LiveFlows  LiveFlowProvider
 	Cloudflare CloudflareService
 	Clock      func() time.Time
+	// WakeFunc sends a Wake-on-LAN magic packet for a MAC. Defaults to
+	// wol.Wake; injectable so tests never touch the network.
+	WakeFunc func(mac string) error
 	// Health reports subsystem health for /api/health.
 	Health func() Health
 }
@@ -116,9 +119,13 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/me", s.requireRead(http.HandlerFunc(s.handleMe)))
 	s.mux.Handle("GET /api/integrations/cloudflare", s.requireRead(http.HandlerFunc(s.handleCFStatus)))
 	s.mux.Handle("GET /api/integrations/cloudflare/analytics", s.requireRead(http.HandlerFunc(s.handleCFAnalytics)))
+	s.mux.Handle("GET /api/export/flows.csv", s.requireRead(http.HandlerFunc(s.handleExportFlows)))
+	s.mux.Handle("GET /api/export/devices.csv", s.requireRead(http.HandlerFunc(s.handleExportDevices)))
+	s.mux.Handle("GET /api/export/alerts.csv", s.requireRead(http.HandlerFunc(s.handleExportAlerts)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
+	s.mux.Handle("POST /api/devices/{mac}/wake", s.requireWrite(http.HandlerFunc(s.handleWakeDevice)))
 	s.mux.Handle("POST /api/alerts/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckAlert)))
 	s.mux.Handle("POST /api/blocks", s.requireWrite(http.HandlerFunc(s.handleAddBlock)))
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))

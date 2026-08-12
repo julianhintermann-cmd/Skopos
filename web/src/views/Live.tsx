@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, deviceName, type Device, type LiveFlow, type LiveStats } from '../lib/api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, type LiveFlow, type LiveStats } from '../lib/api'
 import { useSSE } from '../lib/sse'
-import { Card, CardHeader, StatTile, Pill } from '../components/ui'
+import { Card, CardHeader, StatTile, Pill, TextInput } from '../components/ui'
 import { Sparkline } from '../components/Sparkline'
+import { useDeviceNames } from '../lib/deviceNames'
 import { formatBits, formatBytes, formatPPS, formatCount } from '../lib/format'
 
 const MAX_ROWS = 200
@@ -18,34 +19,13 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [spark, setSpark] = useState<number[]>([])
   const [rows, setRows] = useState<Row[]>([])
   const [connected, setConnected] = useState(false)
-  const [names, setNames] = useState<Map<string, string>>(new Map())
+  const [filter, setFilter] = useState('')
+  const [paused, setPaused] = useState(false)
+  const [bufferedCount, setBufferedCount] = useState(0)
   const idRef = useRef(0)
-
-  // Resolve internal IPs to their operator label / hostname (ties the live view
-  // to device naming). Polled loosely — device identity barely changes.
-  useEffect(() => {
-    let stop = false
-    const load = async () => {
-      try {
-        const { devices } = await api.get<{ devices: Device[] | null }>('/api/devices')
-        if (stop) return
-        const m = new Map<string, string>()
-        for (const d of devices ?? []) {
-          const n = deviceName(d)
-          if (d.IP && n) m.set(d.IP, n)
-        }
-        setNames(m)
-      } catch (e) {
-        if ((e as { status?: number }).status === 401) onUnauthorized()
-      }
-    }
-    load()
-    const id = setInterval(load, 30000)
-    return () => {
-      stop = true
-      clearInterval(id)
-    }
-  }, [onUnauthorized])
+  const pausedRef = useRef(false)
+  const bufferRef = useRef<Row[]>([])
+  const names = useDeviceNames(onUnauthorized)
 
   // Initial back-fill so the table isn't empty while waiting for the next flush.
   useEffect(() => {
@@ -73,14 +53,46 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
       const batch = data as LiveFlow[]
       if (!batch?.length) return
       const sorted = [...batch].sort((a, b) => +new Date(b.end) - +new Date(a.end))
-      setRows((prev) => {
-        const fresh = sorted.map((f) => ({ ...f, _id: idRef.current++, _fresh: true }))
-        return [...fresh, ...prev.map((r) => ({ ...r, _fresh: false }))].slice(0, MAX_ROWS)
-      })
+      const fresh = sorted.map((f) => ({ ...f, _id: idRef.current++, _fresh: true }))
+      if (pausedRef.current) {
+        // While paused, hold new flows aside so the table stays still; they
+        // are merged (and counted on the button) when the user resumes.
+        bufferRef.current = [...fresh, ...bufferRef.current].slice(0, MAX_ROWS)
+        setBufferedCount(bufferRef.current.length)
+        return
+      }
+      setRows((prev) => [...fresh, ...prev.map((r) => ({ ...r, _fresh: false }))].slice(0, MAX_ROWS))
     }
   }, [])
 
   useSSE(onEvent, setConnected)
+
+  const togglePause = () => {
+    if (paused) {
+      const buffered = bufferRef.current
+      bufferRef.current = []
+      setBufferedCount(0)
+      setRows((prev) => [...buffered, ...prev.map((r) => ({ ...r, _fresh: false }))].slice(0, MAX_ROWS))
+    }
+    pausedRef.current = !paused
+    setPaused(!paused)
+  }
+
+  // The filter matches addresses, resolved device names, DNS names, ports,
+  // protocol and direction — one box instead of a form.
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) => {
+      const hay = [
+        r.src, r.dst, r.dst_name ?? '',
+        names.get(r.src) ?? '', names.get(r.dst) ?? '',
+        String(r.src_port), String(r.dst_port),
+        r.proto, r.dir, dirMeta[r.dir]?.label ?? '',
+      ]
+      return hay.some((h) => h.toLowerCase().includes(q))
+    })
+  }, [rows, filter, names])
 
   const bits = formatBits(live?.bits_per_second ?? 0)
 
@@ -119,7 +131,31 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
         <CardHeader
           title="Traffic feed"
           sub="every conversation as it completes"
-          right={<Pill tone="neutral">{formatCount(rows.length)} shown</Pill>}
+          right={
+            <div className="flex items-center gap-2">
+              <div className="w-48">
+                <TextInput
+                  value={filter}
+                  onChange={setFilter}
+                  placeholder="Filter: device, IP, port, proto…"
+                  className="!px-2.5 !py-1 !text-xs"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={togglePause}
+                className="rounded-md px-2.5 py-1 text-xs font-medium"
+                style={
+                  paused
+                    ? { background: 'var(--warn-tint)', color: 'var(--warn)' }
+                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
+                }
+              >
+                {paused ? `Resume${bufferedCount ? ` (+${bufferedCount})` : ''}` : 'Pause'}
+              </button>
+              <Pill tone="neutral">{formatCount(visible.length)} shown</Pill>
+            </div>
+          }
         />
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -135,14 +171,18 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {visible.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-10 text-center text-sm" style={{ color: 'var(--muted)' }}>
-                    {connected ? 'Listening for traffic…' : 'Connecting to the live stream…'}
+                    {rows.length > 0
+                      ? 'No flows match the filter.'
+                      : connected
+                        ? 'Listening for traffic…'
+                        : 'Connecting to the live stream…'}
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => <FlowRow key={r._id} row={r} names={names} />)
+                visible.map((r) => <FlowRow key={r._id} row={r} names={names} />)
               )}
             </tbody>
           </table>

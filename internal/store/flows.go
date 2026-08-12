@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
@@ -77,4 +79,43 @@ func (s *Store) WriteFlows(flows []model.Flow) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// ExportFlows returns raw flows whose start falls in [from, to), newest first,
+// capped at limit rows. It backs the CSV export; dashboards use the rollups.
+func (s *Store) ExportFlows(ctx context.Context, from, to time.Time, limit int) ([]model.Flow, error) {
+	if limit <= 0 {
+		limit = 10000
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT start_ms, end_ms, src_ip, dst_ip, src_port, dst_port, proto, direction,
+		       out_bytes, out_packets, in_bytes, in_packets, dst_name
+		FROM flows
+		WHERE start_ms >= ? AND start_ms < ?
+		ORDER BY start_ms DESC LIMIT ?`,
+		toMs(from), toMs(to), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Flow
+	for rows.Next() {
+		var f model.Flow
+		var start, end int64
+		var src, dst, dir string
+		var proto uint8
+		if err := rows.Scan(&start, &end, &src, &dst, &f.SrcPort, &f.DstPort, &proto, &dir,
+			&f.OutBytes, &f.OutPackets, &f.InBytes, &f.InPackets, &f.DstName); err != nil {
+			return nil, err
+		}
+		f.Start = fromMs(start)
+		f.End = fromMs(end)
+		f.SrcIP, _ = netip.ParseAddr(src)
+		f.DstIP, _ = netip.ParseAddr(dst)
+		f.Proto = model.Protocol(proto)
+		f.Dir = model.Direction(dir)
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

@@ -4,9 +4,11 @@ import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../compon
 import { ThroughputChart } from '../components/ThroughputChart'
 import { formatBits, formatBytes, formatPPS } from '../lib/format'
 import { TalkerBars } from '../components/TalkerBars'
+import { useDeviceNames } from '../lib/deviceNames'
 
 export function Overview({ onUnauthorized }: { onUnauthorized: () => void }) {
   const { data, loading, error } = useFetch<OverviewData>('/api/overview', { pollMs: 2000, onUnauthorized })
+  const names = useDeviceNames(onUnauthorized)
 
   if (loading && !data) return <Spinner />
   if (error) return <EmptyState>Could not load overview: {error}</EmptyState>
@@ -49,7 +51,7 @@ export function Overview({ onUnauthorized }: { onUnauthorized: () => void }) {
         <CardHeader title="Top talkers" sub="last hour · by volume" />
         <div className="px-4 pb-4">
           {talkers.length > 0 ? (
-            <TalkerBars talkers={talkers} format={(t) => formatBytes(t.bytes)} />
+            <TalkerBars talkers={talkers} names={names} format={(t) => formatBytes(t.bytes)} />
           ) : (
             <EmptyState>No talkers yet.</EmptyState>
           )}

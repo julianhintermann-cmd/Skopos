@@ -3,7 +3,15 @@ import { useFetch } from '../lib/useFetch'
 import { api, type Block } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
 import { Th, Td } from './Devices'
+import { useDeviceNames } from '../lib/deviceNames'
 import { formatRelative, formatTime } from '../lib/format'
+
+// blockName resolves a blocked prefix to a device name when it is a single
+// host that the inventory knows (strip the /32 or /128 the API normalises to).
+function blockName(names: Map<string, string>, prefix: string): string {
+  const host = prefix.replace(/\/(32|128)$/, '')
+  return names.get(host) ?? ''
+}
 
 export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, loading, error, refresh } = useFetch<{ blocks: Block[] | null }>('/api/blocks', {
@@ -15,6 +23,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
   const [ttl, setTtl] = useState('')
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
+  const names = useDeviceNames(onUnauthorized)
 
   const blocks = data?.blocks ?? []
 
@@ -80,7 +89,14 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
               <tbody>
                 {blocks.map((b) => (
                   <tr key={b.ID} style={{ borderTop: '1px solid var(--border)' }}>
-                    <Td mono>{b.Prefix}</Td>
+                    <Td mono>
+                      {b.Prefix}
+                      {blockName(names, b.Prefix) && (
+                        <div className="font-sans text-xs" style={{ color: 'var(--muted)' }}>
+                          {blockName(names, b.Prefix)}
+                        </div>
+                      )}
+                    </Td>
                     <Td>
                       <Pill tone={b.Origin === 'manual' ? 'accent' : 'neutral'}>{b.Origin}</Pill>
                     </Td>

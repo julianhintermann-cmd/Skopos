@@ -4,7 +4,7 @@ import { api, deviceName, type Device } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { formatRelative } from '../lib/format'
 
-export function Devices({ onUnauthorized }: { onUnauthorized: () => void }) {
+export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, loading, error, refresh } = useFetch<{ devices: Device[] | null }>('/api/devices', {
     pollMs: 10000,
     onUnauthorized,
@@ -18,6 +18,16 @@ export function Devices({ onUnauthorized }: { onUnauthorized: () => void }) {
       <CardHeader
         title="Devices"
         sub={`${devices.length} seen on the network${named ? ` · ${named} named` : ''}`}
+        right={
+          <a
+            href="/api/export/devices.csv"
+            download
+            className="rounded-md px-2.5 py-1 text-xs font-medium"
+            style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
+          >
+            Export CSV
+          </a>
+        }
       />
       {loading && !data ? (
         <Spinner />
@@ -36,6 +46,7 @@ export function Devices({ onUnauthorized }: { onUnauthorized: () => void }) {
                 <Th>Vendor</Th>
                 <Th>First seen</Th>
                 <Th>Last seen</Th>
+                {canWrite && <Th> </Th>}
               </tr>
             </thead>
             <tbody>
@@ -49,6 +60,11 @@ export function Devices({ onUnauthorized }: { onUnauthorized: () => void }) {
                   <Td muted>{d.Vendor || '—'}</Td>
                   <Td muted>{formatRelative(d.FirstSeen)}</Td>
                   <Td muted>{formatRelative(d.LastSeen)}</Td>
+                  {canWrite && (
+                    <Td>
+                      <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />
+                    </Td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -56,6 +72,38 @@ export function Devices({ onUnauthorized }: { onUnauthorized: () => void }) {
         </div>
       )}
     </Card>
+  )
+}
+
+// WakeButton sends a Wake-on-LAN magic packet for the device and briefly
+// confirms it. Fire-and-forget by nature: whether the machine actually wakes
+// depends on its NIC and BIOS settings.
+function WakeButton({ mac, onUnauthorized }: { mac: string; onUnauthorized: () => void }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'failed'>('idle')
+
+  const wake = async () => {
+    setState('busy')
+    try {
+      await api.post(`/api/devices/${encodeURIComponent(mac)}/wake`)
+      setState('sent')
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+      setState('failed')
+    }
+    setTimeout(() => setState('idle'), 2500)
+  }
+
+  if (state === 'sent') {
+    return <span className="text-xs font-medium" style={{ color: 'var(--good)' }}>packet sent</span>
+  }
+  if (state === 'failed') {
+    return <span className="text-xs font-medium" style={{ color: 'var(--crit)' }}>failed</span>
+  }
+  return (
+    <IconButton label="Wake (Wake-on-LAN)" onClick={wake} disabled={state === 'busy'}>
+      <path d="M12 2v10" />
+      <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />
+    </IconButton>
   )
 }
 

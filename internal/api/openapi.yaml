@@ -87,6 +87,37 @@ paths:
       summary: LAN device inventory
       responses:
         "200": { description: Devices }
+  /api/devices/{mac}/wake:
+    post:
+      summary: Send a Wake-on-LAN magic packet for the MAC
+      description: >
+        Broadcasts the magic packet on UDP port 9. Fire-and-forget — whether
+        the machine wakes depends on its NIC/BIOS settings. Requires write
+        scope; the action is audited.
+      parameters:
+        - { name: mac, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Packet sent }
+        "400": { description: Invalid MAC }
+  /api/export/flows.csv:
+    get:
+      summary: Raw flows of a time range as CSV
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200000 } }
+      responses:
+        "200": { description: "text/csv attachment (default: last 24h, 50k rows)" }
+  /api/export/devices.csv:
+    get:
+      summary: Device inventory as CSV
+      responses:
+        "200": { description: text/csv attachment }
+  /api/export/alerts.csv:
+    get:
+      summary: Alert history as CSV
+      responses:
+        "200": { description: text/csv attachment }
   /api/devices/{mac}/label:
     post:
       summary: Set or clear a device's operator-assigned name

@@ -4,6 +4,7 @@ import type { TimePoint, Talker } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
+import { useDeviceNames } from '../lib/deviceNames'
 import { formatBytes } from '../lib/format'
 
 interface FlowsResponse {
@@ -23,13 +24,15 @@ const ranges = [
 
 export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [range, setRange] = useState(ranges[0])
-  const path = useMemo(() => {
+  const { path, exportHref } = useMemo(() => {
     const to = new Date()
     const from = new Date(to.getTime() - range.ms)
-    return `/api/flows?from=${from.toISOString()}&to=${to.toISOString()}`
+    const window = `from=${from.toISOString()}&to=${to.toISOString()}`
+    return { path: `/api/flows?${window}`, exportHref: `/api/export/flows.csv?${window}` }
   }, [range])
 
   const { data, loading, error } = useFetch<FlowsResponse>(path, { pollMs: 5000, onUnauthorized })
+  const names = useDeviceNames(onUnauthorized)
 
   return (
     <div className="flex flex-col gap-4">
@@ -51,6 +54,15 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
         <span className="ml-2 font-mono text-xs" style={{ color: 'var(--muted)' }}>
           {data ? `resolution ${data.resolution}` : ''}
         </span>
+        <a
+          href={exportHref}
+          download
+          className="ml-auto rounded-md px-3 py-1 text-xs font-medium"
+          style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
+          title="Download the raw flows of this range as CSV"
+        >
+          Export CSV
+        </a>
       </div>
 
       {loading && !data ? (
@@ -73,7 +85,7 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
             <CardHeader title="Top talkers" sub={`${range.label} · by volume`} />
             <div className="px-4 pb-4">
               {data?.top_talkers?.length ? (
-                <TalkerBars talkers={data.top_talkers} format={(t) => formatBytes(t.bytes)} />
+                <TalkerBars talkers={data.top_talkers} names={names} format={(t) => formatBytes(t.bytes)} />
               ) : (
                 <EmptyState>No talkers in this range.</EmptyState>
               )}

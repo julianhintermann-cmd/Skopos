@@ -202,3 +202,31 @@ func TestDispatcherSystemGatedByToggle(t *testing.T) {
 		t.Error("system messages should be delivered when enabled")
 	}
 }
+
+func TestDispatcherAnnotatesSourceWithDeviceName(t *testing.T) {
+	c := &recordChannel{name: "c"}
+	d := New(Options{Channels: []Channel{c}})
+	d.SetNameResolver(func(a netip.Addr) string {
+		if a == netip.MustParseAddr("192.168.1.23") {
+			return "Living-room TV"
+		}
+		return ""
+	})
+
+	d.Notify(context.Background(), model.Alert{
+		Title: "Rate spike", Severity: model.SeverityWarning,
+		Source: netip.MustParseAddr("192.168.1.23"),
+	})
+	if body := c.msgs[0].Body; !strings.Contains(body, "192.168.1.23 (Living-room TV)") {
+		t.Errorf("body = %q, want the device name annotated", body)
+	}
+
+	// Unknown source stays a bare address — no empty parentheses.
+	d.Notify(context.Background(), model.Alert{
+		Title: "Scan", Severity: model.SeverityWarning,
+		Source: netip.MustParseAddr("203.0.113.5"),
+	})
+	if body := c.msgs[1].Body; strings.Contains(body, "(") {
+		t.Errorf("body = %q, want no annotation for unknown source", body)
+	}
+}

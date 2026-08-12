@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 
@@ -26,6 +27,7 @@ type Dispatcher struct {
 	externalURL   string
 	systemEnabled bool
 	log           func(string, ...any)
+	resolveName   func(netip.Addr) string
 }
 
 // Options configures a Dispatcher.
@@ -58,6 +60,11 @@ func New(opts Options) *Dispatcher {
 
 // SetLogger installs a logging callback for channel failures.
 func (d *Dispatcher) SetLogger(f func(string, ...any)) { d.log = f }
+
+// SetNameResolver installs a lookup from IP to a human-readable device name.
+// When set, alert bodies read "Source: 192.168.1.23 (Living-room TV)" instead
+// of a bare address. The resolver must return "" for unknown addresses.
+func (d *Dispatcher) SetNameResolver(f func(netip.Addr) string) { d.resolveName = f }
 
 // HasChannels reports whether any delivery channel is configured.
 func (d *Dispatcher) HasChannels() bool { return len(d.channels) > 0 }
@@ -131,7 +138,15 @@ func (d *Dispatcher) alertBody(a model.Alert) string {
 		b.WriteString(a.Detail)
 	}
 	if a.Source.IsValid() {
-		fmt.Fprintf(&b, "\nSource: %s", a.Source)
+		name := ""
+		if d.resolveName != nil {
+			name = d.resolveName(a.Source)
+		}
+		if name != "" {
+			fmt.Fprintf(&b, "\nSource: %s (%s)", a.Source, name)
+		} else {
+			fmt.Fprintf(&b, "\nSource: %s", a.Source)
+		}
 	}
 	if a.Count > 1 {
 		fmt.Fprintf(&b, "\n(%d occurrences)", a.Count)

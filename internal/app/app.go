@@ -82,6 +82,17 @@ func (a *App) Run(ctx context.Context) error {
 	// --- notification ------------------------------------------------------
 	dispatcher := notify.FromConfig(a.cfg)
 	dispatcher.SetLogger(a.warnf)
+	// Annotate alert sources with the device's name where one is known, so a
+	// push reads "192.168.1.23 (Living-room TV)" instead of a bare address.
+	dispatcher.SetNameResolver(func(addr netip.Addr) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		name, err := st.DeviceNameByIP(ctx, addr.String())
+		if err != nil {
+			return ""
+		}
+		return name
+	})
 
 	// --- firewall ----------------------------------------------------------
 	backend := firewall.NewNFTablesBackend()

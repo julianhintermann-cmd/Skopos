@@ -50,6 +50,22 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # capture and firewall management.
 FROM gcr.io/distroless/static-debian12:latest
 
+# Standard OCI metadata: registries and `docker inspect` read these, so the
+# image describes itself instead of being an anonymous blob.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+LABEL org.opencontainers.image.title="Skopos" \
+      org.opencontainers.image.description="Traffic monitoring, firewall management and ntfy alerting for your NAS, in a single container configured by one YAML file." \
+      org.opencontainers.image.url="https://github.com/julianhintermann-cmd/skopos" \
+      org.opencontainers.image.source="https://github.com/julianhintermann-cmd/skopos" \
+      org.opencontainers.image.documentation="https://github.com/julianhintermann-cmd/skopos#readme" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.vendor="julianhintermann-cmd" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${DATE}"
+
 COPY --from=build /out/skopos /skopos
 
 # Config, hot data and cold archive are provided as volume mounts.

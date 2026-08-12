@@ -8,8 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/julianhintermann-cmd/skopos/internal/api"
 	"github.com/julianhintermann-cmd/skopos/internal/app"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
+	webui "github.com/julianhintermann-cmd/skopos/web"
 )
 
 func init() {
@@ -37,6 +39,11 @@ func runServe(args []string) error {
 	}
 	// SKOPOS_DEMO=1 is an alternative to the flag, handy for `docker run`.
 	demoMode := *demo || cfg.Demo || os.Getenv("SKOPOS_DEMO") == "1"
+
+	// Wire the embedded dashboard, if this build has it.
+	if f, ok := webui.FS(); ok {
+		api.RegisterUI(f)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

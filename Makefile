@@ -10,7 +10,8 @@ LDFLAGS    := -s -w \
 
 .PHONY: build go-build web-build web-dev test test-integration lint fmt generate clean
 
-build: web-build go-build
+build: web-build
+	CGO_ENABLED=0 go build -trimpath -tags embedui -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/skopos
 
 go-build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/skopos

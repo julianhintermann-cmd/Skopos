@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: Skopos API
+  description: >
+    Traffic monitoring, firewall management and alerting for a self-hosted NAS.
+    The YAML configuration file is the source of truth for rules and thresholds;
+    this API exposes runtime state (flows, alerts, blocks, devices) and the
+    actions the dashboard performs.
+  version: 0.1.0
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+servers:
+  - url: /
+security:
+  - sessionCookie: []
+  - bearerToken: []
+paths:
+  /api/health:
+    get:
+      summary: Liveness and subsystem health
+      security: []
+      responses:
+        "200": { description: Healthy, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+        "503": { description: Degraded }
+  /api/auth/login:
+    post:
+      summary: Authenticate and receive a session cookie
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: Logged in; sets the skopos_session cookie }
+        "401": { description: Invalid credentials }
+        "429": { description: Too many attempts (backoff) }
+  /api/auth/logout:
+    post:
+      summary: Clear the session cookie
+      security: []
+      responses:
+        "200": { description: Logged out }
+  /api/me:
+    get:
+      summary: Current identity and enforcement state
+      responses:
+        "200": { description: Identity }
+  /api/overview:
+    get:
+      summary: Dashboard overview tiles
+      responses:
+        "200": { description: Live stats, throughput, top talkers, counts }
+  /api/stream:
+    get:
+      summary: Server-sent event stream of live metrics and events
+      responses:
+        "200": { description: text/event-stream }
+  /api/flows:
+    get:
+      summary: Traffic time series and top talkers for a range
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: resolution, in: query, schema: { type: string, enum: [1m, 1h, 1d] } }
+      responses:
+        "200": { description: Series and talkers }
+  /api/devices:
+    get:
+      summary: LAN device inventory
+      responses:
+        "200": { description: Devices }
+  /api/alerts:
+    get:
+      summary: Alert history
+      parameters:
+        - { name: unacked, in: query, schema: { type: boolean } }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Alerts }
+  /api/alerts/{id}/ack:
+    post:
+      summary: Acknowledge an alert
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Acknowledged }
+  /api/blocks:
+    get:
+      summary: Active firewall blocks
+      responses:
+        "200": { description: Blocks }
+    post:
+      summary: Block an IP or CIDR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prefix]
+              properties:
+                prefix: { type: string, description: "IP or CIDR, e.g. 203.0.113.5 or 203.0.113.0/24" }
+                reason: { type: string }
+                ttl: { type: string, description: "duration like 24h; omit for permanent" }
+      responses:
+        "201": { description: Block created }
+        "400": { description: Invalid prefix or ttl }
+    delete:
+      summary: Remove a block
+      parameters:
+        - { name: prefix, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Removed }
+        "404": { description: No active block for that prefix }
+  /api/rules:
+    get:
+      summary: Effective detection and firewall configuration (read-only)
+      responses:
+        "200": { description: Rules }
+  /api/audit:
+    get:
+      summary: Audit log
+      parameters:
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Audit entries }
+  /api/config/validate:
+    post:
+      summary: Validate a candidate config.yaml without applying it
+      requestBody:
+        required: true
+        content:
+          text/plain: { schema: { type: string } }
+      responses:
+        "200": { description: "{valid:true} or {valid:false, error:...}" }
+  /api/notify/test:
+    post:
+      summary: Send a test notification to configured channels
+      responses:
+        "200": { description: "{ok:true} or {ok:false, error:...}" }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: skopos_session
+    bearerToken:
+      type: http
+      scheme: bearer
+  schemas:
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        version: { type: string }
+        capture: { type: string }
+        firewall: { type: string }
+        enforcing: { type: boolean }
+        cold_storage_ok: { type: boolean }

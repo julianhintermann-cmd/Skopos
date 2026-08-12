@@ -48,16 +48,17 @@ func main() {
 }
 
 func usage(w *os.File) {
-	fmt.Fprintln(w, "Skopos — traffic monitor & firewall management")
-	fmt.Fprintln(w, "\nUsage:\n  skopos [command] [flags]")
-	fmt.Fprintln(w, "\nCommands:")
+	p := func(format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) }
+	p("Skopos — traffic monitor & firewall management\n")
+	p("\nUsage:\n  skopos [command] [flags]\n")
+	p("\nCommands:\n")
 	names := make([]string, 0, len(commands))
 	for n := range commands {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		fmt.Fprintf(w, "  %-15s %s\n", n, commands[n].summary)
+		p("  %-15s %s\n", n, commands[n].summary)
 	}
-	fmt.Fprintln(w, "\nRunning skopos without a command starts the server (\"serve\").")
+	p("\nRunning skopos without a command starts the server (\"serve\").\n")
 }

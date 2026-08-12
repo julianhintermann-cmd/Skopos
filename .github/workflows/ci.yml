@@ -44,7 +44,9 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          # Pinned so a new linter release cannot turn an unrelated PR red,
+          # and so contributors get the same result locally. Bump deliberately.
+          version: v2.12.2
       - name: Build
         run: make go-build
       - name: Test

@@ -1,0 +1,26 @@
+# Binaries and build output
+/skopos
+/bin/
+/dist/
+web/dist/
+web/node_modules/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Runtime data (local development)
+/data/
+/archive/
+/config/*.yaml
+!/config/.gitkeep
+
+# Editors & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Screenshots working dir (final PNGs are committed under docs/screenshots)
+/tmp/

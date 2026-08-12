@@ -16,10 +16,13 @@ mkdirSync(outDir, { recursive: true })
 
 const views = [
   { path: '/', name: 'overview' },
+  { path: '/live', name: 'live', wait: 4500 },
   { path: '/traffic', name: 'traffic' },
   { path: '/devices', name: 'devices' },
   { path: '/firewall', name: 'firewall' },
   { path: '/alerts', name: 'alerts' },
+  { path: '/cloudflare', name: 'cloudflare' },
+  { path: '/settings', name: 'settings' },
   { path: '/system', name: 'system' },
 ]
 
@@ -42,7 +45,7 @@ for (const theme of ['dark', 'light']) {
 
   for (const v of views) {
     await page.goto(base + v.path, { waitUntil: 'networkidle' })
-    await page.waitForTimeout(1200)
+    await page.waitForTimeout(v.wait ?? 1200)
     const suffix = theme === 'dark' ? '' : '-light'
     await page.screenshot({ path: `${outDir}/${v.name}${suffix}.png` })
     console.log(`captured ${v.name} (${theme})`)

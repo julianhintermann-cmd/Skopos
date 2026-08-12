@@ -9,6 +9,8 @@ import { Traffic } from './views/Traffic'
 import { Devices } from './views/Devices'
 import { Firewall } from './views/Firewall'
 import { Alerts } from './views/Alerts'
+import { Cloudflare } from './views/Cloudflare'
+import { Settings } from './views/Settings'
 import { System } from './views/System'
 
 type AuthState = 'loading' | 'authenticated' | 'anonymous'
@@ -67,6 +69,8 @@ export default function App() {
           <Route path="devices" element={<Devices onUnauthorized={onUnauthorized} />} />
           <Route path="firewall" element={<Firewall onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="alerts" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="cloudflare" element={<Cloudflare onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="settings" element={<Settings onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="system" element={<System onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="alerts/:id" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="*" element={<Overview onUnauthorized={onUnauthorized} />} />

@@ -5,15 +5,36 @@ import { ThemeToggle } from './ThemeToggle'
 import { t } from '../lib/i18n'
 import type { Me } from '../lib/api'
 
-const nav = [
-  { to: '/', key: 'nav.overview' as const, icon: PulseIcon, end: true },
-  { to: '/live', key: 'nav.live' as const, icon: BroadcastIcon },
-  { to: '/traffic', key: 'nav.traffic' as const, icon: WaveIcon },
-  { to: '/devices', key: 'nav.devices' as const, icon: GridIcon },
-  { to: '/firewall', key: 'nav.firewall' as const, icon: ShieldIcon },
-  { to: '/alerts', key: 'nav.alerts' as const, icon: BellIcon },
-  { to: '/system', key: 'nav.system' as const, icon: GearIcon },
+type NavItem = { to: string; key: Parameters<typeof t>[0]; icon: () => ReactNode; end?: boolean }
+
+const sections: { title: Parameters<typeof t>[0]; items: NavItem[] }[] = [
+  {
+    title: 'section.monitor',
+    items: [
+      { to: '/', key: 'nav.overview', icon: PulseIcon, end: true },
+      { to: '/live', key: 'nav.live', icon: BroadcastIcon },
+      { to: '/traffic', key: 'nav.traffic', icon: WaveIcon },
+      { to: '/devices', key: 'nav.devices', icon: GridIcon },
+    ],
+  },
+  {
+    title: 'section.protect',
+    items: [
+      { to: '/firewall', key: 'nav.firewall', icon: ShieldIcon },
+      { to: '/alerts', key: 'nav.alerts', icon: BellIcon },
+    ],
+  },
+  {
+    title: 'section.manage',
+    items: [
+      { to: '/cloudflare', key: 'nav.cloudflare', icon: CloudIcon },
+      { to: '/settings', key: 'nav.settings', icon: SlidersIcon },
+      { to: '/system', key: 'nav.system', icon: GearIcon },
+    ],
+  },
 ]
+
+const flatNav = sections.flatMap((s) => s.items)
 
 export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () => void; banner?: ReactNode }) {
   return (
@@ -27,22 +48,32 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
           <Logo size={26} />
           <div className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">Skopos</div>
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          {nav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className="group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors"
-              style={({ isActive }) =>
-                isActive
-                  ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                  : { color: 'var(--muted)' }
-              }
-            >
-              <item.icon />
-              {t(item.key)}
-            </NavLink>
+        <nav className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-2">
+          {sections.map((section) => (
+            <div key={section.title} className="flex flex-col gap-0.5">
+              <div
+                className="px-2.5 pb-1 pt-1 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.18em]"
+                style={{ color: 'var(--muted)' }}
+              >
+                {t(section.title)}
+              </div>
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className="group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors"
+                  style={({ isActive }) =>
+                    isActive
+                      ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
+                      : { color: 'var(--muted)' }
+                  }
+                >
+                  <item.icon />
+                  {t(item.key)}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="px-4 py-3 text-xs" style={{ color: 'var(--muted)', borderTop: '1px solid var(--border)' }}>
@@ -99,7 +130,7 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
           className="flex gap-1 overflow-x-auto border-b px-2 py-1.5 sm:hidden"
           style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
         >
-          {nav.map((item) => (
+          {flatNav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -138,4 +169,6 @@ function WaveIcon() { return icon(<><path d="M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0" 
 function GridIcon() { return icon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>) }
 function ShieldIcon() { return icon(<path d="M12 3l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V6z" />) }
 function BellIcon() { return icon(<><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>) }
+function CloudIcon() { return icon(<path d="M17.5 18H7a4 4 0 0 1-.5-7.97A5 5 0 0 1 16 9.5a3.5 3.5 0 0 1 1.5 8.5z" />) }
+function SlidersIcon() { return icon(<><path d="M4 6h11M18 6h2M4 12h2M9 12h11M4 18h11M18 18h2" /><circle cx="16" cy="6" r="2" /><circle cx="7" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>) }
 function GearIcon() { return icon(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 .3-1.8l-.1-.1" transform="scale(0.85) translate(2 2)" /></>) }

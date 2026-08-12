@@ -140,6 +140,38 @@ export interface Me {
   enforcing: boolean
 }
 
+// ---- Cloudflare integration ----
+
+export interface CFZone {
+  id: string
+  name: string
+  status: string
+  monitored: boolean
+}
+
+export interface CFStatus {
+  connected: boolean
+  token_id?: string
+  expires_on?: string
+  zones: CFZone[]
+}
+
+export interface CFPoint {
+  time: string
+  requests: number
+  bytes: number
+  cached_requests: number
+  cached_bytes: number
+  threats: number
+}
+
+export interface CFAnalytics {
+  zone_id: string
+  since: string
+  until: string
+  points: CFPoint[] | null
+}
+
 export interface Health {
   ok: boolean
   version: string

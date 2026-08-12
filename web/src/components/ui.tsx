@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import type { Severity } from '../lib/api'
 
 // Reusable primitives styled through the design tokens. Kept small and
@@ -8,7 +8,7 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
   return (
     <div
       className={`rounded-lg border ${className}`}
-      style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
+      style={{ background: 'var(--surface)', borderColor: 'var(--border)', boxShadow: 'var(--shadow-sm)' }}
     >
       {children}
     </div>
@@ -131,6 +131,69 @@ export function Button({
     >
       {children}
     </button>
+  )
+}
+
+export function Toggle({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  disabled?: boolean
+  label?: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-40"
+      style={{ background: checked ? 'var(--accent)' : 'var(--surface-3)' }}
+    >
+      <span
+        className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform"
+        style={{ transform: checked ? 'translateX(19px)' : 'translateX(3px)' }}
+      />
+    </button>
+  )
+}
+
+export function TextInput({
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  mono,
+  disabled,
+  onKeyDown,
+  className = '',
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  type?: string
+  mono?: boolean
+  disabled?: boolean
+  onKeyDown?: (e: KeyboardEvent) => void
+  className?: string
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      disabled={disabled}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={onKeyDown}
+      className={`w-full rounded-md border px-3 py-2 text-sm outline-none disabled:opacity-50 ${mono ? 'font-mono' : ''} ${className}`}
+      style={{ background: 'var(--surface-2)', borderColor: 'var(--border-strong)', color: 'var(--text)' }}
+    />
   )
 }
 

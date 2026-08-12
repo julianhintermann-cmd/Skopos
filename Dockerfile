@@ -9,7 +9,11 @@ COPY web/ ./
 RUN npm run build
 
 # --- go build --------------------------------------------------------------
-FROM golang:1.24-alpine AS build
+# Must satisfy the `go` directive in go.mod: the official images set
+# GOTOOLCHAIN=local, so a lower base image fails the build instead of
+# downloading a newer toolchain. CI builds this image on every push to catch
+# a drift between the two.
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./

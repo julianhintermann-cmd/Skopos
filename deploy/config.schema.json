@@ -1,0 +1,537 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/julianhintermann-cmd/skopos/config.schema.json",
+  "properties": {
+    "interfaces": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "description": "Interfaces lists the network interfaces to capture on, e.g.\n[\"eth0\", \"eth1\"]. The special value \"auto\" resolves to the interface\nof the default route at startup."
+    },
+    "network": {
+      "properties": {
+        "private_ranges": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "PrivateRanges are the CIDR ranges treated as \"internal\" when\nclassifying traffic (LAN↔WAN, LAN↔LAN) and choosing block behaviour.\nDefaults to RFC 1918, IPv6 ULA and link-local ranges."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Network groups address-classification settings shared by capture,\ndetection and the firewall."
+    },
+    "storage": {
+      "properties": {
+        "hot": {
+          "type": "string",
+          "description": "Hot is the fast storage path (SSD): SQLite database, runtime state\nand the spool buffer. Mount this on your SSD volume."
+        },
+        "cold": {
+          "type": "string",
+          "description": "Cold is the archive path (HDD or NAS share): Parquet flow archives,\nrotated logs, alert archive and database backups. Skopos keeps\nworking when this path is temporarily unavailable and spools to hot\nstorage instead."
+        },
+        "hot_max_size": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
+          "description": "HotMaxSize caps total hot-storage usage (database plus spool). When\nthe cap is reached the oldest raw flows are dropped first; aggregated\nrollups are kept."
+        },
+        "spool_max_size": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
+          "description": "SpoolMaxSize caps the spool buffer used while cold storage is\nunreachable. When the spool is full, the oldest spooled archives are\ndropped and a system notification is sent."
+        },
+        "retention": {
+          "properties": {
+            "raw_flows": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "RawFlows is how long individual flow records stay in the database\nbefore being archived to cold storage as Parquet and deleted."
+            },
+            "rollup_1m": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Rollup1m is how long 1-minute aggregates are kept."
+            },
+            "rollup_1h": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Rollup1h is how long 1-hour aggregates are kept."
+            },
+            "rollup_1d": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Rollup1d is how long daily aggregates are kept. \"0\" keeps them\nforever."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Retention controls how long each data resolution is kept on hot\nstorage before deletion (raw flows are archived to cold first)."
+        },
+        "archive_at": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "description": "ArchiveAt is the local time of day at which raw flows older than the\nretention window are exported to cold storage. Missed runs are\ncaught up at the next start."
+        },
+        "backup": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns the daily database backup to cold storage on or off."
+            },
+            "keep": {
+              "type": "integer",
+              "description": "Keep is the number of backup generations retained on cold storage."
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "At is the local time of day the backup runs."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Backup configures the daily SQLite online backup to cold storage."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Storage configures the hot (SSD) and cold (HDD/NAS) data paths and\nhow long data is retained at each resolution."
+    },
+    "capture": {
+      "properties": {
+        "sample_threshold_pps": {
+          "type": "integer",
+          "description": "SampleThresholdPPS is the packets-per-second rate above which\nadaptive sampling kicks in to protect the NAS CPU. The transition is\nreported as a system event, never silent. \"0\" disables sampling."
+        },
+        "dns": {
+          "type": "boolean",
+          "description": "DNS enables parsing DNS responses (names only) so the dashboard can\nshow hostnames instead of bare IPs."
+        },
+        "sni": {
+          "type": "boolean",
+          "description": "SNI enables parsing TLS ClientHello server names (metadata only)."
+        },
+        "rdns": {
+          "type": "boolean",
+          "description": "RDNS enables cached, rate-limited reverse-DNS lookups for external\naddresses shown in the dashboard."
+        },
+        "devices": {
+          "type": "boolean",
+          "description": "Devices enables the LAN device inventory built from ARP/NDP traffic\nand mDNS/DHCP names. Required by the new_device detector."
+        },
+        "flow_flush": {
+          "type": "string",
+          "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+          "description": "FlowFlush is how often aggregated flow counters are flushed from\nmemory to the database."
+        },
+        "flow_idle_timeout": {
+          "type": "string",
+          "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+          "description": "FlowIdleTimeout is how long a flow may stay silent before it is\nconsidered finished and flushed."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Capture tunes packet capture and metadata enrichment."
+    },
+    "detection": {
+      "properties": {
+        "portscan": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns the detector on or off."
+            },
+            "window": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Window is the sliding time window for counting distinct ports and\ntargets."
+            },
+            "external": {
+              "properties": {
+                "ports": {
+                  "type": "integer",
+                  "description": "Ports is the number of distinct destination ports on a single target\nthat triggers a vertical-scan alert."
+                },
+                "targets": {
+                  "type": "integer",
+                  "description": "Targets is the number of distinct targets on the same port that\ntriggers a horizontal-scan alert."
+                }
+              },
+              "additionalProperties": false,
+              "type": "object",
+              "description": "External holds thresholds for sources outside the private ranges."
+            },
+            "internal": {
+              "properties": {
+                "ports": {
+                  "type": "integer",
+                  "description": "Ports is the number of distinct destination ports on a single target\nthat triggers a vertical-scan alert."
+                },
+                "targets": {
+                  "type": "integer",
+                  "description": "Targets is the number of distinct targets on the same port that\ntriggers a horizontal-scan alert."
+                }
+              },
+              "additionalProperties": false,
+              "type": "object",
+              "description": "Internal holds thresholds for sources inside the private ranges\n(set higher: legitimate LAN tools scan more)."
+            },
+            "severity": {
+              "type": "string",
+              "description": "Severity assigned to port-scan alerts: info, warning or critical."
+            },
+            "block": {
+              "type": "boolean",
+              "description": "Block requests an automatic block for offending sources. Only acts\nwhen firewall.enforcement is \"enforce\"."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Portscan detects vertical scans (many ports on one target) and\nhorizontal scans (one port across many targets)."
+        },
+        "rate": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns the detector on or off."
+            },
+            "window": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Window is the measurement window."
+            },
+            "max_new_connections": {
+              "type": "integer",
+              "description": "MaxNewConnections is the number of new connections from one source\nwithin the window that triggers an alert."
+            },
+            "max_packets_per_second": {
+              "type": "integer",
+              "description": "MaxPacketsPerSecond is the sustained packet rate from one source\nthat triggers an alert."
+            },
+            "severity": {
+              "type": "string",
+              "description": "Severity assigned to rate alerts: info, warning or critical."
+            },
+            "block": {
+              "type": "boolean",
+              "description": "Block requests an automatic block for offending sources. Only acts\nwhen firewall.enforcement is \"enforce\"."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Rate detects connection floods and abnormal packet rates per source."
+        },
+        "feeds": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns feed matching on or off. Recommended when the NAS is\nreachable from the internet; in a pure LAN it mostly produces noise."
+            },
+            "lists": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Lists selects the feeds: the built-in names \"firehol_level1\" and\n\"spamhaus_drop\", or any https:// URL serving one CIDR per line."
+            },
+            "refresh": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Refresh is how often feeds are re-downloaded."
+            },
+            "severity": {
+              "type": "string",
+              "description": "Severity assigned to feed-hit alerts: info, warning or critical."
+            },
+            "block": {
+              "type": "boolean",
+              "description": "Block requests an automatic block for feed-listed peers. Only acts\nwhen firewall.enforcement is \"enforce\"."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Feeds matches traffic against public IP blocklists (FireHOL Level 1,\nSpamhaus DROP) refreshed at runtime."
+        },
+        "new_device": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns the detector on or off (requires capture.devices)."
+            },
+            "severity": {
+              "type": "string",
+              "description": "Severity assigned to new-device alerts: info, warning or critical."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "NewDevice raises an alert when an unknown device appears in the LAN."
+        },
+        "cooldown": {
+          "type": "string",
+          "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+          "description": "Cooldown is the minimum interval between notifications for the same\n(detector, source) pair; additional hits are counted and included in\nthe next notification instead of spamming."
+        },
+        "quiet_hours": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns quiet hours on or off."
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "From is the local start time of the quiet window."
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "description": "To is the local end time of the quiet window (may cross midnight)."
+            },
+            "min_severity": {
+              "type": "string",
+              "description": "MinSeverity is the lowest severity still delivered during quiet\nhours: info, warning or critical."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "QuietHours suppresses notifications below a minimum severity during\na nightly time window."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Detection configures the detectors that decide what counts as\nsuspicious, and how alerts are throttled."
+    },
+    "firewall": {
+      "properties": {
+        "enforcement": {
+          "type": "string",
+          "description": "Enforcement is the global switch: \"observe\" logs every block\ndecision without touching the kernel (the shipping default), while\n\"enforce\" applies blocks through the backend. Arm it deliberately\nafter watching the observe log for a while."
+        },
+        "backend": {
+          "type": "string",
+          "description": "Backend selects the firewall implementation. \"nftables\" (the only\nbackend in v1) manages a dedicated \"inet skopos\" table via netlink."
+        },
+        "block_ttl": {
+          "type": "string",
+          "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+          "description": "BlockTTL is the default lifetime of automatic blocks; they expire in\nthe kernel via nftables set timeouts. Manual blocks default to\npermanent. \"0\" makes automatic blocks permanent too."
+        },
+        "action_external": {
+          "type": "string",
+          "description": "ActionExternal is what happens to blocked traffic from outside the\nprivate ranges: \"drop\" (silent) or \"reject\" (immediate error)."
+        },
+        "action_internal": {
+          "type": "string",
+          "description": "ActionInternal is what happens to blocked traffic from inside the\nprivate ranges: \"drop\" or \"reject\" (\"reject\" fails fast and is\nfriendlier when a LAN block turns out to be a mistake)."
+        },
+        "allowlist": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Allowlist lists IPs/CIDRs that are never blocked, not even by feeds.\nThe default gateway is always protected in addition to this list."
+        },
+        "blocklist": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Blocklist lists IPs/CIDRs that are always blocked while enforcement\nis \"enforce\" — declarative, versionable static blocks."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Firewall configures blocking behaviour and the nftables backend."
+    },
+    "notify": {
+      "properties": {
+        "ntfy": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "URL is the base URL of the ntfy server, e.g.\n\"https://ntfy.example.com\" or \"https://ntfy.sh\". Empty disables ntfy."
+            },
+            "topic": {
+              "type": "string",
+              "description": "Topic is the ntfy topic to publish to."
+            },
+            "token": {
+              "type": "string",
+              "description": "Token is an ntfy access token (sent as Bearer). Supports ${ENV}\ninterpolation so secrets can stay out of the file."
+            },
+            "username": {
+              "type": "string",
+              "description": "Username enables HTTP basic auth as an alternative to Token."
+            },
+            "password": {
+              "type": "string",
+              "description": "Password is the basic-auth password. Supports ${ENV} interpolation."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Ntfy configures push notifications through a self-hosted ntfy server\nor ntfy.sh (same API)."
+        },
+        "webhook": {
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "URL receives a JSON POST per alert. Empty disables the webhook."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Webhook posts every alert as JSON to a URL of your choice."
+        },
+        "system": {
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enabled turns system notifications on or off."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "System controls operational notifications (start after crash,\nfirewall degraded, cold storage unreachable, feed update failed,\nupdate available)."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Notify configures alert delivery (ntfy and a generic webhook)."
+    },
+    "server": {
+      "properties": {
+        "bind": {
+          "type": "string",
+          "description": "Bind is the listen address. With network_mode: host this is a real\nhost address; keep 0.0.0.0 unless you know you need otherwise."
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port is the web/API port. With network_mode: host there is no port\nmapping — this is the port your browser connects to."
+        },
+        "external_url": {
+          "type": "string",
+          "description": "ExternalURL is the address under which you reach the dashboard from\nyour devices (used as the click target of push notifications), e.g.\n\"https://skopos.example.com\" or \"http://192.168.1.10:8686\"."
+        },
+        "auth": {
+          "properties": {
+            "mode": {
+              "type": "string",
+              "description": "Mode is \"single_admin\" (username + Argon2 hash below), or \"none\"\n(only for trusted LANs — Skopos logs a prominent warning). Default:\n\"single_admin\" as soon as password_hash is set, otherwise \"none\"."
+            },
+            "username": {
+              "type": "string",
+              "description": "Username is the admin login name."
+            },
+            "password_hash": {
+              "type": "string",
+              "description": "PasswordHash is the Argon2id hash of the admin password. Generate it\nwith: skopos hash-password"
+            },
+            "session_ttl": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "SessionTTL is how long a login session stays valid."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Auth configures dashboard and API authentication."
+        },
+        "tokens": {
+          "items": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Name identifies the token in the audit log."
+              },
+              "token": {
+                "type": "string",
+                "description": "Token is the secret value (sent as \"Authorization: Bearer …\").\nSupports ${ENV} interpolation."
+              },
+              "scope": {
+                "type": "string",
+                "description": "Scope is \"read\" or \"write\"."
+              }
+            },
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "name",
+              "token",
+              "scope"
+            ],
+            "description": "APIToken is a named API token."
+          },
+          "type": "array",
+          "description": "Tokens are named API tokens for automation (scripts, Home\nAssistant). Scope \"read\" allows GET, \"write\" also allows mutations."
+        },
+        "tls": {
+          "properties": {
+            "cert": {
+              "type": "string",
+              "description": "Cert is the path to the PEM certificate chain."
+            },
+            "key": {
+              "type": "string",
+              "description": "Key is the path to the PEM private key."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "TLS serves HTTPS directly from Skopos. Usually you terminate TLS at\na reverse proxy instead and leave this empty."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Server configures the web dashboard, API, authentication and TLS."
+    },
+    "logging": {
+      "properties": {
+        "level": {
+          "type": "string",
+          "description": "Level is one of debug, info, warn, error."
+        },
+        "file": {
+          "type": "boolean",
+          "description": "File enables structured JSON logs in rotated files under\n\u003cstorage.cold\u003e/logs in addition to the readable stdout log."
+        },
+        "max_size": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
+          "description": "MaxSize is the size at which the current log file is rotated."
+        },
+        "max_backups": {
+          "type": "integer",
+          "description": "MaxBackups is the number of rotated log files to keep."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Logging configures log verbosity and file logging to cold storage."
+    },
+    "metrics": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enabled serves Prometheus metrics on /metrics."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "Metrics configures the optional Prometheus endpoint."
+    },
+    "demo": {
+      "type": "boolean",
+      "description": "Demo replaces live capture with a synthetic traffic generator so the\ndashboard can be explored without any privileges or real traffic."
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "title": "Skopos configuration",
+  "description": "Config is the root of config.yaml."
+}

@@ -8,7 +8,7 @@ LDFLAGS    := -s -w \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build go-build web-build web-dev test test-integration lint fmt clean
+.PHONY: build go-build web-build web-dev test test-integration lint fmt generate clean
 
 build: web-build go-build
 
@@ -34,6 +34,9 @@ lint:
 
 fmt:
 	gofmt -w $$(git ls-files '*.go')
+
+generate:
+	go generate ./...
 
 clean:
 	rm -rf bin web/dist

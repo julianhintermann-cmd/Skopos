@@ -49,6 +49,10 @@ jobs:
         run: make go-build
       - name: Test
         run: go test ./...
+      - name: Generated files are up to date
+        run: |
+          go generate ./...
+          git diff --exit-code -- deploy/config.schema.json docs/configuration.md
 
   web:
     name: Web type-check and build

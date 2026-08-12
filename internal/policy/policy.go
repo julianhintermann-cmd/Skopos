@@ -1,0 +1,223 @@
+// Package policy turns raw detector findings into actions. It owns everything
+// the detectors deliberately do not: alert severity handling, per-source
+// cooldown with aggregation, nightly quiet hours, the never-block allowlist
+// (with the gateway hard-wired), and the observe/enforce switch that decides
+// whether a suggested block actually reaches the firewall.
+package policy
+
+import (
+	"context"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/julianhintermann-cmd/skopos/internal/detect"
+	"github.com/julianhintermann-cmd/skopos/internal/model"
+	"github.com/julianhintermann-cmd/skopos/internal/netset"
+)
+
+// AlertStore persists alerts and returns the stored record (with its ID).
+type AlertStore interface {
+	InsertAlert(ctx context.Context, a model.Alert) (model.Alert, error)
+}
+
+// Notifier delivers an alert to the outside world (ntfy, webhook).
+type Notifier interface {
+	Notify(ctx context.Context, a model.Alert)
+}
+
+// Blocker applies a firewall block. Called only when enforcement is on and the
+// source survives the allowlist.
+type Blocker interface {
+	Block(ctx context.Context, prefix netip.Prefix, reason string, ttl time.Duration) error
+}
+
+// Enforcement is the global observe/enforce switch.
+type Enforcement string
+
+const (
+	Observe Enforcement = "observe"
+	Enforce Enforcement = "enforce"
+)
+
+// Config configures the policy engine.
+type Config struct {
+	Enforcement Enforcement
+	Cooldown    time.Duration
+	BlockTTL    time.Duration
+
+	QuietHours QuietHours
+
+	// Allowlist holds never-block prefixes. The gateway is protected in
+	// addition, regardless of this list.
+	Allowlist []netip.Prefix
+	// Gateway is always protected from blocking (the last-resort safety so
+	// Skopos can never lock you out of your own network).
+	Gateway netip.Addr
+}
+
+// QuietHours suppresses low-severity notifications during a nightly window.
+type QuietHours struct {
+	Enabled     bool
+	From        time.Time // only clock time (hour, minute) is used
+	To          time.Time
+	MinSeverity model.Severity
+}
+
+// Engine is the policy engine. It implements detect.Sink.
+type Engine struct {
+	cfg      Config
+	store    AlertStore
+	notifier Notifier
+	blocker  Blocker
+	clock    func() time.Time
+	log      func(string, ...any)
+
+	allow *netset.Set
+
+	mu       sync.Mutex
+	cooldown map[string]*cooldownState
+}
+
+type cooldownState struct {
+	lastNotified time.Time
+	suppressed   int // occurrences counted since the last notification
+}
+
+// New creates a policy engine.
+func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock func() time.Time) *Engine {
+	if clock == nil {
+		clock = time.Now
+	}
+	allow := netset.New()
+	for _, p := range cfg.Allowlist {
+		allow.Add(p)
+	}
+	if cfg.Gateway.IsValid() {
+		allow.Add(netip.PrefixFrom(cfg.Gateway, cfg.Gateway.BitLen()))
+	}
+	allow.Build()
+	return &Engine{
+		cfg:      cfg,
+		store:    store,
+		notifier: notifier,
+		blocker:  blocker,
+		clock:    clock,
+		log:      func(string, ...any) {},
+		allow:    allow,
+		cooldown: make(map[string]*cooldownState),
+	}
+}
+
+// SetLogger installs a logging callback (optional).
+func (e *Engine) SetLogger(f func(string, ...any)) { e.log = f }
+
+// Raise implements detect.Sink: it is the single entry point from every
+// detector.
+func (e *Engine) Raise(f detect.Finding) {
+	e.handle(context.Background(), f)
+}
+
+func (e *Engine) handle(ctx context.Context, f detect.Finding) {
+	now := e.clock()
+
+	// Cooldown: at most one notification per (detector, source) per window.
+	// Extra occurrences are counted and reported with the next one.
+	key := f.Detector + "|" + f.Source.String()
+	e.mu.Lock()
+	cs := e.cooldown[key]
+	if cs == nil {
+		cs = &cooldownState{}
+		e.cooldown[key] = cs
+	}
+	withinCooldown := !cs.lastNotified.IsZero() && now.Sub(cs.lastNotified) < e.cfg.Cooldown
+	if withinCooldown {
+		cs.suppressed++
+		e.mu.Unlock()
+		// Still evaluate blocking: suppressing a notification must not
+		// suppress protection.
+		e.maybeBlock(ctx, f)
+		return
+	}
+	count := 1 + cs.suppressed
+	cs.suppressed = 0
+	cs.lastNotified = now
+	e.mu.Unlock()
+
+	alert := model.Alert{
+		Time:     now,
+		Detector: f.Detector,
+		Severity: f.Severity,
+		Source:   f.Source,
+		Title:    f.Title,
+		Detail:   f.Detail,
+		Count:    count,
+	}
+
+	stored, err := e.store.InsertAlert(ctx, alert)
+	if err != nil {
+		e.log("policy: storing alert failed: %v", err)
+		stored = alert
+	}
+
+	// Quiet hours gate notification, not recording or blocking.
+	if e.shouldNotify(stored, now) {
+		e.notifier.Notify(ctx, stored)
+	}
+	e.maybeBlock(ctx, f)
+}
+
+// maybeBlock applies a block when the detector suggested one, enforcement is
+// on, and the source is not protected.
+func (e *Engine) maybeBlock(ctx context.Context, f detect.Finding) {
+	if !f.SuggestBlock || e.cfg.Enforcement != Enforce {
+		return
+	}
+	if !f.Source.IsValid() {
+		return
+	}
+	if e.Protected(f.Source) {
+		e.log("policy: refusing to block allowlisted/gateway address %s", f.Source)
+		return
+	}
+	if e.blocker == nil {
+		return
+	}
+	prefix := netip.PrefixFrom(f.Source, f.Source.BitLen())
+	if err := e.blocker.Block(ctx, prefix, f.Detector+": "+f.Title, e.cfg.BlockTTL); err != nil {
+		e.log("policy: block %s failed: %v", f.Source, err)
+	}
+}
+
+// Protected reports whether an address must never be blocked.
+func (e *Engine) Protected(addr netip.Addr) bool {
+	return e.allow.Contains(addr)
+}
+
+// shouldNotify applies quiet hours: during the window only alerts at or above
+// MinSeverity are delivered.
+func (e *Engine) shouldNotify(a model.Alert, now time.Time) bool {
+	if !e.cfg.QuietHours.Enabled {
+		return true
+	}
+	if !inWindow(now, e.cfg.QuietHours.From, e.cfg.QuietHours.To) {
+		return true
+	}
+	return a.Severity.Rank() >= e.cfg.QuietHours.MinSeverity.Rank()
+}
+
+// inWindow reports whether now's clock time falls in [from, to), handling a
+// window that crosses midnight.
+func inWindow(now, from, to time.Time) bool {
+	n := now.Hour()*60 + now.Minute()
+	f := from.Hour()*60 + from.Minute()
+	t := to.Hour()*60 + to.Minute()
+	if f == t {
+		return false
+	}
+	if f < t {
+		return n >= f && n < t
+	}
+	// Crosses midnight, e.g. 23:00–07:00.
+	return n >= f || n < t
+}

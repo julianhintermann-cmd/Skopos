@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,9 +22,6 @@ type Store struct {
 	db    *sql.DB
 	path  string
 	clock Clock
-
-	// pkg-level default clock indirection for helpers that lack a receiver
-	mu sync.Mutex
 }
 
 // Options configures a Store.
@@ -40,12 +36,16 @@ type Options struct {
 // WAL for read-during-write, NORMAL sync for durability at WAL speed, a busy
 // timeout so brief writer contention waits instead of erroring, and foreign
 // keys on.
+// auto_vacuum = INCREMENTAL is set before any table exists so the hot-limit
+// enforcer can hand freed pages back to the filesystem with
+// PRAGMA incremental_vacuum instead of a full, locking VACUUM.
 const pragmas = `
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA temp_store = MEMORY;
+PRAGMA auto_vacuum = INCREMENTAL;
 `
 
 // Open opens (creating if needed) the database, applies pragmas and runs
@@ -105,10 +105,3 @@ func nowMs() int64 { return time.Now().UnixMilli() }
 func toMs(t time.Time) int64 { return t.UnixMilli() }
 
 func fromMs(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
-
-func nullableMs(t *time.Time) any {
-	if t == nil {
-		return nil
-	}
-	return t.UnixMilli()
-}

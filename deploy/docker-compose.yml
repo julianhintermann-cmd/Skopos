@@ -1,0 +1,53 @@
+# Skopos — reference deployment for a NAS.
+#
+# The only lines most people change are the two volume source paths: point the
+# hot volume at your SSD and the cold volume at your HDD / NAS share.
+#
+#   docker compose up -d
+#
+# Then open http://<nas-ip>:8686. See README.md for the full walkthrough and
+# SECURITY.md for why the capabilities below are required.
+
+services:
+  skopos:
+    image: ghcr.io/julianhintermann-cmd/skopos:latest
+    # Docker Hub alternative (same image):
+    # image: julianhintermann/skopos:latest
+    container_name: skopos
+    restart: unless-stopped
+
+    # Host networking is required: Skopos captures on the host's interfaces and
+    # manages the host firewall. There is no port mapping — the port in
+    # config.yaml (default 8686) is the real host port.
+    network_mode: host
+
+    # Least privilege: drop everything, then add back exactly the two
+    # capabilities the core features physically need.
+    #   NET_RAW   → AF_PACKET packet capture
+    #   NET_ADMIN → nftables firewall management via netlink
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+
+    # Read-only root filesystem; the app writes only to the two volumes below
+    # and to an in-memory /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    volumes:
+      # config.yaml lives on the SSD next to the hot data.
+      - /volume1/docker/skopos/config:/config
+      # Hot storage (SSD): database, runtime state, spool buffer.
+      - /volume1/docker/skopos/data:/data
+      # Cold storage (HDD / NAS share): Parquet archives, logs, backups.
+      - /mnt/nas/skopos/archive:/archive
+
+    # Resource ceiling so Skopos never crowds out your other services.
+    # (Under Compose v2 these map to the container's cgroup limits.)
+    mem_limit: 512m
+    cpus: 2.0

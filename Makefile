@@ -8,7 +8,7 @@ LDFLAGS    := -s -w \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build go-build web-build web-dev test test-integration lint fmt generate clean
+.PHONY: build go-build web-build web-dev run-demo test test-integration lint fmt generate clean
 
 build: web-build
 	CGO_ENABLED=0 go build -trimpath -tags embedui -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/skopos
@@ -21,6 +21,9 @@ web-build:
 
 web-dev:
 	cd web && npm install --no-audit --no-fund && npm run dev
+
+run-demo: build
+	./$(BIN) serve --demo
 
 test:
 	go test ./...

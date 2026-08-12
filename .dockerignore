@@ -1,0 +1,12 @@
+# Keep the build context small and reproducible.
+.git
+bin/
+dist/
+web/dist/
+web/node_modules/
+docs/screenshots/
+data/
+archive/
+*.md
+!README.md
+.github/

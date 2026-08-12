@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import QRCode from 'qrcode'
 import { useFetch } from '../lib/useFetch'
 import { api, type CFStatus, type Health } from '../lib/api'
 import { Card, CardHeader, Button, Pill, TextInput } from '../components/ui'
@@ -38,6 +39,8 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
         </div>
         <AbuseIPDB onUnauthorized={onUnauthorized} canWrite={canWrite} />
       </Card>
+
+      <TwoFactor onUnauthorized={onUnauthorized} canWrite={canWrite} />
 
       {canWrite && <Notifications />}
 
@@ -86,6 +89,120 @@ function Appearance() {
             {o.label}
           </button>
         ))}
+      </div>
+    </Card>
+  )
+}
+
+// TwoFactor manages TOTP enrollment: scan the QR (or copy the secret) into an
+// authenticator app, confirm with a live code. Only meaningful when the login
+// itself is enabled.
+function TwoFactor({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
+  const { data, refresh } = useFetch<{ supported: boolean; enabled: boolean }>('/api/auth/totp', { onUnauthorized })
+  const [setup, setSetup] = useState<{ secret: string; uri: string } | null>(null)
+  const [qr, setQr] = useState('')
+  const [code, setCode] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (setup?.uri) {
+      QRCode.toDataURL(setup.uri, { margin: 1, width: 192 }).then(setQr).catch(() => setQr(''))
+    } else {
+      setQr('')
+    }
+  }, [setup])
+
+  const start = async () => {
+    setErr('')
+    try {
+      setSetup(await api.post<{ secret: string; uri: string }>('/api/auth/totp/setup'))
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  const enable = async () => {
+    setErr('')
+    try {
+      await api.post('/api/auth/totp/enable', { code })
+      setSetup(null)
+      setCode('')
+      refresh()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  const disable = async () => {
+    setErr('')
+    try {
+      await api.post('/api/auth/totp/disable', { code })
+      setCode('')
+      refresh()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Two-factor authentication"
+        sub="a one-time code from your authenticator app, on top of the password"
+        right={data?.enabled ? <Pill tone="good">Enabled</Pill> : <Pill tone="neutral">Off</Pill>}
+      />
+      <div className="px-4 pb-4">
+        {!data?.supported ? (
+          <p className="text-sm" style={{ color: 'var(--muted)' }}>
+            The login itself is disabled (<code className="font-mono text-xs">auth.mode: none</code>). Enable
+            <code className="font-mono text-xs"> single_admin</code> in config.yaml first — 2FA guards the login.
+          </p>
+        ) : data.enabled ? (
+          canWrite && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-36">
+                <TextInput value={code} onChange={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))} mono placeholder="123456" />
+              </div>
+              <Button variant="danger" onClick={disable} disabled={code.length !== 6}>
+                Disable 2FA
+              </Button>
+              <span className="text-xs" style={{ color: 'var(--muted)' }}>Enter a current code to confirm.</span>
+            </div>
+          )
+        ) : setup ? (
+          <div className="flex flex-wrap items-start gap-5">
+            {qr && (
+              <img
+                src={qr}
+                alt="TOTP enrollment QR code"
+                width={160}
+                height={160}
+                className="rounded-md"
+                style={{ background: '#fff', padding: 6 }}
+              />
+            )}
+            <div className="flex min-w-0 flex-1 flex-col gap-2 text-sm">
+              <p>Scan the code with Google Authenticator, Aegis or any TOTP app — or add the secret manually:</p>
+              <code className="w-fit rounded px-2 py-1 font-mono text-xs" style={{ background: 'var(--surface-2)' }}>
+                {setup.secret}
+              </code>
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                Then confirm with the 6-digit code the app shows. If you ever lose the authenticator, reset by
+                deleting the <code className="font-mono">totp_*</code> rows from the meta table in skopos.db.
+              </p>
+              <div className="flex items-center gap-2">
+                <div className="w-36">
+                  <TextInput value={code} onChange={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))} mono placeholder="123456" />
+                </div>
+                <Button variant="primary" onClick={enable} disabled={code.length !== 6}>
+                  Confirm & enable
+                </Button>
+                <Button onClick={() => setSetup(null)}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          canWrite && <Button onClick={start}>Set up 2FA</Button>
+        )}
+        {err && <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
       </div>
     </Card>
   )

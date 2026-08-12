@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
+	"github.com/julianhintermann-cmd/skopos/internal/totp"
 )
 
 // identity is the authenticated caller attached to a request context.
@@ -97,6 +98,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		OTP      string `json:"otp"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -106,15 +108,38 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	auth := s.deps.Config.Server.Auth
 	ok, _ := VerifyPassword(req.Password, auth.PasswordHash)
 	valid := ok && subtleEqual(req.Username, auth.Username)
-	s.limiter.record(client, valid, now)
 
 	if !valid {
+		s.limiter.record(client, false, now)
 		_ = s.deps.Store.Audit(r.Context(), model.AuditEntry{
 			Actor: req.Username, Action: "login_failed", Target: client,
 		})
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+
+	// Second factor, when enrolled. A missing code is the normal first step of
+	// the two-step UI, so it does not count against the limiter; a wrong code
+	// does — six digits are exactly what backoff exists to protect.
+	if s.totpEnabled() {
+		if req.OTP == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "one-time code required", "otp_required": true,
+			})
+			return
+		}
+		if !totp.Verify(s.totpSecret(), req.OTP, now) {
+			s.limiter.record(client, false, now)
+			_ = s.deps.Store.Audit(r.Context(), model.AuditEntry{
+				Actor: req.Username, Action: "login_failed", Target: client, Detail: "wrong one-time code",
+			})
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error": "wrong one-time code", "otp_required": true,
+			})
+			return
+		}
+	}
+	s.limiter.record(client, true, now)
 
 	token := s.signer.issue(auth.Username, now)
 	http.SetCookie(w, &http.Cookie{

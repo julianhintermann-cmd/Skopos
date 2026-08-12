@@ -7,6 +7,8 @@ import { ThemeToggle } from '../components/ThemeToggle'
 export function Login({ onSuccess }: { onSuccess: () => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
+  const [otp, setOtp] = useState('')
+  const [otpRequired, setOtpRequired] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -15,11 +17,15 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
     setBusy(true)
     setError('')
     try {
-      await api.post('/api/auth/login', { username, password })
+      await api.post('/api/auth/login', { username, password, ...(otp ? { otp } : {}) })
       onSuccess()
     } catch (err) {
       if (err instanceof APIError && err.status === 429) {
         setError('Too many attempts. Please wait a moment.')
+      } else if (err instanceof APIError && err.message.includes('one-time code')) {
+        // The password was right; the server wants the second factor.
+        setOtpRequired(true)
+        setError(otp ? 'Wrong one-time code.' : '')
       } else {
         setError('Invalid credentials.')
       }
@@ -72,8 +78,30 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
               style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
             />
           </label>
+          {otpRequired && (
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
+                One-time code
+              </span>
+              <input
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="123456"
+                autoFocus
+                className="rounded-md border px-3 py-2 text-center font-mono text-lg tracking-[0.4em]"
+                style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+            </label>
+          )}
           {error && <p className="text-xs" style={{ color: 'var(--crit)' }}>{error}</p>}
-          <Button type="submit" variant="primary" disabled={busy || !password} className="mt-1 w-full">
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || !password || (otpRequired && otp.length !== 6)}
+            className="mt-1 w-full"
+          >
             {busy ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>

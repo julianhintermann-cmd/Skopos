@@ -158,6 +158,40 @@ func (s *Server) handleSetDeviceLabel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mac": mac, "label": label})
 }
 
+// handleSetDevicePresence toggles arrive/leave notifications for a device.
+func (s *Server) handleSetDevicePresence(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+
+	mac := strings.TrimSpace(r.PathValue("mac"))
+	var req struct {
+		Watch bool `json:"watch"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Seeding uses the same threshold the tracker applies, so a device that is
+	// currently online starts as present without firing a notification.
+	switch err := s.deps.Store.SetDeviceWatchPresence(ctx, mac, req.Watch, 10*time.Minute); {
+	case errors.Is(err, store.ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "no device with that mac")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id, _ := identityFrom(r)
+	detail := "presence tracking off"
+	if req.Watch {
+		detail = "presence tracking on"
+	}
+	_ = s.deps.Store.Audit(ctx, model.AuditEntry{
+		Actor: id.name, Action: "device_presence", Target: mac, Detail: detail,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "watch": req.Watch})
+}
+
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()

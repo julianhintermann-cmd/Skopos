@@ -100,6 +100,27 @@ paths:
       responses:
         "200": { description: Device detail }
         "404": { description: No device with that mac }
+  /api/devices/{mac}/presence:
+    post:
+      summary: Toggle arrive/leave notifications for a device
+      description: >
+        When enabled, Skopos notifies (and records an info alert) when the
+        device appears on the network or falls silent for 10+ minutes. The
+        current state is seeded from the device's last sighting, so enabling
+        never fires an immediate notification. Requires write scope.
+      parameters:
+        - { name: mac, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                watch: { type: boolean }
+      responses:
+        "200": { description: Updated }
+        "404": { description: No device with that mac }
   /api/devices/{mac}/wake:
     post:
       summary: Send a Wake-on-LAN magic packet for the MAC

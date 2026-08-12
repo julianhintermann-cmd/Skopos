@@ -142,11 +142,15 @@ type Device struct {
 	// Label is an operator-assigned name. It is set only through the UI and is
 	// never overwritten by capture, so it takes precedence over the discovered
 	// hostname wherever a device needs a human-readable name.
-	Label     string
-	Hostname  string
-	Vendor    string
-	FirstSeen time.Time
-	LastSeen  time.Time
+	Label    string
+	Hostname string
+	Vendor   string
+	// WatchPresence is the operator's opt-in to arrive/leave notifications for
+	// this device; Present is the tracker's last known state.
+	WatchPresence bool
+	Present       bool
+	FirstSeen     time.Time
+	LastSeen      time.Time
 }
 
 // Name is the best human-readable label for the device: the operator's label

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestUpsertDeviceNewThenSeen(t *testing.T) {
@@ -92,5 +93,47 @@ func TestSetDeviceLabel(t *testing.T) {
 	}
 	if got := devices[0].Name(); got != "nas2" {
 		t.Errorf("Name() = %q, want the hostname fallback", got)
+	}
+}
+
+func TestPresenceWatchAndState(t *testing.T) {
+	s, now := testStore(t)
+	ctx := context.Background()
+
+	const mac = "aa:bb:cc:dd:ee:22"
+	if _, err := s.UpsertDevice(ctx, mac, "192.168.1.30", "phone", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Enabling on a just-seen device seeds present=true (no arrival ping later).
+	if err := s.SetDeviceWatchPresence(ctx, mac, true, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	watched, err := s.WatchedDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watched) != 1 || !watched[0].WatchPresence || !watched[0].Present {
+		t.Fatalf("watched = %+v, want present seeded true", watched)
+	}
+	_ = now
+
+	if err := s.SetDevicePresent(ctx, mac, false); err != nil {
+		t.Fatal(err)
+	}
+	watched, _ = s.WatchedDevices(ctx)
+	if watched[0].Present {
+		t.Error("present should be false after SetDevicePresent(false)")
+	}
+
+	// Disabling clears both flags.
+	if err := s.SetDeviceWatchPresence(ctx, mac, false, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := s.WatchedDevices(ctx); len(w) != 0 {
+		t.Errorf("watched after disable = %d, want 0", len(w))
+	}
+	if err := s.SetDeviceWatchPresence(ctx, "00:00:00:00:00:99", true, time.Minute); err == nil {
+		t.Error("unknown mac should error")
 	}
 }

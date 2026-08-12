@@ -63,6 +63,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
                   <Td muted>{formatRelative(d.LastSeen)}</Td>
                   <Td>
                     <div className="flex items-center justify-end gap-1">
+                      {canWrite && <PresenceToggle device={d} onChanged={refresh} onUnauthorized={onUnauthorized} />}
                       {canWrite && <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />}
                       <Link
                         to={`/devices/${encodeURIComponent(d.MAC)}`}
@@ -84,6 +85,42 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
         </div>
       )}
     </Card>
+  )
+}
+
+// PresenceToggle turns arrive/leave notifications for a device on or off.
+function PresenceToggle({
+  device,
+  onChanged,
+  onUnauthorized,
+}: {
+  device: Device
+  onChanged: () => void
+  onUnauthorized: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const toggle = async () => {
+    setBusy(true)
+    try {
+      await api.post(`/api/devices/${encodeURIComponent(device.MAC)}/presence`, { watch: !device.WatchPresence })
+      onChanged()
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <IconButton
+      label={device.WatchPresence ? 'Presence alerts on — click to disable' : 'Notify when this device arrives or leaves'}
+      onClick={toggle}
+      disabled={busy}
+      tone={device.WatchPresence ? 'accent' : 'neutral'}
+    >
+      <path d="M12 3a6 6 0 0 1 6 6c0 4 2 5.5 2 5.5H4S6 13 6 9a6 6 0 0 1 6-6z" />
+      <path d="M10.3 20a2 2 0 0 0 3.4 0" />
+      {!device.WatchPresence && <path d="M4 4l16 16" />}
+    </IconButton>
   )
 }
 
@@ -207,6 +244,18 @@ function NameCell({
               style={{ color: 'var(--accent-strong)', background: 'var(--accent-tint)' }}
             >
               named
+            </span>
+          )}
+          {device.WatchPresence && (
+            <span
+              className="rounded-full px-1.5 py-0.5 font-mono text-[0.55rem] font-semibold uppercase tracking-wide"
+              style={
+                device.Present
+                  ? { color: 'var(--good)', background: 'var(--good-tint)' }
+                  : { color: 'var(--muted)', background: 'var(--surface-2)' }
+              }
+            >
+              {device.Present ? 'home' : 'away'}
             </span>
           )}
         </div>

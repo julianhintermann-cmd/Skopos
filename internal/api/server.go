@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
 	s.mux.Handle("POST /api/devices/{mac}/wake", s.requireWrite(http.HandlerFunc(s.handleWakeDevice)))
+	s.mux.Handle("POST /api/devices/{mac}/presence", s.requireWrite(http.HandlerFunc(s.handleSetDevicePresence)))
 	s.mux.Handle("POST /api/alerts/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckAlert)))
 	s.mux.Handle("POST /api/blocks", s.requireWrite(http.HandlerFunc(s.handleAddBlock)))
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))

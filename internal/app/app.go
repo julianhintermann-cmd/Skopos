@@ -186,6 +186,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.spawnMaintenance(runCtx, spawn, st, dispatcher)
 	a.spawnFeeds(runCtx, spawn, observers.feeds, dispatcher)
 	a.spawnCapture(runCtx, spawn, agg, sampler, dispatcher)
+	a.spawnPresence(runCtx, spawn, st, dispatcher)
 
 	// HTTP server.
 	httpSrv := &http.Server{

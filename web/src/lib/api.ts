@@ -114,6 +114,8 @@ export interface Device {
   Label: string
   Hostname: string
   Vendor: string
+  WatchPresence: boolean
+  Present: boolean
   FirstSeen: string
   LastSeen: string
 }

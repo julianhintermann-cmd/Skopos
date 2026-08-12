@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/netip"
+	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
@@ -57,9 +58,18 @@ func (s *Store) UpsertDevice(ctx context.Context, mac, ip, hostname, vendor stri
 
 // ListDevices returns known devices, most recently seen first.
 func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
+	return s.queryDevices(ctx, `ORDER BY last_seen_ms DESC`)
+}
+
+// WatchedDevices returns devices with presence tracking enabled.
+func (s *Store) WatchedDevices(ctx context.Context) ([]model.Device, error) {
+	return s.queryDevices(ctx, `WHERE watch_presence = 1 ORDER BY last_seen_ms DESC`)
+}
+
+func (s *Store) queryDevices(ctx context.Context, tail string) ([]model.Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mac, ip, label, hostname, vendor, first_seen_ms, last_seen_ms
-		FROM devices ORDER BY last_seen_ms DESC`)
+		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, first_seen_ms, last_seen_ms
+		FROM devices `+tail)
 	if err != nil {
 		return nil, err
 	}
@@ -69,16 +79,56 @@ func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 	for rows.Next() {
 		var d model.Device
 		var ip string
+		var watch, present int
 		var first, last int64
-		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &first, &last); err != nil {
+		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &first, &last); err != nil {
 			return nil, err
 		}
 		d.IP, _ = netip.ParseAddr(ip)
+		d.WatchPresence = watch != 0
+		d.Present = present != 0
 		d.FirstSeen = fromMs(first)
 		d.LastSeen = fromMs(last)
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// SetDeviceWatchPresence toggles presence tracking. Enabling seeds the present
+// state from how recently the device was seen, so the first tracker pass does
+// not immediately fire an arrival or departure for a device that never moved.
+func (s *Store) SetDeviceWatchPresence(ctx context.Context, mac string, watch bool, seenWithin time.Duration) error {
+	present := 0
+	if watch {
+		cutoff := toMs(s.now().Add(-seenWithin))
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE devices SET watch_presence = 1,
+			                   present = CASE WHEN last_seen_ms >= ? THEN 1 ELSE 0 END
+			WHERE mac = ?`, cutoff, mac)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrDeviceNotFound
+		}
+		return nil
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET watch_presence = 0, present = ? WHERE mac = ?`, present, mac)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// SetDevicePresent records the tracker's new state for a device.
+func (s *Store) SetDevicePresent(ctx context.Context, mac string, present bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET present = ? WHERE mac = ?`, boolToInt(present), mac)
+	return err
 }
 
 // ErrDeviceNotFound is returned by SetDeviceLabel when no device carries the

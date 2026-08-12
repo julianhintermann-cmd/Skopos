@@ -48,6 +48,7 @@ export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void })
             <div className="flex items-center gap-2">
               <h1 className="text-lg font-semibold tracking-tight">{name || 'Unnamed device'}</h1>
               {d.Label && <Pill tone="accent">named</Pill>}
+              {d.WatchPresence && <Pill tone={d.Present ? 'good' : 'neutral'}>{d.Present ? 'home' : 'away'}</Pill>}
             </div>
             <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-xs" style={{ color: 'var(--muted)' }}>
               <span>{d.IP}</span>

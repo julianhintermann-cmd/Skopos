@@ -52,6 +52,8 @@ in a single container configured by a single YAML file.
   Skopos stores encrypted — secrets like that never belong in a config file.
 
 <div align="center">
+<img src="docs/screenshots/live.png" alt="Live view — every conversation in real time" width="49%">
+<img src="docs/screenshots/cloudflare.png" alt="Cloudflare zone analytics" width="49%">
 <img src="docs/screenshots/alerts.png" alt="Alerts" width="49%">
 <img src="docs/screenshots/traffic-light.png" alt="Traffic (light)" width="49%">
 </div>

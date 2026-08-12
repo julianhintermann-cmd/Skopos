@@ -146,6 +146,10 @@ The entrypoint is the `skopos` binary:
 
 ## Screenshots
 
+| Live view | Cloudflare |
+| --- | --- |
+| ![Live](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/live.png) | ![Cloudflare](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/cloudflare.png) |
+
 | Alerts | Traffic |
 | --- | --- |
 | ![Alerts](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/alerts.png) | ![Traffic](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/traffic-light.png) |

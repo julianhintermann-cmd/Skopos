@@ -58,6 +58,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            # Every main build additionally gets an immutable, commit-pinned
+            # tag (edge-<shortsha>). Pulling that can never yield a stale
+            # image, unlike a moving tag reused across builds.
+            type=sha,prefix=edge-,enable=${{ github.ref == 'refs/heads/main' }}
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3

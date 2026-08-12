@@ -8,21 +8,32 @@ LDFLAGS    := -s -w \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.Date=$(DATE)
 
-.PHONY: build go-build test lint fmt clean
+.PHONY: build go-build web-build web-dev test test-integration lint fmt clean
 
-build: go-build
+build: web-build go-build
 
 go-build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/skopos
 
+web-build:
+	cd web && npm install --no-audit --no-fund && npm run build
+
+web-dev:
+	cd web && npm install --no-audit --no-fund && npm run dev
+
 test:
 	go test ./...
+	cd web && npm run typecheck
+
+test-integration:
+	sudo -E go test -tags=integration -run Integration ./internal/firewall/...
 
 lint:
 	golangci-lint run
+	cd web && npm run typecheck
 
 fmt:
 	gofmt -w $$(git ls-files '*.go')
 
 clean:
-	rm -rf bin
+	rm -rf bin web/dist

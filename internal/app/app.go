@@ -69,7 +69,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// --- notification ------------------------------------------------------
 	dispatcher := notify.FromConfig(a.cfg)
-	dispatcher.SetLogger(a.logf)
+	dispatcher.SetLogger(a.warnf)
 
 	// --- firewall ----------------------------------------------------------
 	backend := firewall.NewNFTablesBackend()
@@ -80,7 +80,7 @@ func (a *App) Run(ctx context.Context) error {
 		DefaultTTL:     a.cfg.Firewall.BlockTTL.Std(),
 		IsInternal:     classifier.Internal,
 	}, backend, st, a.clock)
-	fw.SetLogger(a.logf)
+	fw.SetLogger(a.warnf)
 
 	degraded := a.cfg.Firewall.Enforcement == "enforce" && !backend.Available()
 	if degraded {
@@ -96,7 +96,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// --- policy ------------------------------------------------------------
 	pol := policyFromConfig(a.cfg, classifier, st, dispatcher, fw, a.clock)
-	pol.SetLogger(a.logf)
+	pol.SetLogger(a.warnf)
 
 	// --- detectors + observers --------------------------------------------
 	sampler := flow.NewSampler(a.cfg.Capture.SampleThresholdPPS, func(s flow.SampleState) {
@@ -188,6 +188,11 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) logf(format string, args ...any) { a.log.Info(fmt.Sprintf(format, args...)) }
+
+// warnf is the logger handed to subsystems whose callbacks fire on abnormal
+// conditions — a failed notification, a refused block, a degraded backend.
+// Routing those through Info would bury exactly the lines worth noticing.
+func (a *App) warnf(format string, args ...any) { a.log.Warn(fmt.Sprintf(format, args...)) }
 
 func logLevel(s string) slog.Level {
 	switch s {

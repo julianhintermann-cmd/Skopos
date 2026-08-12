@@ -15,6 +15,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/policy"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
+	"github.com/julianhintermann-cmd/skopos/internal/version"
 )
 
 // observerSet is the fan-out flow.Observer plus references to the pieces that
@@ -120,7 +121,7 @@ func clockToTime(c config.ClockTime) time.Time {
 // healthFunc reports subsystem health for /api/health.
 func (a *App) healthFunc(st *store.Store, backend firewall.Backend, fw *firewall.Service) func() api.Health {
 	return func() api.Health {
-		h := api.Health{OK: true, Enforcing: fw.Enforcing()}
+		h := api.Health{OK: true, Enforcing: fw.Enforcing(), Version: version.Version}
 		if a.demo {
 			h.Capture = "demo"
 		} else {

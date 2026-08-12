@@ -1,6 +1,12 @@
 // Captures dashboard screenshots from a running demo instance, in both light
 // and dark themes. Reproducible from the demo mode, so screenshots never go
-// stale. Usage: node screenshots.mjs <baseURL> <outDir>
+// stale.
+//
+// Playwright is not a project dependency (it would make every `npm ci` pull a
+// browser). Install it on demand first:
+//   npm install --no-save playwright
+//   node screenshots.mjs <baseURL> <outDir>
+// PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 plus a system Chromium works too.
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 

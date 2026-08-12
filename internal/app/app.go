@@ -26,6 +26,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/geoip"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
+	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 )
@@ -176,6 +177,7 @@ func (a *App) Run(ctx context.Context) error {
 	})
 
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
+	rep := reputation.New(st, secretBox, a.clock)
 
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
@@ -186,6 +188,7 @@ func (a *App) Run(ctx context.Context) error {
 		Speedtest:  runSpeedtest,
 		GeoIP:      geo,
 		Countries:  countries,
+		Reputation: rep,
 		Clock:      a.clock,
 		Health:     a.healthFunc(st, backend, fw),
 	})

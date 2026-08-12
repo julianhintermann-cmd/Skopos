@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, type CFStatus, type Health } from '../lib/api'
-import { Card, CardHeader, Button, Pill } from '../components/ui'
+import { Card, CardHeader, Button, Pill, TextInput } from '../components/ui'
 import { useTheme } from '../lib/theme'
 
 export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
@@ -36,6 +36,7 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
             </Link>
           </div>
         </div>
+        <AbuseIPDB onUnauthorized={onUnauthorized} canWrite={canWrite} />
       </Card>
 
       {canWrite && <Notifications />}
@@ -87,6 +88,70 @@ function Appearance() {
         ))}
       </div>
     </Card>
+  )
+}
+
+// AbuseIPDB connects an API key for abuse scores in alert lookups. The key is
+// verified against the service, then sealed at rest — same handling as the
+// Cloudflare token.
+function AbuseIPDB({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
+  const { data, refresh } = useFetch<{ configured: boolean }>('/api/integrations/abuseipdb', { onUnauthorized })
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const connect = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.post('/api/integrations/abuseipdb', { key: key.trim() })
+      setKey('')
+      refresh()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const disconnect = async () => {
+    await api.del('/api/integrations/abuseipdb').catch(() => {})
+    refresh()
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="flex items-center gap-3">
+        <span className="flex h-6 w-6 items-center justify-center rounded font-mono text-xs font-bold" style={{ background: 'var(--crit-tint)', color: 'var(--crit)' }}>
+          !
+        </span>
+        <div>
+          <div className="font-medium">AbuseIPDB</div>
+          <div className="text-xs" style={{ color: 'var(--muted)' }}>
+            Abuse scores for alert sources ("who is this?")
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {data?.configured ? (
+          <>
+            <Pill tone="good">Connected</Pill>
+            {canWrite && <Button variant="danger" onClick={disconnect}>Remove</Button>}
+          </>
+        ) : canWrite ? (
+          <>
+            <div className="w-52">
+              <TextInput value={key} onChange={setKey} mono type="password" placeholder="AbuseIPDB API key" disabled={busy} />
+            </div>
+            <Button onClick={connect} disabled={busy || !key.trim()}>
+              {busy ? 'Verifying…' : 'Connect'}
+            </Button>
+          </>
+        ) : (
+          <Pill tone="neutral">Not connected</Pill>
+        )}
+        {err && <span className="text-xs" style={{ color: 'var(--crit)' }}>{err}</span>}
+      </div>
+    </div>
   )
 }
 

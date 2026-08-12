@@ -1,9 +1,64 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type Alert } from '../lib/api'
+import { api, countryFlag, countryName, type Alert, type ReputationInfo } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill } from '../components/ui'
 import { useDeviceNames } from '../lib/deviceNames'
 import { formatTime } from '../lib/format'
+
+// isPublic filters out addresses a WHOIS lookup cannot say anything about.
+function isPublic(ip: string): boolean {
+  return !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|fe80:|fc|fd)/i.test(ip)
+}
+
+// Reputation loads and renders who an external address belongs to.
+function Reputation({ ip }: { ip: string }) {
+  const [info, setInfo] = useState<ReputationInfo | null>(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let stop = false
+    api
+      .get<ReputationInfo>(`/api/reputation?ip=${encodeURIComponent(ip)}`)
+      .then((i) => !stop && setInfo(i))
+      .catch((e) => !stop && setErr((e as Error).message))
+    return () => {
+      stop = true
+    }
+  }, [ip])
+
+  if (err) return <div className="text-xs" style={{ color: 'var(--crit)' }}>Lookup failed: {err}</div>
+  if (!info) return <div className="text-xs" style={{ color: 'var(--muted)' }}>Looking up {ip}…</div>
+
+  const score = info.abuse_score
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md px-3 py-2 text-xs" style={{ background: 'var(--surface-2)' }}>
+      {info.org && <span><span style={{ color: 'var(--muted)' }}>Owner</span> {info.org}{info.handle ? ` (${info.handle})` : ''}</span>}
+      {info.country && (
+        <span>
+          <span style={{ color: 'var(--muted)' }}>Country</span> {countryFlag(info.country)} {countryName(info.country)}
+        </span>
+      )}
+      {info.isp && <span><span style={{ color: 'var(--muted)' }}>ISP</span> {info.isp}</span>}
+      {info.usage_type && <span><span style={{ color: 'var(--muted)' }}>Type</span> {info.usage_type}</span>}
+      {score !== undefined ? (
+        <span
+          className="rounded-full px-2 py-0.5 font-medium"
+          style={
+            score >= 50
+              ? { background: 'var(--crit-tint)', color: 'var(--crit)' }
+              : score > 0
+                ? { background: 'var(--warn-tint)', color: 'var(--warn)' }
+                : { background: 'var(--good-tint)', color: 'var(--good)' }
+          }
+        >
+          Abuse {score}% · {info.abuse_reports} reports
+        </span>
+      ) : (
+        <span style={{ color: 'var(--muted)' }}>Connect AbuseIPDB in Settings for abuse scores.</span>
+      )}
+    </div>
+  )
+}
 
 export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const [unackedOnly, setUnackedOnly] = useState(false)
@@ -12,6 +67,7 @@ export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
   const names = useDeviceNames(onUnauthorized)
 
   const alerts = data?.alerts ?? []
+  const [expanded, setExpanded] = useState<number | null>(null)
 
   const ack = async (id: number) => {
     await api.post(`/api/alerts/${id}/ack`)
@@ -72,7 +128,21 @@ export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
                       {names.get(a.Source) && <span className="font-sans"> ({names.get(a.Source)})</span>}
                     </span>
                   )}
+                  {a.Source && isPublic(a.Source) && (
+                    <button
+                      onClick={() => setExpanded(expanded === a.ID ? null : a.ID)}
+                      className="ml-2 rounded px-1.5 py-0.5 font-medium"
+                      style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
+                    >
+                      {expanded === a.ID ? 'hide' : 'who is this?'}
+                    </button>
+                  )}
                 </div>
+                {expanded === a.ID && a.Source && (
+                  <div className="mt-2">
+                    <Reputation ip={a.Source} />
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-3">
                 <span className="font-mono text-xs" style={{ color: 'var(--muted)' }}>

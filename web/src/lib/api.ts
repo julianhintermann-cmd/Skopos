@@ -176,6 +176,18 @@ export function countryName(code: string): string {
   }
 }
 
+export interface ReputationInfo {
+  ip: string
+  org?: string
+  handle?: string
+  country?: string
+  abuse_score?: number
+  abuse_reports?: number
+  isp?: string
+  usage_type?: string
+  checked_at: string
+}
+
 export interface SpeedtestResult {
   ID: number
   Time: string

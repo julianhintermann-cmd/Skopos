@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Skopos">
+  <title>Skopos</title>
+  <defs>
+    <!-- Ground: deep green-black with a faint lift toward the centre, so the
+         scope reads as lit rather than flat. -->
+    <radialGradient id="ground" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#16211f"/>
+      <stop offset="100%" stop-color="#0a100f"/>
+    </radialGradient>
+    <!-- Sweep wedge: brightest at the leading edge, fading behind it. -->
+    <linearGradient id="sweep" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4cbcae" stop-opacity="0"/>
+      <stop offset="70%" stop-color="#4cbcae" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#6fd2c5" stop-opacity="0.42"/>
+    </linearGradient>
+    <radialGradient id="blipGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7fe3d5" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#7fe3d5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded-square app tile -->
+  <rect width="512" height="512" rx="112" fill="url(#ground)"/>
+
+  <!-- Sweep wedge, from the trailing edge up to the blip bearing -->
+  <path d="M256,256 L344,104 A176,176 0 0 1 429,225 Z" fill="url(#sweep)"/>
+
+  <!-- Concentric range rings: outer faintest, inner strongest -->
+  <g fill="none" stroke="#4cbcae" stroke-linecap="round">
+    <circle cx="256" cy="256" r="176" stroke-width="9" opacity="0.22"/>
+    <circle cx="256" cy="256" r="120" stroke-width="9" opacity="0.48"/>
+    <circle cx="256" cy="256" r="64"  stroke-width="9" opacity="0.92"/>
+  </g>
+
+  <!-- Bearing line, stopping just inside the outer ring so it reads as part of
+       the scope rather than overshooting it -->
+  <line x1="256" y1="256" x2="395" y2="158" stroke="#6fd2c5" stroke-width="7"
+        stroke-linecap="round" opacity="0.42"/>
+
+  <!-- The contact: a glow plus a solid blip -->
+  <circle cx="354" cy="187" r="46" fill="url(#blipGlow)"/>
+  <circle cx="354" cy="187" r="21" fill="#7fe3d5"/>
+
+  <!-- Centre: the watcher's own position -->
+  <circle cx="256" cy="256" r="15" fill="#4cbcae"/>
+</svg>

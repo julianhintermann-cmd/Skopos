@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/brand/icon-180.png" alt="" width="96" height="96">
+
 # Skopos
 
 **σκοπός — the watcher.**

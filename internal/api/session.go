@@ -129,9 +129,12 @@ func (t *tokenAuth) check(presented string) (tokenInfo, bool) {
 }
 
 // loginLimiter throttles failed logins per client with exponential backoff, so
-// a password on the LAN cannot be brute-forced cheaply.
+// a password on the LAN cannot be brute-forced cheaply. A small number of
+// failures are tolerated before backoff engages, so a mistyped password does
+// not lock a legitimate user out for the retry.
 type loginLimiter struct {
 	attempts map[string]*attemptState
+	grace    int // free failures before backoff starts
 	base     time.Duration
 	max      time.Duration
 }
@@ -144,6 +147,7 @@ type attemptState struct {
 func newLoginLimiter() *loginLimiter {
 	return &loginLimiter{
 		attempts: map[string]*attemptState{},
+		grace:    3,
 		base:     time.Second,
 		max:      5 * time.Minute,
 	}
@@ -152,11 +156,11 @@ func newLoginLimiter() *loginLimiter {
 // allowed reports whether client may attempt a login now.
 func (l *loginLimiter) allowed(client string, now time.Time) bool {
 	st := l.attempts[client]
-	return st == nil || !now.Before(st.nextAllow)
+	return st == nil || now.After(st.nextAllow) || now.Equal(st.nextAllow)
 }
 
 // record updates the limiter after an attempt. A success clears the state; a
-// failure grows the backoff.
+// failure grows the backoff once the grace allowance is used up.
 func (l *loginLimiter) record(client string, success bool, now time.Time) {
 	if success {
 		delete(l.attempts, client)
@@ -168,7 +172,10 @@ func (l *loginLimiter) record(client string, success bool, now time.Time) {
 		l.attempts[client] = st
 	}
 	st.fails++
-	backoff := l.base * (1 << min(st.fails-1, 8))
+	if st.fails <= l.grace {
+		return
+	}
+	backoff := l.base * (1 << min(st.fails-l.grace-1, 8))
 	if backoff > l.max {
 		backoff = l.max
 	}

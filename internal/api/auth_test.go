@@ -133,11 +133,13 @@ func TestLoginLimiterBacksOff(t *testing.T) {
 	if !l.allowed(client, now) {
 		t.Fatal("first attempt should be allowed")
 	}
-	// Two failures: backoff should grow and block immediate retries.
-	l.record(client, false, now)
-	l.record(client, false, now)
+	// A few failures are tolerated (grace); beyond that, backoff blocks
+	// immediate retries.
+	for i := 0; i < l.grace+1; i++ {
+		l.record(client, false, now)
+	}
 	if l.allowed(client, now) {
-		t.Error("should be blocked immediately after failures")
+		t.Error("should be blocked after exceeding the grace allowance")
 	}
 	if l.retryAfter(client, now) <= 0 {
 		t.Error("retryAfter should be positive while blocked")

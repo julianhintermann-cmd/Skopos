@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, deviceName, type Device } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
@@ -46,7 +47,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
                 <Th>Vendor</Th>
                 <Th>First seen</Th>
                 <Th>Last seen</Th>
-                {canWrite && <Th> </Th>}
+                <Th> </Th>
               </tr>
             </thead>
             <tbody>
@@ -60,11 +61,22 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
                   <Td muted>{d.Vendor || '—'}</Td>
                   <Td muted>{formatRelative(d.FirstSeen)}</Td>
                   <Td muted>{formatRelative(d.LastSeen)}</Td>
-                  {canWrite && (
-                    <Td>
-                      <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />
-                    </Td>
-                  )}
+                  <Td>
+                    <div className="flex items-center justify-end gap-1">
+                      {canWrite && <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />}
+                      <Link
+                        to={`/devices/${encodeURIComponent(d.MAC)}`}
+                        title="Device details"
+                        aria-label="Device details"
+                        className="rounded p-1"
+                        style={{ color: 'var(--muted)' }}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M9 18l6-6-6-6" />
+                        </svg>
+                      </Link>
+                    </div>
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -182,7 +194,13 @@ function NameCell({
     <div className="group flex items-start gap-1.5">
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
-          <span style={name ? undefined : { color: 'var(--muted)' }}>{name || 'unknown'}</span>
+          <Link
+            to={`/devices/${encodeURIComponent(device.MAC)}`}
+            className="hover:underline"
+            style={name ? undefined : { color: 'var(--muted)' }}
+          >
+            {name || 'unknown'}
+          </Link>
           {device.Label && (
             <span
               className="rounded-full px-1.5 py-0.5 font-mono text-[0.55rem] font-semibold uppercase tracking-wide"

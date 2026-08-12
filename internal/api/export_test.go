@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"net/netip"
 	"strings"
 	"testing"
@@ -108,5 +109,56 @@ func TestWakeDevice(t *testing.T) {
 	}
 	if !found {
 		t.Error("wake was not audited")
+	}
+}
+
+func TestDeviceDetail(t *testing.T) {
+	srv, st := newTestServer(t, "none")
+	if _, err := st.UpsertDevice(t.Context(), "aa:bb:cc:dd:ee:01", "192.168.1.50", "tv", ""); err != nil {
+		t.Fatal(err)
+	}
+	// One flow from the device an hour before the fixed clock.
+	err := st.WriteFlows([]model.Flow{{
+		Start: time.Unix(1_700_000_000-3600, 0), End: time.Unix(1_700_000_000-3599, 0),
+		SrcIP: netip.MustParseAddr("192.168.1.50"), DstIP: netip.MustParseAddr("142.250.185.78"),
+		SrcPort: 40000, DstPort: 443, Proto: model.ProtoTCP, Dir: model.DirLANtoWAN,
+		OutBytes: 2000, OutPackets: 3, InBytes: 9000, InPackets: 8, DstName: "youtube.com",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := do(t, srv.Handler(), "GET", "/api/devices/aa:bb:cc:dd:ee:01/detail", "", nil, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("detail = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		Series       []map[string]any `json:"series"`
+		Destinations []struct {
+			Address string `json:"address"`
+			Name    string `json:"name"`
+		} `json:"destinations"`
+		Ports []struct {
+			Port  int    `json:"port"`
+			Proto string `json:"proto"`
+		} `json:"ports"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Series) == 0 || len(out.Destinations) == 0 || len(out.Ports) == 0 {
+		t.Fatalf("detail incomplete: series=%d dst=%d ports=%d", len(out.Series), len(out.Destinations), len(out.Ports))
+	}
+	if out.Destinations[0].Name != "youtube.com" {
+		t.Errorf("destination name = %q, want DNS enrichment", out.Destinations[0].Name)
+	}
+	if out.Ports[0].Port != 443 || out.Ports[0].Proto != "tcp" {
+		t.Errorf("ports = %+v", out.Ports)
+	}
+
+	// Unknown MAC → 404.
+	resp = do(t, srv.Handler(), "GET", "/api/devices/00:00:00:00:00:00/detail", "", nil, nil)
+	if resp.StatusCode != 404 {
+		t.Errorf("unknown device = %d, want 404", resp.StatusCode)
 	}
 }

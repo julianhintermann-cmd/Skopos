@@ -124,6 +124,25 @@ export function deviceName(d: Device): string {
   return d.Label || d.Hostname || ''
 }
 
+export interface PortUsage {
+  port: number
+  proto: string
+  bytes: number
+  flows: number
+}
+
+// DeviceDetail is /api/devices/{mac}/detail: the inventory record plus the
+// device's traffic over the requested window.
+export interface DeviceDetail {
+  device: Device
+  from: string
+  to: string
+  resolution: string
+  series: TimePoint[] | null
+  destinations: Talker[] | null
+  ports: PortUsage[] | null
+}
+
 export interface AuditEntry {
   ID: number
   Time: string

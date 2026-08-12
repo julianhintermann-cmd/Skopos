@@ -87,6 +87,19 @@ paths:
       summary: LAN device inventory
       responses:
         "200": { description: Devices }
+  /api/devices/{mac}/detail:
+    get:
+      summary: One device's inventory record plus its traffic over a window
+      description: >
+        Returns the device, a throughput series, top destinations (with DNS/SNI
+        names where captured) and destination ports, keyed by the device's
+        current IP. Window defaults to 24h.
+      parameters:
+        - { name: mac, in: path, required: true, schema: { type: string } }
+        - { name: window, in: query, schema: { type: string, description: "duration like 24h / 168h" } }
+      responses:
+        "200": { description: Device detail }
+        "404": { description: No device with that mac }
   /api/devices/{mac}/wake:
     post:
       summary: Send a Wake-on-LAN magic packet for the MAC

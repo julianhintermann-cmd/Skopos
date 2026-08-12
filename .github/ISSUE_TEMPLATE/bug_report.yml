@@ -1,0 +1,43 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Skopos version
+      description: Output of `skopos version` or the image tag.
+      placeholder: "0.1.0 / ghcr.io/julianhintermann-cmd/skopos:latest"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - docker compose
+        - Portainer
+        - plain docker run
+        - binary (no container)
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the exact steps to reproduce if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config.yaml excerpt
+      description: "**Redact secrets** (ntfy tokens, password hashes)."
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: "`docker logs skopos` around the time of the problem."
+      render: text

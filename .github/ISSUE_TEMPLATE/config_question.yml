@@ -1,0 +1,16 @@
+name: Configuration question
+description: You are unsure how to configure something
+labels: [question]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What did you try?
+      description: "Include your config.yaml excerpt — **redact secrets**."
+      render: yaml

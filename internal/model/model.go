@@ -159,6 +159,18 @@ func (d Device) Name() string {
 	return d.Hostname
 }
 
+// CFZone is a Cloudflare zone (a domain) the operator has connected, plus
+// whether Skopos is actively monitoring its traffic. The list and the
+// monitored flags are persisted so they survive a restart; the API token that
+// backs them is sealed separately and never stored here in the clear.
+type CFZone struct {
+	ID        string
+	Name      string
+	Status    string
+	Monitored bool
+	Added     time.Time
+}
+
 // AuditEntry records a security-relevant action for the audit log.
 type AuditEntry struct {
 	ID     int64

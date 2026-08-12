@@ -17,11 +17,13 @@ import (
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/api"
+	"github.com/julianhintermann-cmd/skopos/internal/cloudflare"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/flow"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
+	"github.com/julianhintermann-cmd/skopos/internal/secret"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 )
 
@@ -64,6 +66,16 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("opening store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+
+	// --- cloudflare integration -------------------------------------------
+	// The token is entered in the UI and sealed at rest; nothing here is
+	// configured from the YAML. A failure to build the secret box is fatal —
+	// it would mean the store cannot hold secrets.
+	secretBox, err := secret.FromStore(st)
+	if err != nil {
+		return fmt.Errorf("opening secret store: %w", err)
+	}
+	cf := cloudflare.NewManager(st, secretBox, cloudflare.NewClient(), a.clock)
 
 	classifier := flow.NewClassifier(a.cfg.Network.PrivateRanges)
 
@@ -127,10 +139,11 @@ func (a *App) Run(ctx context.Context) error {
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
-		Live:      live,
-		LiveFlows: liveSink,
-		Clock:     a.clock,
-		Health:    a.healthFunc(st, backend, fw),
+		Live:       live,
+		LiveFlows:  liveSink,
+		Cloudflare: cf,
+		Clock:      a.clock,
+		Health:     a.healthFunc(st, backend, fw),
 	})
 	if err != nil {
 		return fmt.Errorf("building API: %w", err)

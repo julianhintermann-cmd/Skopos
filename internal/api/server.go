@@ -28,13 +28,14 @@ type LiveStats struct {
 
 // Deps are the server's dependencies.
 type Deps struct {
-	Store     *store.Store
-	Firewall  *firewall.Service
-	Notifier  *notify.Dispatcher
-	Config    *config.Config
-	Live      LiveProvider
-	LiveFlows LiveFlowProvider
-	Clock     func() time.Time
+	Store      *store.Store
+	Firewall   *firewall.Service
+	Notifier   *notify.Dispatcher
+	Config     *config.Config
+	Live       LiveProvider
+	LiveFlows  LiveFlowProvider
+	Cloudflare CloudflareService
+	Clock      func() time.Time
 	// Health reports subsystem health for /api/health.
 	Health func() Health
 }
@@ -113,6 +114,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/rules", s.requireRead(http.HandlerFunc(s.handleRules)))
 	s.mux.Handle("GET /api/audit", s.requireRead(http.HandlerFunc(s.handleAudit)))
 	s.mux.Handle("GET /api/me", s.requireRead(http.HandlerFunc(s.handleMe)))
+	s.mux.Handle("GET /api/integrations/cloudflare", s.requireRead(http.HandlerFunc(s.handleCFStatus)))
+	s.mux.Handle("GET /api/integrations/cloudflare/analytics", s.requireRead(http.HandlerFunc(s.handleCFAnalytics)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
@@ -121,6 +124,9 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))
 	s.mux.Handle("POST /api/config/validate", s.requireWrite(http.HandlerFunc(s.handleValidateConfig)))
 	s.mux.Handle("POST /api/notify/test", s.requireWrite(http.HandlerFunc(s.handleNotifyTest)))
+	s.mux.Handle("POST /api/integrations/cloudflare", s.requireWrite(http.HandlerFunc(s.handleCFConnect)))
+	s.mux.Handle("DELETE /api/integrations/cloudflare", s.requireWrite(http.HandlerFunc(s.handleCFDisconnect)))
+	s.mux.Handle("POST /api/integrations/cloudflare/zones/{id}", s.requireWrite(http.HandlerFunc(s.handleCFSetZone)))
 
 	// API docs.
 	s.mux.HandleFunc("GET /api/openapi.yaml", s.handleOpenAPISpec)

@@ -177,6 +177,60 @@ paths:
       summary: Send a test notification to configured channels
       responses:
         "200": { description: "{ok:true} or {ok:false, error:...}" }
+  /api/integrations/cloudflare:
+    get:
+      summary: Cloudflare connection status and connected zones
+      description: Never returns the API token. Reports connected state, token id and the zone list with monitored flags.
+      responses:
+        "200": { description: Status }
+    post:
+      summary: Connect Cloudflare with a scoped API token
+      description: >
+        The token is verified, then sealed with AES-GCM and stored; it is never
+        written to config or returned. Requires write scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: "Cloudflare API token with Zone Read + Analytics Read" }
+      responses:
+        "200": { description: Connected; returns status }
+        "400": { description: Missing token }
+        "502": { description: Token rejected or Cloudflare unreachable }
+    delete:
+      summary: Disconnect Cloudflare and wipe the stored token and zones
+      responses:
+        "200": { description: Disconnected }
+  /api/integrations/cloudflare/zones/{id}:
+    post:
+      summary: Toggle whether a zone's traffic is monitored
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                monitored: { type: boolean }
+      responses:
+        "200": { description: Updated }
+        "404": { description: Unknown zone }
+  /api/integrations/cloudflare/analytics:
+    get:
+      summary: Per-hour request traffic for a connected zone
+      parameters:
+        - { name: zone, in: query, required: true, schema: { type: string } }
+        - { name: window, in: query, schema: { type: string, description: "duration like 24h or 168h; default 24h" } }
+      responses:
+        "200": { description: Analytics series }
+        "400": { description: Missing zone }
+        "502": { description: Cloudflare error (e.g. token lacks Analytics Read) }
 components:
   securitySchemes:
     sessionCookie:

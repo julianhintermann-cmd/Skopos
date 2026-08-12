@@ -296,6 +296,18 @@ paths:
         "200": { description: Analytics series }
         "400": { description: Missing zone }
         "502": { description: Cloudflare error (e.g. token lacks Analytics Read) }
+  /api/speedtest:
+    get:
+      summary: Internet speed measurement history (newest 100)
+      responses:
+        "200": { description: Results }
+  /api/speedtest/run:
+    post:
+      summary: Run a speed measurement now
+      description: Synchronous; a real test moves tens of megabytes and takes up to a minute. Requires write scope.
+      responses:
+        "200": { description: The new measurement }
+        "502": { description: Measurement failed }
 components:
   securitySchemes:
     sessionCookie:

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type Health, type AuditEntry } from '../lib/api'
+import { api, type Health, type AuditEntry, type SpeedtestResult } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
+import { Sparkline } from '../components/Sparkline'
 import { Th, Td } from './Devices'
-import { formatTime } from '../lib/format'
+import { formatTime, formatRelative } from '../lib/format'
 
 export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const health = useFetch<Health>('/api/health', { pollMs: 5000, onUnauthorized })
@@ -42,6 +43,8 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
           </div>
         )}
       </Card>
+
+      <Speedtest onUnauthorized={onUnauthorized} canWrite={canWrite} />
 
       {canWrite && (
         <Card className="px-4 py-3.5">
@@ -90,6 +93,85 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
           </div>
         )}
       </Card>
+    </div>
+  )
+}
+
+// Speedtest shows the measured line speed over time and lets the operator
+// trigger a measurement on demand.
+function Speedtest({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
+  const { data, refresh } = useFetch<{ results: SpeedtestResult[] | null }>('/api/speedtest', {
+    pollMs: 60000,
+    onUnauthorized,
+  })
+  const [running, setRunning] = useState(false)
+  const [err, setErr] = useState('')
+
+  const results = data?.results ?? []
+  const latest = results[results.length - 1]
+
+  const run = async () => {
+    setRunning(true)
+    setErr('')
+    try {
+      await api.post('/api/speedtest/run')
+      refresh()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Internet speed"
+        sub={latest ? `measured ${formatRelative(latest.Time)} · every 6h` : 'measured every 6 hours'}
+        right={
+          canWrite ? (
+            <Button onClick={run} disabled={running}>
+              {running ? 'Measuring…' : 'Run test now'}
+            </Button>
+          ) : undefined
+        }
+      />
+      {err && <p className="px-4 pb-1 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+      {!latest ? (
+        <EmptyState>No measurements yet — the first runs a couple of minutes after start.</EmptyState>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-px px-4 pb-2">
+            <SpeedStat label="Download" value={latest.DownMbps} unit="Mbit/s" accent />
+            <SpeedStat label="Upload" value={latest.UpMbps} unit="Mbit/s" />
+            <SpeedStat label="Latency" value={latest.LatencyMs} unit="ms" />
+          </div>
+          {results.length > 1 && (
+            <div className="px-3 pb-3">
+              <Sparkline values={results.map((r) => r.DownMbps)} height={64} />
+              <div className="mt-1 px-1 font-mono text-[0.62rem]" style={{ color: 'var(--muted)' }}>
+                download over the last {results.length} measurements
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
+function SpeedStat({ label, value, unit, accent }: { label: string; value: number; unit: string; accent?: boolean }) {
+  return (
+    <div className="py-2">
+      <div className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
+        {label}
+      </div>
+      <div className="mt-0.5 flex items-baseline gap-1">
+        <span className="tabnums text-xl font-semibold" style={accent ? { color: 'var(--accent-strong)' } : undefined}>
+          {value.toFixed(value < 20 ? 1 : 0)}
+        </span>
+        <span className="text-xs" style={{ color: 'var(--muted)' }}>{unit}</span>
+      </div>
     </div>
   )
 }

@@ -145,6 +145,14 @@ export interface DeviceDetail {
   ports: PortUsage[] | null
 }
 
+export interface SpeedtestResult {
+  ID: number
+  Time: string
+  DownMbps: number
+  UpMbps: number
+  LatencyMs: number
+}
+
 export interface AuditEntry {
   ID: number
   Time: string

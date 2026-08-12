@@ -147,12 +147,15 @@ func (a *App) Run(ctx context.Context) error {
 		Flush:      a.cfg.Capture.FlowFlush.Std(),
 	})
 
+	runSpeedtest := a.speedtestFunc(st, dispatcher)
+
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
 		Live:       live,
 		LiveFlows:  liveSink,
 		Cloudflare: cf,
+		Speedtest:  runSpeedtest,
 		Clock:      a.clock,
 		Health:     a.healthFunc(st, backend, fw),
 	})
@@ -188,6 +191,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.spawnCapture(runCtx, spawn, agg, sampler, dispatcher)
 	a.spawnPresence(runCtx, spawn, st, dispatcher)
 	a.spawnWeeklyReport(runCtx, spawn, st, dispatcher)
+	a.spawnSpeedtest(runCtx, spawn, runSpeedtest)
 
 	// HTTP server.
 	httpSrv := &http.Server{

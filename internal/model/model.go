@@ -175,6 +175,15 @@ type CFZone struct {
 	Added     time.Time
 }
 
+// SpeedtestResult is one internet speed measurement.
+type SpeedtestResult struct {
+	ID        int64
+	Time      time.Time
+	DownMbps  float64
+	UpMbps    float64
+	LatencyMs float64
+}
+
 // AuditEntry records a security-relevant action for the audit log.
 type AuditEntry struct {
 	ID     int64

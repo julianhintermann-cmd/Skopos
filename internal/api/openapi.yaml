@@ -60,6 +60,9 @@ paths:
   /api/stream:
     get:
       summary: Server-sent event stream of live metrics and events
+      description: >
+        text/event-stream. Named events: `live` (throughput snapshot, once a
+        second), `flows` (a batch of completed flows, once per flush).
       responses:
         "200": { description: text/event-stream }
   /api/flows:
@@ -71,6 +74,14 @@ paths:
         - { name: resolution, in: query, schema: { type: string, enum: [1m, 1h, 1d] } }
       responses:
         "200": { description: Series and talkers }
+  /api/live/flows:
+    get:
+      summary: Most recent completed flows, for the live view's initial fill
+      description: >
+        Returns the retained ring of recently completed flows, newest first.
+        Live updates then arrive as `flows` events on /api/stream.
+      responses:
+        "200": { description: Recent flows }
   /api/devices:
     get:
       summary: LAN device inventory

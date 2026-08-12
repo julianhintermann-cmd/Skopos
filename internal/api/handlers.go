@@ -90,6 +90,19 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLiveFlows returns the most recently completed flows so the live view
+// starts populated; subsequent updates arrive over the SSE stream.
+func (s *Server) handleLiveFlows(w http.ResponseWriter, r *http.Request) {
+	var flows []LiveFlow
+	if s.deps.LiveFlows != nil {
+		flows = s.deps.LiveFlows.RecentFlows()
+	}
+	if flows == nil {
+		flows = []LiveFlow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"flows": flows})
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()

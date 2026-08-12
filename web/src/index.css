@@ -120,3 +120,10 @@ body {
 
 /* Utility layer for the tokens (Tailwind v4 reads these via arbitrary values). */
 .tabnums { font-variant-numeric: tabular-nums; }
+
+/* Slow pulse for the "live" indicator. Respects reduced-motion via the rule
+   above, which flattens every animation-duration. */
+@keyframes skopos-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

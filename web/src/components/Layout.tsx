@@ -7,6 +7,7 @@ import type { Me } from '../lib/api'
 
 const nav = [
   { to: '/', key: 'nav.overview' as const, icon: PulseIcon, end: true },
+  { to: '/live', key: 'nav.live' as const, icon: BroadcastIcon },
   { to: '/traffic', key: 'nav.traffic' as const, icon: WaveIcon },
   { to: '/devices', key: 'nav.devices' as const, icon: GridIcon },
   { to: '/firewall', key: 'nav.firewall' as const, icon: ShieldIcon },
@@ -132,6 +133,7 @@ function icon(path: ReactNode) {
   )
 }
 function PulseIcon() { return icon(<polyline points="3 12 8 12 11 4 14 20 17 12 21 12" />) }
+function BroadcastIcon() { return icon(<><circle cx="12" cy="12" r="2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M5 5a10 10 0 0 0 0 14M19 19a10 10 0 0 0 0-14" /></>) }
 function WaveIcon() { return icon(<><path d="M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0" /></>) }
 function GridIcon() { return icon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>) }
 function ShieldIcon() { return icon(<path d="M12 3l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V6z" />) }

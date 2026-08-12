@@ -112,9 +112,14 @@ func (a *App) Run(ctx context.Context) error {
 	live := newLiveMeter(a.clock, sampler.State)
 	observers := a.buildObservers(a.cfg, classifier, st, pol, live)
 
+	// Tee the flow sink: every flushed batch is written to the store as before
+	// and, in addition, projected for the live view — streamed to dashboards
+	// over SSE and kept in a bounded ring so a freshly opened view back-fills.
+	liveSink := newLiveFlows(st, nil)
+
 	agg := flow.New(flow.Config{
 		Classifier: classifier,
-		Sink:       st,
+		Sink:       liveSink,
 		Observer:   observers,
 		Flush:      a.cfg.Capture.FlowFlush.Std(),
 	})
@@ -122,14 +127,18 @@ func (a *App) Run(ctx context.Context) error {
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
-		Live:   live,
-		Clock:  a.clock,
-		Health: a.healthFunc(st, backend, fw),
+		Live:      live,
+		LiveFlows: liveSink,
+		Clock:     a.clock,
+		Health:    a.healthFunc(st, backend, fw),
 	})
 	if err != nil {
 		return fmt.Errorf("building API: %w", err)
 	}
 	srv.SetLogger(a.logf)
+	// Now that the hub exists, let the tee publish to it. This assignment
+	// happens-before the aggregator goroutine starts, so no lock is needed.
+	liveSink.hub = srv.Hub()
 
 	// --- run loops ---------------------------------------------------------
 	var wg sync.WaitGroup
@@ -146,6 +155,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	spawn("aggregator", func() { _ = agg.Run(runCtx) })
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })
+	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {
 		spawn("devices", func() { _ = observers.deviceTracker.Run(runCtx) })
 	}
@@ -185,6 +195,22 @@ func (a *App) Run(ctx context.Context) error {
 	cancel()
 	wg.Wait()
 	return nil
+}
+
+// broadcastLive pushes the current throughput snapshot to dashboards once a
+// second, giving the live view a real-time reading without every open browser
+// polling the API.
+func (a *App) broadcastLive(ctx context.Context, hub eventPublisher, live *liveMeter) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			hub.Publish(api.Event{Type: "live", Data: live.Snapshot()})
+		}
+	}
 }
 
 func (a *App) logf(format string, args ...any) { a.log.Info(fmt.Sprintf(format, args...)) }

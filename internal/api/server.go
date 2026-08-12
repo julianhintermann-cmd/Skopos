@@ -28,12 +28,13 @@ type LiveStats struct {
 
 // Deps are the server's dependencies.
 type Deps struct {
-	Store    *store.Store
-	Firewall *firewall.Service
-	Notifier *notify.Dispatcher
-	Config   *config.Config
-	Live     LiveProvider
-	Clock    func() time.Time
+	Store     *store.Store
+	Firewall  *firewall.Service
+	Notifier  *notify.Dispatcher
+	Config    *config.Config
+	Live      LiveProvider
+	LiveFlows LiveFlowProvider
+	Clock     func() time.Time
 	// Health reports subsystem health for /api/health.
 	Health func() Health
 }
@@ -105,6 +106,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/stream", s.requireRead(http.HandlerFunc(s.handleStream)))
 	s.mux.Handle("GET /api/overview", s.requireRead(http.HandlerFunc(s.handleOverview)))
 	s.mux.Handle("GET /api/flows", s.requireRead(http.HandlerFunc(s.handleFlows)))
+	s.mux.Handle("GET /api/live/flows", s.requireRead(http.HandlerFunc(s.handleLiveFlows)))
 	s.mux.Handle("GET /api/devices", s.requireRead(http.HandlerFunc(s.handleDevices)))
 	s.mux.Handle("GET /api/alerts", s.requireRead(http.HandlerFunc(s.handleAlerts)))
 	s.mux.Handle("GET /api/blocks", s.requireRead(http.HandlerFunc(s.handleListBlocks)))

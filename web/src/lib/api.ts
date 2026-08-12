@@ -51,6 +51,22 @@ export interface TimePoint {
   flows: number
 }
 
+// LiveFlow mirrors api.LiveFlow: a completed conversation shown in the live
+// view. Streamed over SSE (`flows` events) and returned by /api/live/flows.
+export interface LiveFlow {
+  start: string
+  end: string
+  src: string
+  dst: string
+  src_port: number
+  dst_port: number
+  proto: string
+  dir: string
+  bytes: number
+  packets: number
+  dst_name?: string
+}
+
 export interface Talker {
   address: string
   name?: string

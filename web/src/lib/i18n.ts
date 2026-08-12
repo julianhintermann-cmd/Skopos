@@ -4,6 +4,7 @@
 
 const en = {
   'nav.overview': 'Overview',
+  'nav.live': 'Live',
   'nav.traffic': 'Traffic',
   'nav.devices': 'Devices',
   'nav.firewall': 'Firewall',

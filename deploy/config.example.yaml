@@ -1,0 +1,181 @@
+# =============================================================================
+# Skopos configuration — example
+# =============================================================================
+# Every option below is shown with its built-in default. You can delete any
+# line you are happy with: an empty file is a valid configuration. Skopos then
+# monitors the default-route interface, enforces no firewall rules and sends
+# no notifications until you configure them.
+#
+# String values support environment interpolation:
+#   token: ${SKOPOS_NTFY_TOKEN}            # required — startup fails if unset
+#   topic: ${SKOPOS_TOPIC:-skopos}         # optional — falls back to "skopos"
+#
+# Editor tip: the JSON schema at deploy/config.schema.json gives you
+# autocomplete and validation via yaml-language-server:
+#   # yaml-language-server: $schema=./config.schema.json
+#
+# Full reference: docs/configuration.md
+# Validate a file without starting the server: `skopos validate`
+# =============================================================================
+
+# Interfaces to capture on. Use ["auto"] for the default-route interface, or
+# name them explicitly, e.g. [eth0, eth1]. A mirror/SPAN port wired into a
+# second NIC is just another interface here.
+interfaces: [auto]
+
+network:
+  # CIDRs treated as "internal" when classifying traffic and choosing block
+  # behaviour. Defaults to RFC 1918 + IPv6 ULA + link-local.
+  private_ranges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - fc00::/7
+    - fe80::/10
+
+# -----------------------------------------------------------------------------
+# Storage — two independent volumes: hot (SSD) and cold (HDD/NAS share)
+# -----------------------------------------------------------------------------
+storage:
+  hot: /data           # SSD: SQLite database, runtime state, spool buffer
+  cold: /archive       # HDD/NAS: Parquet archives, rotated logs, backups
+
+  hot_max_size: 5GiB   # cap on hot usage; oldest raw flows dropped first
+  spool_max_size: 2GiB # buffer used while cold storage is unreachable
+
+  retention:
+    raw_flows: 7d      # individual flows, then archived to cold as Parquet
+    rollup_1m: 90d     # 1-minute aggregates
+    rollup_1h: 730d    # 1-hour aggregates
+    rollup_1d: 0       # daily aggregates — 0 means keep forever
+
+  archive_at: "03:00"  # daily local time to export raw flows to cold storage
+
+  backup:
+    enabled: true
+    keep: 14           # backup generations to retain on cold storage
+    at: "03:30"
+
+# -----------------------------------------------------------------------------
+# Capture — packet capture and metadata enrichment
+# -----------------------------------------------------------------------------
+capture:
+  sample_threshold_pps: 80000  # adaptive sampling above this rate; 0 disables
+  dns: true                    # read DNS response names (names only)
+  sni: true                    # read TLS SNI server names (metadata only)
+  rdns: true                   # cached, rate-limited reverse DNS for the UI
+  devices: true                # LAN device inventory (needed by new_device)
+  flow_flush: 10s
+  flow_idle_timeout: 60s
+
+# -----------------------------------------------------------------------------
+# Detection — what counts as suspicious, and alert throttling
+# -----------------------------------------------------------------------------
+detection:
+  portscan:
+    enabled: true
+    window: 60s
+    external: { ports: 15, targets: 20 }  # thresholds for outside sources
+    internal: { ports: 30, targets: 40 }  # LAN tools legitimately scan more
+    severity: warning
+    block: false                          # auto-block (only when enforcing)
+
+  rate:
+    enabled: true
+    window: 10s
+    max_new_connections: 300
+    max_packets_per_second: 8000
+    severity: warning
+    block: false
+
+  feeds:
+    enabled: false                        # recommended when NAS is internet-facing
+    lists: [firehol_level1, spamhaus_drop]  # built-ins, or any https:// CIDR list
+    refresh: 24h
+    severity: critical
+    block: false
+
+  new_device:
+    enabled: true
+    severity: info
+
+  cooldown: 30m          # min interval between alerts per (detector, source)
+
+  quiet_hours:
+    enabled: false
+    from: "23:00"
+    to: "07:00"
+    min_severity: critical  # only this severity and above pushes at night
+
+# -----------------------------------------------------------------------------
+# Firewall — blocking behaviour (nftables backend)
+# -----------------------------------------------------------------------------
+firewall:
+  # observe = log every block decision but touch nothing (shipping default).
+  # enforce = actually apply blocks. Arm this deliberately after watching the
+  # observe log; the default gateway is always protected from blocking.
+  enforcement: observe
+  backend: nftables
+  block_ttl: 24h         # auto-block lifetime; expires in-kernel. 0 = permanent
+  action_external: drop  # silent for outside sources
+  action_internal: reject  # fail-fast for LAN sources (friendlier on mistakes)
+  allowlist: []          # never blocked, e.g. [192.168.1.0/24]
+  blocklist: []          # always blocked while enforcing, e.g. [203.0.113.7]
+
+# -----------------------------------------------------------------------------
+# Notify — ntfy and/or a generic webhook
+# -----------------------------------------------------------------------------
+notify:
+  ntfy:
+    url: ""              # e.g. https://ntfy.example.com — empty disables ntfy
+    topic: skopos
+    token: ${SKOPOS_NTFY_TOKEN:-}   # Bearer token, or use username/password
+    username: ""
+    password: ${SKOPOS_NTFY_PASSWORD:-}
+  webhook:
+    url: ""              # receives one JSON POST per alert
+  system:
+    enabled: true        # operational alerts: degraded firewall, cold offline, …
+
+# -----------------------------------------------------------------------------
+# Server — dashboard, API, authentication
+# -----------------------------------------------------------------------------
+server:
+  bind: 0.0.0.0
+  port: 8686             # with network_mode: host this is the real host port
+  external_url: ""       # e.g. https://skopos.example.com — click target of pushes
+
+  auth:
+    # single_admin (recommended) or none (trusted LAN only — logs a warning).
+    # If you leave mode unset it becomes single_admin as soon as
+    # password_hash is set, otherwise none.
+    # mode: single_admin
+    username: admin
+    password_hash: ""    # generate with: skopos hash-password
+    session_ttl: 720h
+
+  # Named API tokens for automation (scope: read or write).
+  tokens: []
+  # - { name: homeassistant, token: ${SKOPOS_HA_TOKEN}, scope: read }
+
+  # Native TLS. Usually you terminate TLS at a reverse proxy and leave this off.
+  tls:
+    cert: ""
+    key: ""
+
+# -----------------------------------------------------------------------------
+# Logging & metrics
+# -----------------------------------------------------------------------------
+logging:
+  level: info            # debug | info | warn | error
+  file: true             # JSON logs under <cold>/logs in addition to stdout
+  max_size: 50MiB
+  max_backups: 10
+
+metrics:
+  enabled: false         # serve Prometheus metrics on /metrics
+
+# Replace live capture with synthetic traffic — explore the UI with no
+# privileges and no real network. Also settable with SKOPOS_DEMO=1.
+demo: false

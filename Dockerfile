@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # --- web build -------------------------------------------------------------
-FROM node:22-alpine AS web
+# Pinned to the *build* platform: the dashboard compiles to static JS/CSS that
+# is identical on every architecture, so building it once natively and sharing
+# the result beats running Node a second time under emulation.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -9,11 +12,15 @@ COPY web/ ./
 RUN npm run build
 
 # --- go build --------------------------------------------------------------
-# Must satisfy the `go` directive in go.mod: the official images set
+# Also pinned to the build platform: with CGO_ENABLED=0 the Go toolchain
+# cross-compiles to the target architecture at native speed, so emulating the
+# whole compiler would only make the same binary slower to produce.
+#
+# The tag must satisfy the `go` directive in go.mod: the official images set
 # GOTOOLCHAIN=local, so a lower base image fails the build instead of
 # downloading a newer toolchain. CI builds this image on every push to catch
 # a drift between the two.
-FROM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./

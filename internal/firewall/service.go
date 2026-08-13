@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -33,7 +34,17 @@ type Config struct {
 	DefaultTTL time.Duration
 	// IsInternal reports whether an address is inside the private ranges.
 	IsInternal func(netip.Addr) bool
+	// Protected is never blocked, by anyone, through any path: the
+	// operator's allowlist plus the default gateway. The detector path has
+	// always honoured it; so does the operator's own block button, because
+	// "block this" is one click on a phone at seven in the morning and
+	// blocking your own gateway takes the network down with it.
+	Protected []netip.Prefix
 }
+
+// ErrProtected is returned when a block would cover an allowlisted address or
+// the default gateway.
+var ErrProtected = errors.New("address is on the never-block allowlist")
 
 // Service ties the store, backend and config together. It implements
 // policy.Blocker and owns reconciliation, restore-on-start and TTL expiry.
@@ -127,6 +138,36 @@ func (s *Service) SetDefaultTTL(d time.Duration) {
 	s.cfgMu.Unlock()
 }
 
+// SetProtected replaces the never-block set. The settings layer calls it with
+// the same list the policy engine gets, so the two cannot drift apart.
+func (s *Service) SetProtected(prefixes []netip.Prefix) {
+	s.cfgMu.Lock()
+	s.cfg.Protected = append([]netip.Prefix(nil), prefixes...)
+	s.cfgMu.Unlock()
+}
+
+// ProtectedPrefixes returns the never-block set, so the dashboard can warn
+// before the operator commits instead of only refusing afterwards.
+func (s *Service) ProtectedPrefixes() []netip.Prefix {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return append([]netip.Prefix(nil), s.cfg.Protected...)
+}
+
+// Protects reports whether blocking prefix would cover something on the
+// never-block list. Overlap, not containment: a /24 that happens to include
+// the gateway takes the gateway down just as surely as naming it directly.
+func (s *Service) Protects(prefix netip.Prefix) (netip.Prefix, bool) {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	for _, p := range s.cfg.Protected {
+		if p.Overlaps(prefix) {
+			return p, true
+		}
+	}
+	return netip.Prefix{}, false
+}
+
 // Enforcing reports whether the service is in enforce mode and the backend can
 // actually apply rules.
 func (s *Service) Enforcing() bool {
@@ -143,7 +184,13 @@ func (s *Service) Block(ctx context.Context, prefix netip.Prefix, reason string,
 }
 
 // ManualBlock records an operator-initiated block (permanent unless ttl > 0).
+// It refuses anything covering the allowlist or the gateway: the detector
+// path has always been held to that, and a block placed by hand reaches the
+// kernel through exactly the same rules.
 func (s *Service) ManualBlock(ctx context.Context, prefix netip.Prefix, actor, reason string, ttl time.Duration) error {
+	if p, ok := s.Protects(prefix); ok {
+		return fmt.Errorf("%w: %s covers %s", ErrProtected, prefix, p)
+	}
 	return s.block(ctx, prefix, model.OriginManual, actor, reason, ttl)
 }
 
@@ -243,15 +290,31 @@ func (s *Service) SetCountryPrefixes(ctx context.Context, prefixes []netip.Prefi
 // country prefixes they are remembered in observe mode so the UI can show
 // what enforcement would cover.
 func (s *Service) SetDevicePolicies(ctx context.Context, rules []DeviceRule) error {
+	// The never-block list applies here too. A device policy is a block by
+	// another name — and a stronger one, since its rules sit ahead of the
+	// conntrack exemption and cut established connections as well. Quarantining
+	// the gateway would take the network down with the dashboard on it, which
+	// is precisely what the allowlist exists to prevent. Filtering here rather
+	// than only at the API keeps a policy stored before this guard existed
+	// from reaching the kernel.
+	kept := make([]DeviceRule, 0, len(rules))
+	for _, r := range rules {
+		if _, blocked := s.Protects(netip.PrefixFrom(r.Addr, r.Addr.BitLen())); blocked {
+			s.log("firewall: refusing device policy on protected address %s", r.Addr)
+			continue
+		}
+		kept = append(kept, r)
+	}
+
 	s.countryMu.Lock()
-	s.devicePolicies = append([]DeviceRule(nil), rules...)
+	s.devicePolicies = kept
 	s.countryMu.Unlock()
 	if !s.Enforcing() {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.backend.ReconcileDevices(ctx, rules)
+	return s.backend.ReconcileDevices(ctx, kept)
 }
 
 // DevicePolicyCount reports how many devices carry a policy.

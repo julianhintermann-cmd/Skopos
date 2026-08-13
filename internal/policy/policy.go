@@ -269,6 +269,21 @@ func (e *Engine) Protected(addr netip.Addr) bool {
 	return allow.Contains(addr)
 }
 
+// ProtectedPrefixes returns the never-block set as prefixes: the operator's
+// allowlist plus the gateway. The firewall service needs the same set to hold
+// manual blocks to the same rule, and deriving it here rather than at the
+// call site is what keeps the two from drifting apart.
+func (e *Engine) ProtectedPrefixes() []netip.Prefix {
+	e.mu.Lock()
+	out := append([]netip.Prefix(nil), e.cfg.Allowlist...)
+	gw := e.cfg.Gateway
+	e.mu.Unlock()
+	if gw.IsValid() {
+		out = append(out, netip.PrefixFrom(gw, gw.BitLen()))
+	}
+	return out
+}
+
 // shouldNotify applies quiet hours: during the window only alerts at or above
 // MinSeverity are delivered. Takes the settings by value so the caller can
 // snapshot them under the lock.

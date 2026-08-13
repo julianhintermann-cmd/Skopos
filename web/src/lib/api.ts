@@ -121,6 +121,43 @@ export interface BlocksResponse {
   enforcement: string
   // True only when enforce is set AND the nftables backend is usable.
   enforcing: boolean
+  // Prefixes that can never be blocked: the operator's allowlist plus the
+  // default gateway. A block form should say so before the operator commits.
+  protected?: string[] | null
+}
+
+// networkPrefix widens an address to the network an operator would think of
+// as "the rest of them": /24 for IPv4, /64 for IPv6. The backend masks the
+// result, so the host bits here do not matter.
+export function networkPrefix(ip: string): string {
+  return ip.includes(':') ? `${ip}/64` : `${ip}/24`
+}
+
+// coveredByProtected reports whether a prefix the operator is about to block
+// overlaps the never-block set. Only exact and containing matches are checked
+// on the client — the backend does the authoritative overlap test and refuses
+// regardless; this is here to warn before the click, not to decide.
+export function coveredByProtected(ip: string, scope: 'address' | 'network', protectedList: string[]): string | null {
+  const wide = scope === 'network' ? networkPrefix(ip).split('/')[1] : null
+  for (const p of protectedList) {
+    const [base, bitsText] = p.split('/')
+    if (base === ip) return p
+    const bits = Number(bitsText)
+    if (!Number.isFinite(bits)) continue
+    // A /24 block covers an allowlisted address in the same /24.
+    if (wide && !base.includes(':') && !ip.includes(':')) {
+      const a = base.split('.').slice(0, 3).join('.')
+      const b = ip.split('.').slice(0, 3).join('.')
+      if (a === b) return p
+    }
+    // An allowlisted range that contains the address (IPv4 /8, /16, /24 only
+    // — the common shapes; anything else is left to the backend).
+    if (!base.includes(':') && !ip.includes(':') && [8, 16, 24].includes(bits)) {
+      const n = bits / 8
+      if (base.split('.').slice(0, n).join('.') === ip.split('.').slice(0, n).join('.')) return p
+    }
+  }
+  return null
 }
 
 export interface Device {

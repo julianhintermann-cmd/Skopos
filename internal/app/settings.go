@@ -71,12 +71,16 @@ func (a *App) applySettings(ctx context.Context, r settings.Runtime,
 	if r.Enforcement == "enforce" {
 		enforcement = policy.Enforce
 	}
+	// The firewall gets the same list, so a block placed by hand is held to
+	// the rule the detectors have always been held to. pol.Apply adds the
+	// gateway itself; ask it afterwards rather than deriving it twice.
 	pol.Apply(enforcement, r.Cooldown, r.BlockTTL, policy.QuietHours{
 		Enabled:     r.QuietHours.Enabled,
 		From:        clockToTime(config.ClockTime{Hour: r.QuietHours.FromHour, Minute: r.QuietHours.FromMinute}),
 		To:          clockToTime(config.ClockTime{Hour: r.QuietHours.ToHour, Minute: r.QuietHours.ToMinute}),
 		MinSeverity: severityOr(r.QuietHours.MinSeverity, "critical"),
 	}, allow)
+	fw.SetProtected(pol.ProtectedPrefixes())
 
 	// Detectors.
 	if obs.portscan != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
+	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 	"github.com/julianhintermann-cmd/skopos/internal/updatecheck"
@@ -325,10 +326,17 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 	// Enforcement state rides along so the view qualifying these blocks is
 	// atomic with them: "recorded" and "actually dropped" are different
 	// claims, and the UI must never show the second while the first is true.
+	// The never-block set rides along too, so a block form can say "this one
+	// is protected" before the operator commits rather than after.
+	protected := make([]string, 0, 4)
+	for _, p := range s.deps.Firewall.ProtectedPrefixes() {
+		protected = append(protected, p.String())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"blocks":      rows,
 		"enforcement": s.deps.Config.Firewall.Enforcement,
 		"enforcing":   s.deps.Firewall.Enforcing(),
+		"protected":   protected,
 	})
 }
 
@@ -359,7 +367,15 @@ func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {
 		ttl = d.Std()
 	}
 	id, _ := identityFrom(r)
-	if err := s.deps.Firewall.ManualBlock(ctx, prefix, id.name, req.Reason, ttl); err != nil {
+	switch err := s.deps.Firewall.ManualBlock(ctx, prefix, id.name, req.Reason, ttl); {
+	case errors.Is(err, firewall.ErrProtected):
+		// Refusing is the whole point: this is one tap on a phone, and the
+		// address it would take down is the one the operator needs to reach
+		// the dashboard from. Removing it from the allowlist is the path.
+		writeError(w, http.StatusBadRequest, err.Error()+
+			" — remove it from the allowlist in Settings first if you really mean it")
+		return
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -489,6 +505,24 @@ func (s *Server) handleSetDevicePolicy(w http.ResponseWriter, r *http.Request) {
 	if !policy.Valid() {
 		writeError(w, http.StatusBadRequest, "policy must be empty, lan_only or quarantine")
 		return
+	}
+	// Confining a device is a block by another name, and a stronger one: its
+	// rules sit ahead of the conntrack exemption, so they cut connections
+	// already in progress. The never-block list governs it exactly as it
+	// governs an explicit block — the gateway most of all, since quarantining
+	// it takes down the network the dashboard is reached over.
+	if policy != model.PolicyOpen {
+		device, err := s.deps.Store.DeviceByMAC(ctx, mac)
+		if err == nil {
+			for _, addr := range device.Addrs() {
+				if p, ok := s.deps.Firewall.Protects(netip.PrefixFrom(addr, addr.BitLen())); ok {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf(
+						"%s is on the never-block allowlist (%s) — remove it in Settings first if you really mean it",
+						addr, p))
+					return
+				}
+			}
+		}
 	}
 	switch err := s.deps.Store.SetDevicePolicy(ctx, mac, policy); {
 	case errors.Is(err, store.ErrDeviceNotFound):

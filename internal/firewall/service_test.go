@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"testing"
@@ -199,5 +200,51 @@ func TestSetCountryPrefixesObserveOnlyRemembers(t *testing.T) {
 	// Remembered anyway, so the UI can show coverage before arming.
 	if svc.CountryPrefixCount() != 1 {
 		t.Errorf("CountryPrefixCount = %d, want 1", svc.CountryPrefixCount())
+	}
+}
+
+// A block placed by hand reaches the kernel through the same rules as one
+// placed by a detector. The detector path has always refused the gateway;
+// the operator's own button is one tap on a phone, and the address it would
+// take down is the one they need to reach the dashboard from.
+func TestManualBlockRefusesProtected(t *testing.T) {
+	svc, _ := newTestService(t, baseConfig(true), NewMemoryBackend(true))
+	svc.SetProtected([]netip.Prefix{
+		netip.MustParsePrefix("192.168.1.1/32"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+	})
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		prefix  string
+		refused bool
+	}{
+		{"the gateway itself", "192.168.1.1/32", true},
+		{"a range containing the gateway", "192.168.1.0/24", true},
+		{"an allowlisted range", "10.0.0.0/8", true},
+		{"inside an allowlisted range", "10.1.2.3/32", true},
+		{"a neighbour of the gateway", "192.168.1.2/32", false},
+		{"an outside address", "203.0.113.7/32", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := svc.ManualBlock(ctx, netip.MustParsePrefix(tc.prefix), "operator", "test", 0)
+			if tc.refused && !errors.Is(err, ErrProtected) {
+				t.Errorf("blocking %s returned %v, want ErrProtected", tc.prefix, err)
+			}
+			if !tc.refused && err != nil {
+				t.Errorf("blocking %s failed: %v", tc.prefix, err)
+			}
+		})
+	}
+}
+
+// An empty never-block set blocks nothing extra — the guard must not become a
+// silent no-op firewall.
+func TestManualBlockAllowedWithoutProtectedSet(t *testing.T) {
+	svc, _ := newTestService(t, baseConfig(true), NewMemoryBackend(true))
+	if err := svc.ManualBlock(context.Background(), netip.MustParsePrefix("203.0.113.7/32"), "operator", "", 0); err != nil {
+		t.Fatalf("ManualBlock: %v", err)
 	}
 }

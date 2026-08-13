@@ -30,6 +30,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
+	"github.com/julianhintermann-cmd/skopos/internal/settings"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 	"github.com/julianhintermann-cmd/skopos/internal/updatecheck"
 	"github.com/julianhintermann-cmd/skopos/internal/version"
@@ -200,6 +201,19 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	observers.all = append(observers.all, resolver)
 
+	// --- runtime settings ---------------------------------------------------
+	// The YAML is the baseline; the dashboard layers overrides on top and both
+	// land through the same apply path, at startup and on every change.
+	setman, err := settings.New(st, runtimeBaseline(a.cfg))
+	if err != nil {
+		return fmt.Errorf("loading runtime settings: %w", err)
+	}
+	a.applySettings(ctx, setman.Current(), fw, pol, observers, st)
+	setman.OnChange(func(r settings.Runtime) {
+		a.applySettings(context.Background(), r, fw, pol, observers, st)
+	})
+	setman.OnChange(settingsAuditor(st, a.clock))
+
 	// Tee the flow sink: every flushed batch is written to the store as before
 	// and, in addition, projected for the live view — streamed to dashboards
 	// over SSE and kept in a bounded ring so a freshly opened view back-fills.
@@ -254,6 +268,7 @@ func (a *App) Run(ctx context.Context) error {
 		BlockStats:        watch.Stats,
 		CountryBlockStats: countryEnf.Stats,
 		Updates:           updates.Status,
+		Settings:          setman,
 		Clock:             a.clock,
 		Health:            a.healthFunc(st, backend, fw),
 	})

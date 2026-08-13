@@ -5,6 +5,7 @@ import { useFetch } from '../lib/useFetch'
 import { api, type CFStatus, type Health } from '../lib/api'
 import { Card, CardHeader, Button, Pill, TextInput } from '../components/ui'
 import { useTheme } from '../lib/theme'
+import { RuntimeSettings } from '../components/RuntimeSettings'
 
 export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const health = useFetch<Health>('/api/health', { pollMs: 15000, onUnauthorized })
@@ -12,6 +13,8 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
 
   return (
     <div className="flex flex-col gap-4">
+      <RuntimeSettings onUnauthorized={onUnauthorized} canWrite={canWrite} />
+
       <Appearance />
 
       <Card>

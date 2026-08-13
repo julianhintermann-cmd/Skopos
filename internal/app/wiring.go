@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/api"
@@ -18,12 +19,36 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/version"
 )
 
+// gate wraps an observer with a runtime on/off switch, so a detector can be
+// disabled from the dashboard without rebuilding the pipeline. Disabled
+// detectors keep their state but see no packets.
+type gate struct {
+	obs flow.Observer
+	on  atomic.Bool
+}
+
+func newGate(obs flow.Observer, on bool) *gate {
+	g := &gate{obs: obs}
+	g.on.Store(on)
+	return g
+}
+
+func (g *gate) Observe(p flow.Packet) {
+	if g.on.Load() {
+		g.obs.Observe(p)
+	}
+}
+
 // observerSet is the fan-out flow.Observer plus references to the pieces that
-// need their own loops.
+// need their own loops or runtime reconfiguration.
 type observerSet struct {
 	all           []flow.Observer
 	feeds         *detect.Feeds
 	deviceTracker *capture.DeviceTracker
+	portscan      *detect.Portscan
+	portscanGate  *gate
+	rate          *detect.Rate
+	rateGate      *gate
 }
 
 // Observe implements flow.Observer by forwarding to every sub-observer.
@@ -39,24 +64,29 @@ func (a *App) buildObservers(cfg *config.Config, classifier *flow.Classifier, st
 	// Live meter first so it counts every packet.
 	set.all = append(set.all, live)
 
-	if cfg.Detection.Portscan.Enabled {
-		set.all = append(set.all, detect.NewPortscan(detect.PortscanConfig{
+	// Both threshold detectors are always constructed and gated, so the
+	// dashboard can switch them on and off without a restart.
+	{
+		set.portscan = detect.NewPortscan(detect.PortscanConfig{
 			Window:     cfg.Detection.Portscan.Window.Std(),
 			External:   detect.Thresholds{Ports: cfg.Detection.Portscan.External.Ports, Targets: cfg.Detection.Portscan.External.Targets},
 			Internal:   detect.Thresholds{Ports: cfg.Detection.Portscan.Internal.Ports, Targets: cfg.Detection.Portscan.Internal.Targets},
 			Severity:   model.Severity(cfg.Detection.Portscan.Severity),
 			Block:      cfg.Detection.Portscan.Block,
 			IsInternal: classifier.Internal,
-		}, pol, a.clock))
-	}
-	if cfg.Detection.Rate.Enabled {
-		set.all = append(set.all, detect.NewRate(detect.RateConfig{
+		}, pol, a.clock)
+		set.portscanGate = newGate(set.portscan, cfg.Detection.Portscan.Enabled)
+		set.all = append(set.all, set.portscanGate)
+
+		set.rate = detect.NewRate(detect.RateConfig{
 			Window:              cfg.Detection.Rate.Window.Std(),
 			MaxNewConnections:   cfg.Detection.Rate.MaxNewConnections,
 			MaxPacketsPerSecond: cfg.Detection.Rate.MaxPacketsPerSecond,
 			Severity:            model.Severity(cfg.Detection.Rate.Severity),
 			Block:               cfg.Detection.Rate.Block,
-		}, pol, a.clock))
+		}, pol, a.clock)
+		set.rateGate = newGate(set.rate, cfg.Detection.Rate.Enabled)
+		set.all = append(set.all, set.rateGate)
 	}
 	if cfg.Detection.Feeds.Enabled {
 		set.feeds = detect.NewFeeds(detect.FeedsConfig{

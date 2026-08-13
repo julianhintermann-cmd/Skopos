@@ -54,6 +54,9 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// Settings owns the runtime-editable configuration subset (nil disables
+	// the settings endpoints).
+	Settings SettingsManager
 	// Updates reports whether a newer release exists (nil disables the
 	// endpoint's answer).
 	Updates func() updatecheck.Status
@@ -155,6 +158,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /metrics", s.requireRead(http.HandlerFunc(s.handleMetrics)))
 	s.mux.Handle("GET /api/updates", s.requireRead(http.HandlerFunc(s.handleUpdates)))
 	s.mux.Handle("GET /api/domains", s.requireRead(http.HandlerFunc(s.handleDomains)))
+	s.mux.Handle("GET /api/settings", s.requireRead(http.HandlerFunc(s.handleGetSettings)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
@@ -168,6 +172,8 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/alerts/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckAlert)))
 	s.mux.Handle("POST /api/blocks", s.requireWrite(http.HandlerFunc(s.handleAddBlock)))
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))
+	s.mux.Handle("POST /api/settings", s.requireWrite(http.HandlerFunc(s.handleUpdateSettings)))
+	s.mux.Handle("DELETE /api/settings", s.requireWrite(http.HandlerFunc(s.handleResetSettings)))
 	s.mux.Handle("POST /api/config/validate", s.requireWrite(http.HandlerFunc(s.handleValidateConfig)))
 	s.mux.Handle("POST /api/notify/test", s.requireWrite(http.HandlerFunc(s.handleNotifyTest)))
 	s.mux.Handle("POST /api/integrations/cloudflare", s.requireWrite(http.HandlerFunc(s.handleCFConnect)))

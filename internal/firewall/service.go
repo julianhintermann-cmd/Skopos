@@ -46,6 +46,10 @@ type Service struct {
 
 	mu sync.Mutex
 
+	// cfgMu guards the mutable parts of cfg (enforcement, default TTL),
+	// which the settings layer changes at runtime.
+	cfgMu sync.RWMutex
+
 	countryMu       sync.Mutex
 	countryPrefixes []netip.Prefix
 }
@@ -70,10 +74,58 @@ func NewService(cfg Config, backend Backend, store Store, clock func() time.Time
 // SetLogger installs a logging callback.
 func (s *Service) SetLogger(f func(string, ...any)) { s.log = f }
 
+// SetEnforce switches the service between observe and enforce at runtime.
+// Turning it on ensures the base ruleset exists and pushes the stored blocks
+// and country prefixes into the kernel; turning it off tears the table down
+// again, so "observe" never leaves stale rules behind.
+func (s *Service) SetEnforce(ctx context.Context, on bool) error {
+	s.cfgMu.Lock()
+	was := s.cfg.Enforce
+	s.cfg.Enforce = on
+	s.cfgMu.Unlock()
+	if was == on {
+		return nil
+	}
+	if !s.backend.Available() {
+		return nil // monitor-only; the desired state is recorded either way
+	}
+	if on {
+		if err := s.backend.EnsureBase(ctx); err != nil {
+			return fmt.Errorf("ensuring base ruleset: %w", err)
+		}
+		if err := s.Reconcile(ctx); err != nil {
+			return err
+		}
+		s.countryMu.Lock()
+		prefixes := append([]netip.Prefix(nil), s.countryPrefixes...)
+		s.countryMu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.backend.ReconcileCountry(ctx, prefixes)
+	}
+	// Switching to observe: clear both rule sets so nothing keeps dropping.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.backend.Reconcile(ctx, nil); err != nil {
+		return err
+	}
+	return s.backend.ReconcileCountry(ctx, nil)
+}
+
+// SetDefaultTTL changes the lifetime applied to new detector blocks.
+func (s *Service) SetDefaultTTL(d time.Duration) {
+	s.cfgMu.Lock()
+	s.cfg.DefaultTTL = d
+	s.cfgMu.Unlock()
+}
+
 // Enforcing reports whether the service is in enforce mode and the backend can
 // actually apply rules.
 func (s *Service) Enforcing() bool {
-	return s.cfg.Enforce && s.backend.Available()
+	s.cfgMu.RLock()
+	on := s.cfg.Enforce
+	s.cfgMu.RUnlock()
+	return on && s.backend.Available()
 }
 
 // Block records a block (origin: detector) and reconciles. It implements
@@ -89,7 +141,9 @@ func (s *Service) ManualBlock(ctx context.Context, prefix netip.Prefix, actor, r
 
 func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.BlockOrigin, actor, reason string, ttl time.Duration) error {
 	if ttl <= 0 && origin == model.OriginDetector {
+		s.cfgMu.RLock()
 		ttl = s.cfg.DefaultTTL
+		s.cfgMu.RUnlock()
 	}
 	var expires *time.Time
 	if ttl > 0 {
@@ -127,7 +181,10 @@ func (s *Service) Unblock(ctx context.Context, prefix netip.Prefix, actor string
 // stored desired state. Called once at startup so reboots and container
 // updates never drop protection.
 func (s *Service) Restore(ctx context.Context) error {
-	if !s.cfg.Enforce {
+	s.cfgMu.RLock()
+	enforce := s.cfg.Enforce
+	s.cfgMu.RUnlock()
+	if !enforce {
 		s.log("firewall: observe mode — not applying rules")
 		return nil
 	}

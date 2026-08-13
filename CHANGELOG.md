@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prometheus metrics** — `/metrics` now actually exists (the config knob
   had nothing behind it): throughput, enforcement state, active blocks,
   unacked alerts, per-block drop counters and per-country prefix counts.
+- **Settings you can actually change** — enforcement, automatic block
+  lifetime, alert cooldown, the never-block allowlist and both threshold
+  detectors are now editable in the dashboard and apply immediately. No
+  file editing, no restart: arming the firewall is one click. The YAML
+  stays the baseline, the UI marks what you changed away from it, and
+  "Reset to config.yaml" drops every override. Invalid values are refused
+  as a whole, so a bad patch can never leave the firewall half-armed, and
+  every change lands in the audit log.
 - **Release check** — a daily look at the public releases page, a banner in
   the System view and one notification per new version, so a stale image
   cannot go unnoticed. Off with `updates.check: false`.

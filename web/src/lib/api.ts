@@ -183,6 +183,41 @@ export interface Fingerprint {
   last_seen: string
 }
 
+export interface RuntimeSettings {
+  enforcement: string
+  block_ttl: number
+  allowlist: string[] | null
+  cooldown: number
+  quiet_hours: {
+    enabled: boolean
+    from_hour: number
+    from_minute: number
+    to_hour: number
+    to_minute: number
+    min_severity: string
+  }
+  portscan: {
+    enabled: boolean
+    window: number
+    external: { ports: number; targets: number }
+    internal: { ports: number; targets: number }
+    block: boolean
+  }
+  rate: {
+    enabled: boolean
+    window: number
+    max_new_connections: number
+    max_packets_per_second: number
+    block: boolean
+  }
+}
+
+export interface SettingsResponse {
+  effective: RuntimeSettings
+  base: RuntimeSettings
+  overridden: string[] | null
+}
+
 export interface UpdateStatus {
   checked: boolean
   current: string

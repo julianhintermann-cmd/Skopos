@@ -124,6 +124,29 @@ func (e *Engine) SetLogger(f func(string, ...any)) { e.log = f }
 // called before the first packet flows; it is not synchronised.
 func (e *Engine) SetAlreadyBlocked(f func(netip.Addr) bool) { e.cfg.AlreadyBlocked = f }
 
+// Apply swaps the runtime-editable policy settings — enforcement, cooldown,
+// block TTL, quiet hours and the allowlist — without a restart. The gateway
+// stays protected regardless of what the new allowlist says.
+func (e *Engine) Apply(enforcement Enforcement, cooldown, blockTTL time.Duration, quiet QuietHours, allowlist []netip.Prefix) {
+	allow := netset.New()
+	for _, p := range allowlist {
+		allow.Add(p)
+	}
+	if e.cfg.Gateway.IsValid() {
+		allow.Add(netip.PrefixFrom(e.cfg.Gateway, e.cfg.Gateway.BitLen()))
+	}
+	allow.Build()
+
+	e.mu.Lock()
+	e.cfg.Enforcement = enforcement
+	e.cfg.Cooldown = cooldown
+	e.cfg.BlockTTL = blockTTL
+	e.cfg.QuietHours = quiet
+	e.cfg.Allowlist = allowlist
+	e.allow = allow
+	e.mu.Unlock()
+}
+
 // Raise implements detect.Sink: it is the single entry point from every
 // detector.
 func (e *Engine) Raise(f detect.Finding) {
@@ -143,12 +166,13 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 	// Extra occurrences are counted and reported with the next one.
 	key := f.Detector + "|" + f.Source.String()
 	e.mu.Lock()
+	cooldown, quiet := e.cfg.Cooldown, e.cfg.QuietHours
 	cs := e.cooldown[key]
 	if cs == nil {
 		cs = &cooldownState{}
 		e.cooldown[key] = cs
 	}
-	withinCooldown := !cs.lastNotified.IsZero() && now.Sub(cs.lastNotified) < e.cfg.Cooldown
+	withinCooldown := !cs.lastNotified.IsZero() && now.Sub(cs.lastNotified) < cooldown
 	if withinCooldown {
 		cs.suppressed++
 		e.mu.Unlock()
@@ -179,7 +203,7 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 	}
 
 	// Quiet hours gate notification, not recording or blocking.
-	if e.shouldNotify(stored, now) {
+	if shouldNotify(quiet, stored, now) {
 		e.notifier.Notify(ctx, stored)
 	}
 	e.maybeBlock(ctx, f)
@@ -188,7 +212,10 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 // maybeBlock applies a block when the detector suggested one, enforcement is
 // on, and the source is not protected.
 func (e *Engine) maybeBlock(ctx context.Context, f detect.Finding) {
-	if !f.SuggestBlock || e.cfg.Enforcement != Enforce {
+	e.mu.Lock()
+	enforcement, ttl := e.cfg.Enforcement, e.cfg.BlockTTL
+	e.mu.Unlock()
+	if !f.SuggestBlock || enforcement != Enforce {
 		return
 	}
 	if !f.Source.IsValid() {
@@ -202,26 +229,30 @@ func (e *Engine) maybeBlock(ctx context.Context, f detect.Finding) {
 		return
 	}
 	prefix := netip.PrefixFrom(f.Source, f.Source.BitLen())
-	if err := e.blocker.Block(ctx, prefix, f.Detector+": "+f.Title, e.cfg.BlockTTL); err != nil {
+	if err := e.blocker.Block(ctx, prefix, f.Detector+": "+f.Title, ttl); err != nil {
 		e.log("policy: block %s failed: %v", f.Source, err)
 	}
 }
 
 // Protected reports whether an address must never be blocked.
 func (e *Engine) Protected(addr netip.Addr) bool {
-	return e.allow.Contains(addr)
+	e.mu.Lock()
+	allow := e.allow
+	e.mu.Unlock()
+	return allow.Contains(addr)
 }
 
 // shouldNotify applies quiet hours: during the window only alerts at or above
-// MinSeverity are delivered.
-func (e *Engine) shouldNotify(a model.Alert, now time.Time) bool {
-	if !e.cfg.QuietHours.Enabled {
+// MinSeverity are delivered. Takes the settings by value so the caller can
+// snapshot them under the lock.
+func shouldNotify(q QuietHours, a model.Alert, now time.Time) bool {
+	if !q.Enabled {
 		return true
 	}
-	if !inWindow(now, e.cfg.QuietHours.From, e.cfg.QuietHours.To) {
+	if !inWindow(now, q.From, q.To) {
 		return true
 	}
-	return a.Severity.Rank() >= e.cfg.QuietHours.MinSeverity.Rank()
+	return a.Severity.Rank() >= q.MinSeverity.Rank()
 }
 
 // inWindow reports whether now's clock time falls in [from, to), handling a

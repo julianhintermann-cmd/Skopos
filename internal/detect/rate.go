@@ -47,6 +47,20 @@ func NewRate(cfg RateConfig, sink Sink, clock Clock) *Rate {
 	return &Rate{cfg: cfg, sink: sink, clock: clock, sources: make(map[netip.Addr]*rateState)}
 }
 
+// SetLimits swaps the detector's window and limits at runtime, under the same
+// mutex the packet path takes.
+func (d *Rate) SetLimits(window time.Duration, maxConns, maxPPS int, block bool) {
+	if window <= 0 {
+		window = 10 * time.Second
+	}
+	d.mu.Lock()
+	d.cfg.Window = window
+	d.cfg.MaxNewConnections = maxConns
+	d.cfg.MaxPacketsPerSecond = maxPPS
+	d.cfg.Block = block
+	d.mu.Unlock()
+}
+
 // Observe implements flow.Observer.
 func (d *Rate) Observe(p flow.Packet) {
 	now := p.Time

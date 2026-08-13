@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 )
 
 // decodeJSON decodes a size-limited JSON request body into v.
@@ -36,3 +38,9 @@ func subtleEqual(a, b string) bool {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// joinSorted renders a set of keys deterministically for audit details.
+func joinSorted(keys []string) string {
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}

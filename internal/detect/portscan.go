@@ -54,6 +54,21 @@ type scanState struct {
 	firedAt  time.Time // suppresses re-firing within one window
 }
 
+// SetThresholds swaps the detector's window and trigger counts at runtime.
+// Guarded by the same mutex the packet path already takes, so a change lands
+// between packets rather than mid-evaluation.
+func (d *Portscan) SetThresholds(window time.Duration, external, internal Thresholds, block bool) {
+	if window <= 0 {
+		window = time.Minute
+	}
+	d.mu.Lock()
+	d.cfg.Window = window
+	d.cfg.External = external
+	d.cfg.Internal = internal
+	d.cfg.Block = block
+	d.mu.Unlock()
+}
+
 // NewPortscan creates a port-scan detector.
 func NewPortscan(cfg PortscanConfig, sink Sink, clock Clock) *Portscan {
 	if clock == nil {

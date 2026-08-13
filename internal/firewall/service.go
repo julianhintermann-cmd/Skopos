@@ -57,9 +57,13 @@ type Service struct {
 
 	mu sync.Mutex
 
-	// cfgMu guards the mutable parts of cfg (enforcement, default TTL),
-	// which the settings layer changes at runtime.
+	// cfgMu guards the mutable parts of cfg (enforcement, default TTL) and
+	// baseReady, which the settings layer changes at runtime.
 	cfgMu sync.RWMutex
+	// baseReady is true once the backend's table, chains and sets exist.
+	// Before that there is nothing to program, and saying so beats logging a
+	// failure on every cold start for work that simply has not come up yet.
+	baseReady bool
 
 	countryMu       sync.Mutex
 	countryPrefixes []netip.Prefix
@@ -105,6 +109,10 @@ func (s *Service) SetEnforce(ctx context.Context, on bool) error {
 		if err := s.backend.EnsureBase(ctx); err != nil {
 			return fmt.Errorf("ensuring base ruleset: %w", err)
 		}
+		s.cfgMu.Lock()
+		s.baseReady = true
+		protected := append([]netip.Prefix(nil), s.cfg.Protected...)
+		s.cfgMu.Unlock()
 		if err := s.Reconcile(ctx); err != nil {
 			return err
 		}
@@ -114,18 +122,29 @@ func (s *Service) SetEnforce(ctx context.Context, on bool) error {
 		s.countryMu.Unlock()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		// EnsureBase built the sets empty; arming has to refill every one of
+		// them, not just the blocks.
+		if err := s.backend.ReconcileProtected(ctx, protected); err != nil {
+			return err
+		}
 		if err := s.backend.ReconcileDevices(ctx, devices); err != nil {
 			return err
 		}
 		return s.backend.ReconcileCountry(ctx, prefixes)
 	}
 	// Switching to observe: clear every rule set so nothing keeps dropping.
+	s.cfgMu.Lock()
+	s.baseReady = false
+	s.cfgMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.backend.Reconcile(ctx, nil); err != nil {
 		return err
 	}
 	if err := s.backend.ReconcileDevices(ctx, nil); err != nil {
+		return err
+	}
+	if err := s.backend.ReconcileProtected(ctx, nil); err != nil {
 		return err
 	}
 	return s.backend.ReconcileCountry(ctx, nil)
@@ -149,7 +168,11 @@ func (s *Service) SetProtected(ctx context.Context, prefixes []netip.Prefix) err
 	s.cfg.Protected = append([]netip.Prefix(nil), prefixes...)
 	s.cfgMu.Unlock()
 
-	if !s.Enforcing() {
+	s.cfgMu.RLock()
+	ready := s.baseReady
+	s.cfgMu.RUnlock()
+	if !s.Enforcing() || !ready {
+		// Restore installs the set as part of bringing the table up.
 		return nil
 	}
 	s.mu.Lock()
@@ -273,6 +296,18 @@ func (s *Service) Restore(ctx context.Context) error {
 	if err := s.backend.EnsureBase(ctx); err != nil {
 		return fmt.Errorf("ensuring base ruleset: %w", err)
 	}
+	s.cfgMu.Lock()
+	s.baseReady = true
+	protected := append([]netip.Prefix(nil), s.cfg.Protected...)
+	s.cfgMu.Unlock()
+	// EnsureBase creates the sets empty, so the never-block set has to be
+	// filled here — nothing else refills it until the allowlist next changes.
+	s.mu.Lock()
+	err := s.backend.ReconcileProtected(ctx, protected)
+	s.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("loading the never-block set: %w", err)
+	}
 	return s.Reconcile(ctx)
 }
 
@@ -283,15 +318,16 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if !s.Enforcing() {
 		return nil
 	}
+	// The read belongs inside the lock: two concurrent reconciles that each
+	// read first could otherwise push in the wrong order, and the staler
+	// snapshot would win — briefly un-enforcing a block that is still active.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	blocks, err := s.store.ActiveBlocks(ctx)
 	if err != nil {
 		return err
 	}
-	rules := s.rulesFor(blocks)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.backend.Reconcile(ctx, rules)
+	return s.backend.Reconcile(ctx, s.rulesFor(blocks))
 }
 
 // SetCountryPrefixes replaces the preventive country-block set. In observe

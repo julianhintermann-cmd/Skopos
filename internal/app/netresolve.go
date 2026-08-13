@@ -103,6 +103,14 @@ func resolveGateway6() netip.Addr {
 		if fields[1] != "00" || strings.Trim(fields[0], "0") != "" {
 			continue // not ::/0
 		}
+		// Skip unreachable/blackhole defaults: RTF_REJECT (0x0200) in the
+		// flags column. Protecting a reject route's "next hop" would protect
+		// nothing and could shadow the real gateway.
+		if len(fields) >= 9 {
+			if flags, err := strconv.ParseUint(fields[8], 16, 64); err == nil && flags&0x0200 != 0 {
+				continue
+			}
+		}
 		raw, err := hex.DecodeString(fields[4])
 		if err != nil || len(raw) != 16 {
 			continue

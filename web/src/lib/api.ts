@@ -300,15 +300,27 @@ export function countryName(code: string): string {
   }
 }
 
+// ReputationSignal is one source's answer. A missing score means the source
+// answered but had no data on the address — which is not the same as zero.
+export interface ReputationSignal {
+  source: string
+  score?: number
+  detail: string
+}
+
 export interface ReputationInfo {
   ip: string
   org?: string
   handle?: string
   country?: string
+  // "geoip" (where the address is), "registry" (where its holder is
+  // incorporated) or "asn".
+  country_source?: string
   abuse_score?: number
   abuse_reports?: number
   isp?: string
   usage_type?: string
+  signals?: ReputationSignal[] | null
   checked_at: string
 }
 

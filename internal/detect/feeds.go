@@ -255,3 +255,13 @@ func (f *Feeds) Observe(p flow.Packet) {
 
 // Count returns the number of prefixes currently loaded.
 func (f *Feeds) Count() int { return f.set.Load().Len() }
+
+// Listed reports whether an address is in the currently loaded blocklists.
+// The reputation card asks: an address the operator's own lists already
+// condemn should not be presented as one nobody has anything on.
+func (f *Feeds) Listed(addr netip.Addr) bool {
+	if f == nil || !routableUnicast(addr) {
+		return false
+	}
+	return f.set.Load().Contains(addr.Unmap())
+}

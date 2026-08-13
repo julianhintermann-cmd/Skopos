@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-13
+
 ### Fixed
 
 - **The device list inventories devices again.** It used to file the
@@ -31,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a 6in4 interface there is no Ethernet header, and reading the first
   fourteen bytes as one invented hardware addresses that never existed. Those
   interfaces are now parsed as what they carry: bare IP packets, with no MACs.
+- **"Abuse 0%" no longer sits next to a critical alert.** An address no free
+  source happened to have data on was rendered as a confident green zero,
+  which reads as "this one is fine" — including for addresses Skopos had just
+  matched against a blocklist itself. Nothing found now says so: unknown, not
+  cleared, never green.
+- **The country is where the address is.** It came from the registry, which
+  records where the address holder is incorporated — so a Dutch data centre
+  whose operator is registered in Andorra was reported as Andorra. The local
+  GeoIP database answers first now, and a registry country is labelled
+  "Registered in" so the difference is visible rather than misleading.
 
 ### Added
 
@@ -42,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Hostnames without asking anyone.** Devices that announce themselves over
   mDNS are inventoried under that name, so the list reads "printer.local"
   instead of a bare MAC address.
+- **More sources behind "who is this?"** — the blocklists Skopos already
+  downloads (answered from memory, no request), blocklist.de's fail2ban
+  reports alongside DShield's sensor data, and the local GeoIP database. Each
+  source's answer is shown separately, so a number can be checked instead of
+  trusted, and the strongest reading wins rather than being averaged away by
+  sources that have never heard of the address. Still no account and no API
+  key anywhere. Where the free sources are thin, the card links straight to
+  the AbuseIPDB, Shodan and VirusTotal pages for the address — plain links,
+  nothing is sent until you click one.
 
 ## [0.3.0] - 2026-08-13
 
@@ -268,7 +289,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.1
 [0.3.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.0
 [0.2.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.2
 [0.2.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.1

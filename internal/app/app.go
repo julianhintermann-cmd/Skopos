@@ -276,7 +276,15 @@ func (a *App) Run(ctx context.Context) error {
 	})
 
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
+	// "Who is this?" draws on what Skopos already has before it asks anyone:
+	// the GeoIP database knows where an address actually is, which is not the
+	// country a registry records for the holder, and the downloaded
+	// blocklists already have an opinion about it.
 	rep := reputation.New(a.clock)
+	rep.Geo = geo.Lookup
+	if observers.feeds != nil {
+		rep.Listed = observers.feeds.Listed
+	}
 
 	// Release check: a monitoring tool quietly running a stale image is a
 	// failure mode of its own. One notification per new version, never a

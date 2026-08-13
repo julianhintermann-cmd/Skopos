@@ -210,8 +210,11 @@ Four things about blocking that save you a support ticket:
 - **Countries are blocked preventively.** Listed countries' networks (from the
   GeoIP database) are loaded into the kernel and dropped on the way in;
   established connections your own devices opened stay untouched, so blocking
-  a country never cuts off updates or CDNs you actively use. Per-IP blocks,
-  in contrast, are absolute in both directions.
+  a country never cuts off updates or CDNs you actively use. The reactive
+  backstop (block-on-sight while the database is still downloading) follows
+  the same rule: it only reacts to inbound connection attempts, never to
+  reply traffic of connections your side opened. Per-IP blocks, in contrast,
+  are absolute in both directions.
 
 ## Security
 

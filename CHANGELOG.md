@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reactive country blocking no longer blocks the far end of connections your
+  own devices opened. It used to fire on the reply packets that the conntrack
+  exemption deliberately lets through — killing exactly the traffic the
+  exemption protects (Skopos' own RDAP lookup against a Brazilian registry
+  being the first casualty). It now reacts only to inbound connection
+  attempts (TCP SYN).
+- Sources already dropped by the preventive country sets no longer generate
+  "Traffic from blocked country" alerts and redundant per-IP blocks; the
+  kernel handles them, the live view badges them.
+- The live view's `blocked` badge is honest now: it only appears when
+  enforcement is actually active (observe mode drops nothing), and flows
+  covered by country blocking are badged too — previously only per-IP blocks
+  were.
+
 ## [0.2.1] - 2026-08-13
 
 Blocking you can believe: the firewall now proves it is working, whole

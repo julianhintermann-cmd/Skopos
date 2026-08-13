@@ -21,6 +21,11 @@ type CountryBlockConfig struct {
 	// IsInternal classifies addresses (the detector only judges inbound
 	// traffic from external sources).
 	IsInternal func(netip.Addr) bool
+	// Covered reports whether the kernel's preventive country sets already
+	// drop this source. The reactive path then stays silent: the packet is
+	// dead either way, and raising would only pile alerts and redundant
+	// per-IP blocks onto traffic that is already handled. Optional.
+	Covered func(netip.Addr) bool
 }
 
 // CountryBlock raises a blocking finding for inbound traffic from blocked
@@ -59,8 +64,21 @@ func (c *CountryBlock) Observe(p flow.Packet) {
 	if c.cfg.IsInternal(p.SrcIP) || !c.cfg.IsInternal(p.DstIP) {
 		return
 	}
+	// Connection attempts only (TCP SYN). Reply packets of connections the
+	// LAN opened itself arrive here precisely because the kernel's conntrack
+	// exemption lets them through — blocking their sender would kill exactly
+	// the traffic that exemption protects (it once broke Skopos' own RDAP
+	// lookups against a registry in a blocked country). Unsolicited UDP is
+	// left to the preventive kernel sets.
+	if !p.SYN {
+		return
+	}
 	code, ok := c.cfg.Lookup(p.SrcIP)
 	if !ok || !c.cfg.Blocked(code) {
+		return
+	}
+	// Already dropped in-kernel by the preventive sets — nothing to add.
+	if c.cfg.Covered != nil && c.cfg.Covered(p.SrcIP) {
 		return
 	}
 

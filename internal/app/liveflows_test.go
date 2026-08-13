@@ -87,3 +87,24 @@ func TestLiveFlowsEmptyBatchDoesNotPublish(t *testing.T) {
 		t.Errorf("empty batch published %d events, want 0", len(pub.events))
 	}
 }
+
+func TestLiveFlowsBlockedFlag(t *testing.T) {
+	// Badge decision is flow-based: here, inbound-initiated flows only —
+	// the shape used for country coverage.
+	lf := newLiveFlows(&fakeSink{}, &fakePublisher{}, func(f model.Flow) bool {
+		return f.Dir == model.DirWANtoLAN
+	})
+	in := mkFlow("9.9.9.9", "192.168.1.2", time.Unix(1000, 0), 100)
+	in.Dir = model.DirWANtoLAN
+	out := mkFlow("192.168.1.2", "9.9.9.9", time.Unix(1001, 0), 100)
+	out.Dir = model.DirLANtoWAN
+	if err := lf.WriteFlows([]model.Flow{in, out}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range lf.RecentFlows() {
+		want := r.Dir == string(model.DirWANtoLAN)
+		if r.Blocked != want {
+			t.Errorf("flow dir %s: blocked = %v, want %v", r.Dir, r.Blocked, want)
+		}
+	}
+}

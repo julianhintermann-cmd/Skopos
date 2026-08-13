@@ -143,7 +143,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Preventive country blocking: keep the kernel's country sets in sync
 	// with the blocked-country list and the GeoIP database.
-	countryEnf := newCountryEnforcer(geo, countries, fw, a.logf, a.warnf)
+	countryEnf := newCountryEnforcer(geo, countries, fw, enforceActive, a.logf, a.warnf)
 
 	// Blocked traffic is still captured — the tap sits before netfilter — so
 	// tally those packets per block: live proof the firewall works, and in
@@ -184,6 +184,7 @@ func (a *App) Run(ctx context.Context) error {
 		Blocked:    countries.Contains,
 		Empty:      countries.Empty,
 		IsInternal: classifier.Internal,
+		Covered:    countryEnf.Covered,
 	}, pol, a.clock))
 	// Per-block attempt tallies from the same packet stream.
 	observers.all = append(observers.all, watch)
@@ -191,9 +192,21 @@ func (a *App) Run(ctx context.Context) error {
 	// Tee the flow sink: every flushed batch is written to the store as before
 	// and, in addition, projected for the live view — streamed to dashboards
 	// over SSE and kept in a bounded ring so a freshly opened view back-fills.
-	// Flows touching an active block are flagged so the live view can say
-	// "arriving, but dropped" instead of looking like a firewall failure.
-	liveSink := newLiveFlows(st, nil, watch.Contains)
+	// Flows the kernel is dropping are flagged so the live view can say
+	// "arriving, but dropped" instead of looking like a firewall failure —
+	// only when something is actually dropped: never in observe mode, and
+	// for country coverage only on inbound-initiated flows (established
+	// flows the LAN opened itself are exempted by conntrack).
+	blockedFlow := func(f model.Flow) bool {
+		if !enforceActive {
+			return false
+		}
+		if watch.Contains(f.SrcIP) || watch.Contains(f.DstIP) {
+			return true
+		}
+		return f.Dir == model.DirWANtoLAN && countryEnf.Covered(f.SrcIP)
+	}
+	liveSink := newLiveFlows(st, nil, blockedFlow)
 
 	agg := flow.New(flow.Config{
 		Classifier: classifier,

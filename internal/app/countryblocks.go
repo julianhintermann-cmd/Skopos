@@ -3,13 +3,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/geoip"
+	"github.com/julianhintermann-cmd/skopos/internal/netset"
 )
 
 // countryEnforcer keeps the kernel's preventive country sets in sync with the
@@ -23,26 +26,46 @@ type countryEnforcer struct {
 	fw       *firewall.Service
 	logf     func(string, ...any)
 	warnf    func(string, ...any)
+	// enforceActive mirrors the startup enforcement decision; Covered must
+	// answer false in observe mode, where the kernel drops nothing.
+	enforceActive bool
 
 	trigger chan struct{}
+
+	// set mirrors the prefixes last handed to the kernel, so the reactive
+	// detector and the live view can ask "is this source already dropped?".
+	set atomic.Pointer[netset.Set]
 
 	mu     sync.Mutex
 	counts map[string]int
 	loaded bool
 }
 
-func newCountryEnforcer(provider geoip.Provider, list *geoip.Blocklist, fw *firewall.Service, logf, warnf func(string, ...any)) *countryEnforcer {
+func newCountryEnforcer(provider geoip.Provider, list *geoip.Blocklist, fw *firewall.Service, enforceActive bool, logf, warnf func(string, ...any)) *countryEnforcer {
 	ce := &countryEnforcer{
-		provider: provider,
-		list:     list,
-		fw:       fw,
-		logf:     logf,
-		warnf:    warnf,
-		trigger:  make(chan struct{}, 1),
-		counts:   map[string]int{},
+		provider:      provider,
+		list:          list,
+		fw:            fw,
+		logf:          logf,
+		warnf:         warnf,
+		enforceActive: enforceActive,
+		trigger:       make(chan struct{}, 1),
+		counts:        map[string]int{},
 	}
+	empty := netset.New()
+	empty.Build()
+	ce.set.Store(empty)
 	list.SetOnChange(ce.kick)
 	return ce
+}
+
+// Covered reports whether the kernel's preventive country sets drop packets
+// from addr. Always false in observe mode or before the first load.
+func (ce *countryEnforcer) Covered(addr netip.Addr) bool {
+	if !ce.enforceActive {
+		return false
+	}
+	return ce.set.Load().Contains(addr)
 }
 
 // kick nudges the loop without blocking; extra kicks while one is pending
@@ -91,13 +114,13 @@ func (ce *countryEnforcer) refresh(ctx context.Context) bool {
 			ce.warnf("firewall: clearing country prefixes: %v", err)
 			return false
 		}
-		ce.set(map[string]int{}, true)
+		ce.store(nil, map[string]int{}, true)
 		return true
 	}
 
 	enum, ok := ce.provider.(geoip.PrefixEnumerator)
 	if !ok || !ce.provider.Available() {
-		ce.set(nil, false)
+		ce.store(nil, nil, false)
 		return false
 	}
 	prefixes, counts, err := enum.CountryPrefixes(ctx, codes)
@@ -111,12 +134,22 @@ func (ce *countryEnforcer) refresh(ctx context.Context) bool {
 		ce.warnf("firewall: loading country prefixes: %v", err)
 		return false
 	}
-	ce.set(counts, true)
+	ce.store(prefixes, counts, true)
 	ce.logf("firewall: country blocking covers %d prefixes (%s)", len(prefixes), summarizeCounts(counts))
 	return true
 }
 
-func (ce *countryEnforcer) set(counts map[string]int, loaded bool) {
+// store records what the kernel now holds: the coverage matcher, the
+// per-country counts and the loaded flag.
+func (ce *countryEnforcer) store(prefixes []netip.Prefix, counts map[string]int, loaded bool) {
+	if loaded {
+		s := netset.New()
+		for _, p := range prefixes {
+			s.Add(p)
+		}
+		s.Build()
+		ce.set.Store(s)
+	}
 	ce.mu.Lock()
 	if counts != nil {
 		ce.counts = counts

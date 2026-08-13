@@ -1,7 +1,6 @@
 package app
 
 import (
-	"net/netip"
 	"sort"
 	"sync"
 
@@ -28,13 +27,13 @@ const liveRingSize = 400
 type liveFlows struct {
 	next    flow.FlowSink
 	hub     eventPublisher
-	blocked func(netip.Addr) bool // may be nil
+	blocked func(model.Flow) bool // may be nil
 
 	mu   sync.Mutex
 	ring []api.LiveFlow // newest last
 }
 
-func newLiveFlows(next flow.FlowSink, hub eventPublisher, blocked func(netip.Addr) bool) *liveFlows {
+func newLiveFlows(next flow.FlowSink, hub eventPublisher, blocked func(model.Flow) bool) *liveFlows {
 	return &liveFlows{next: next, hub: hub, blocked: blocked, ring: make([]api.LiveFlow, 0, liveRingSize)}
 }
 

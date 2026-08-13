@@ -54,6 +54,9 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// ReloadMutes re-reads the suppression rules into the policy engine after
+	// an edit. Nil-safe.
+	ReloadMutes func()
 	// ApplyDevicePolicies pushes per-device rules to the kernel right after
 	// an edit, instead of waiting for the periodic sync. Nil-safe.
 	ApplyDevicePolicies func()
@@ -162,6 +165,9 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/updates", s.requireRead(http.HandlerFunc(s.handleUpdates)))
 	s.mux.Handle("GET /api/domains", s.requireRead(http.HandlerFunc(s.handleDomains)))
 	s.mux.Handle("GET /api/settings", s.requireRead(http.HandlerFunc(s.handleGetSettings)))
+	s.mux.Handle("GET /api/incidents", s.requireRead(http.HandlerFunc(s.handleIncidents)))
+	s.mux.Handle("GET /api/incidents/{id}", s.requireRead(http.HandlerFunc(s.handleIncident)))
+	s.mux.Handle("GET /api/mutes", s.requireRead(http.HandlerFunc(s.handleListMutes)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
@@ -176,6 +182,9 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/alerts/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckAlert)))
 	s.mux.Handle("POST /api/blocks", s.requireWrite(http.HandlerFunc(s.handleAddBlock)))
 	s.mux.Handle("DELETE /api/blocks", s.requireWrite(http.HandlerFunc(s.handleDeleteBlock)))
+	s.mux.Handle("POST /api/incidents/{id}/ack", s.requireWrite(http.HandlerFunc(s.handleAckIncident)))
+	s.mux.Handle("POST /api/mutes", s.requireWrite(http.HandlerFunc(s.handleAddMute)))
+	s.mux.Handle("DELETE /api/mutes/{id}", s.requireWrite(http.HandlerFunc(s.handleDeleteMute)))
 	s.mux.Handle("POST /api/settings", s.requireWrite(http.HandlerFunc(s.handleUpdateSettings)))
 	s.mux.Handle("DELETE /api/settings", s.requireWrite(http.HandlerFunc(s.handleResetSettings)))
 	s.mux.Handle("POST /api/config/validate", s.requireWrite(http.HandlerFunc(s.handleValidateConfig)))

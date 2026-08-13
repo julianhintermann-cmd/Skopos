@@ -24,6 +24,10 @@ type Finding struct {
 	// SuggestBlock is true when this detector is configured to auto-block the
 	// source. The policy layer still decides whether enforcement is on.
 	SuggestBlock bool
+	// Port is the destination port the finding concerns, when it has one.
+	// Mute rules match on it, so "stop telling me about port 5353" is
+	// expressible without silencing the detector entirely.
+	Port uint16
 }
 
 // Sink receives findings from detectors.

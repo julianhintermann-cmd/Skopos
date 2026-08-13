@@ -246,7 +246,7 @@ func (f *Feeds) Observe(p flow.Packet) {
 	f.firedMu.Unlock()
 
 	f.sink.Raise(Finding{
-		Detector: "feeds", Source: peer, Severity: f.cfg.Severity,
+		Detector: "feeds", Source: peer, Severity: f.cfg.Severity, Port: p.DstPort,
 		Title:        fmt.Sprintf("Blocklisted address %s", peer),
 		Detail:       "matched a configured IP blocklist feed",
 		SuggestBlock: f.cfg.Block,

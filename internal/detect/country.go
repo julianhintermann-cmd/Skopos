@@ -106,6 +106,7 @@ func (c *CountryBlock) Observe(p flow.Packet) {
 		Severity: model.SeverityWarning,
 		Title:    fmt.Sprintf("Traffic from blocked country %s", code),
 		Detail:   fmt.Sprintf("%s connected to %s:%d (country %s is on the block list).", p.SrcIP, p.DstIP, p.DstPort, code),
+		Port:     p.DstPort,
 		// The whole point of the list: block the source on sight.
 		SuggestBlock: true,
 	})

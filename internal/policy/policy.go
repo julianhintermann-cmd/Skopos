@@ -17,8 +17,16 @@ import (
 )
 
 // AlertStore persists alerts and returns the stored record (with its ID).
+// Grouping is optional: a store that does not implement Incidenter simply
+// records alerts flat.
 type AlertStore interface {
 	InsertAlert(ctx context.Context, a model.Alert) (model.Alert, error)
+}
+
+// Incidenter files a stored alert into an episode for its source, so the UI
+// can show one attacker rather than forty rows.
+type Incidenter interface {
+	AttachToIncident(ctx context.Context, a model.Alert) (int64, error)
 }
 
 // Notifier delivers an alert to the outside world (ntfy, webhook).
@@ -54,6 +62,10 @@ type Config struct {
 	// Gateway is always protected from blocking (the last-resort safety so
 	// Skopos can never lock you out of your own network).
 	Gateway netip.Addr
+	// Muter, when set, suppresses matching findings' alerts and
+	// notifications. Blocking is unaffected: silencing a nuisance must not
+	// silently disarm the protection that goes with it.
+	Muter *Muter
 	// AlreadyBlocked, when set, reports that a source is inside an active,
 	// actually-enforced block. Findings for such sources are dropped
 	// entirely: the kernel is discarding their packets, and re-alerting on
@@ -119,6 +131,9 @@ func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock
 // SetLogger installs a logging callback (optional).
 func (e *Engine) SetLogger(f func(string, ...any)) { e.log = f }
 
+// SetMuter installs the suppression rules after construction.
+func (e *Engine) SetMuter(m *Muter) { e.cfg.Muter = m }
+
 // SetAlreadyBlocked installs the already-blocked check after construction
 // (the block watcher is wired later in startup than the engine). Must be
 // called before the first packet flows; it is not synchronised.
@@ -162,6 +177,13 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 
 	now := e.clock()
 
+	// Operator mute rules: no alert, no notification — but still evaluate
+	// blocking below, because muting is about noise, not about protection.
+	if e.cfg.Muter != nil && e.cfg.Muter.Muted(f.Detector, f.Source, int(f.Port), now) {
+		e.maybeBlock(ctx, f)
+		return
+	}
+
 	// Cooldown: at most one notification per (detector, source) per window.
 	// Extra occurrences are counted and reported with the next one.
 	key := f.Detector + "|" + f.Source.String()
@@ -200,6 +222,11 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 	if err != nil {
 		e.log("policy: storing alert failed: %v", err)
 		stored = alert
+	}
+	if inc, ok := e.store.(Incidenter); ok && stored.ID > 0 {
+		if _, err := inc.AttachToIncident(ctx, stored); err != nil {
+			e.log("policy: grouping alert into an incident: %v", err)
+		}
 	}
 
 	// Quiet hours gate notification, not recording or blocking.

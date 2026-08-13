@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prometheus metrics** — `/metrics` now actually exists (the config knob
   had nothing behind it): throughput, enforcement state, active blocks,
   unacked alerts, per-block drop counters and per-country prefix counts.
+- **Incidents** — the Alerts view groups events by source and episode: one
+  attacker with forty scan attempts is one row saying "40 events", expandable
+  to the individual alerts, acknowledgeable in one click. Two hours of quiet
+  starts a new episode, so today's visit is not merged with last week's. The
+  flat list stays one click away.
+- **Mute rules** — silence an alert pattern by detector, source prefix, port
+  or any combination, permanently or with a TTL. Muting stops the alert and
+  the notification and nothing else: blocking still applies exactly as
+  configured, because a noise control that quietly disarmed protection would
+  be a trap.
 - **Per-device policy** — confine a device from its detail page: "LAN only"
   drops its traffic to and from the internet, "Quarantine" drops everything
   including local traffic. Implemented as kernel rules keyed on the device's

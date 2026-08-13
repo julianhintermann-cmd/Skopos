@@ -185,6 +185,29 @@ export interface Fingerprint {
   last_seen: string
 }
 
+export interface Incident {
+  id: number
+  source: string
+  first_seen: string
+  last_seen: string
+  severity: string
+  detectors: string[] | null
+  alert_count: number
+  title: string
+  ack: boolean
+  alerts?: Alert[] | null
+}
+
+export interface MuteRule {
+  id: number
+  detector?: string
+  prefix?: string
+  port?: number
+  reason?: string
+  created: string
+  expires?: string
+}
+
 export interface RuntimeSettings {
   enforcement: string
   block_ttl: number

@@ -28,6 +28,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/names"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
+	"github.com/julianhintermann-cmd/skopos/internal/policy"
 	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
 	"github.com/julianhintermann-cmd/skopos/internal/settings"
@@ -159,6 +160,32 @@ func (a *App) Run(ctx context.Context) error {
 
 	// --- policy ------------------------------------------------------------
 	pol := policyFromConfig(a.cfg, classifier, st, dispatcher, fw, a.clock)
+	// Operator mute rules: noise control that never touches blocking.
+	muter := policy.NewMuter()
+	pol.SetMuter(muter)
+	reloadMutes := func() {
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		rules, err := st.ListMuteRules(c)
+		if err != nil {
+			a.warnf("mutes: loading: %v", err)
+			return
+		}
+		out := make([]policy.MuteRule, 0, len(rules))
+		for _, r := range rules {
+			m := policy.MuteRule{Detector: r.Detector, Port: r.Port, Expires: r.Expires}
+			if r.Prefix != "" {
+				p, err := netip.ParsePrefix(r.Prefix)
+				if err != nil {
+					continue
+				}
+				m.Prefix = p
+			}
+			out = append(out, m)
+		}
+		muter.Replace(out)
+	}
+	reloadMutes()
 	if enforceActive {
 		// Sources the kernel is already dropping raise no further alerts;
 		// their ongoing attempts show in the per-block counters instead.
@@ -278,6 +305,7 @@ func (a *App) Run(ctx context.Context) error {
 		Updates:             updates.Status,
 		Settings:            setman,
 		ApplyDevicePolicies: applyDevicePolicies,
+		ReloadMutes:         reloadMutes,
 		Clock:               a.clock,
 		Health:              a.healthFunc(st, backend, fw),
 	})

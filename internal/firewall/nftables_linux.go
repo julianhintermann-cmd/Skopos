@@ -466,10 +466,20 @@ func nfproto(v6 bool) byte {
 	return unix.NFPROTO_IPV4
 }
 
-// Reconcile flushes the four sets and repopulates them from desired in a
-// single netlink batch, so the kernel atomically ends up matching desired
-// exactly. Element counts on a home network are small, making this simpler and
-// safer than element-by-element diffing.
+// blockSets are the sets Reconcile owns: the per-IP blocks, by action and
+// family. Naming them explicitly is load-bearing. This loop used to range over
+// b.sets, which held every set in the table, so each reconcile flushed the
+// country, LAN, never-block and per-device sets too and refilled none of them
+// — they can only be refilled by the functions that own them. Since preventive
+// country blocking shipped, any block or unblock silently emptied the country
+// sets until their next refresh, while the dashboard went on reporting the
+// prefix count it last loaded.
+var blockSets = []string{setDrop4, setReject4, setDrop6, setReject6}
+
+// Reconcile makes the per-IP block sets match desired exactly, in a single
+// netlink batch so the kernel never sees a half-applied state. Element counts
+// on a home network are small, making a flush-and-refill simpler and safer
+// than element-by-element diffing.
 func (b *nftBackend) Reconcile(_ context.Context, desired []Rule) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -505,7 +515,11 @@ func (b *nftBackend) Reconcile(_ context.Context, desired []Rule) error {
 		)
 	}
 
-	for name, set := range b.sets {
+	for _, name := range blockSets {
+		set := b.sets[name]
+		if set == nil {
+			continue
+		}
 		c.FlushSet(set)
 		if els := elements[name]; len(els) > 0 {
 			if err := c.SetAddElements(set, els); err != nil {

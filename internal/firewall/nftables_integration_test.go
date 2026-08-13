@@ -236,3 +236,101 @@ func TestIntegrationReconcileDevices(t *testing.T) {
 		t.Errorf("device set should be empty after clearing, got %d", len(els))
 	}
 }
+
+// Blocking one address must not disturb any other set. Reconcile used to
+// range over every set in the table, flushing each and refilling only the
+// four it owns — so a single auto-block silently emptied the country sets,
+// the LAN ranges the per-device rules compare against, the never-block set,
+// and the device sets themselves. The dashboard went on reporting the counts
+// it had last loaded. This is the regression test for that.
+func TestIntegrationReconcileLeavesOtherSetsAlone(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+
+	lan := []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")}
+	b := NewNFTablesBackend(lan)
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+
+	if err := b.ReconcileCountry(ctx, []netip.Prefix{
+		netip.MustParsePrefix("5.0.0.0/8"),
+		netip.MustParsePrefix("2a00::/16"),
+	}); err != nil {
+		t.Fatalf("ReconcileCountry: %v", err)
+	}
+	if err := b.ReconcileProtected(ctx, []netip.Prefix{
+		netip.MustParsePrefix("192.168.1.1/32"),
+	}); err != nil {
+		t.Fatalf("ReconcileProtected: %v", err)
+	}
+	if err := b.ReconcileDevices(ctx, []DeviceRule{
+		{Addr: netip.MustParseAddr("192.168.1.50"), Policy: DeviceQuarantine},
+		{Addr: netip.MustParseAddr("192.168.1.51"), Policy: DeviceLANOnly},
+	}); err != nil {
+		t.Fatalf("ReconcileDevices: %v", err)
+	}
+
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table *nftables.Table
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range tables {
+		if tb.Name == tableName {
+			table = tb
+		}
+	}
+	if table == nil {
+		t.Fatal("skopos table not found")
+	}
+	count := func(name string) int {
+		t.Helper()
+		set, err := c.GetSetByName(table, name)
+		if err != nil {
+			t.Fatalf("GetSetByName %s: %v", name, err)
+		}
+		elems, err := c.GetSetElements(set)
+		if err != nil {
+			t.Fatalf("GetSetElements %s: %v", name, err)
+		}
+		return len(elems)
+	}
+
+	watched := []string{setCountry4, setCountry6, setProtected4, setLAN4, setDevQuar4, setDevLANOnly4}
+	before := map[string]int{}
+	for _, name := range watched {
+		before[name] = count(name)
+		if before[name] == 0 {
+			t.Fatalf("%s should be populated before the block", name)
+		}
+	}
+
+	// One ordinary block — the thing that happens every time a detector fires.
+	if err := b.Reconcile(ctx, []Rule{
+		{Prefix: netip.MustParsePrefix("203.0.113.7/32"), Action: Drop},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	for _, name := range watched {
+		if got := count(name); got != before[name] {
+			t.Errorf("%s went from %d to %d elements after an unrelated block", name, before[name], got)
+		}
+	}
+	if got := count(setDrop4); got == 0 {
+		t.Error("drop4 should hold the block that was just applied")
+	}
+
+	// And the reverse: refreshing the country list must not disturb the block.
+	if err := b.ReconcileCountry(ctx, []netip.Prefix{netip.MustParsePrefix("6.0.0.0/8")}); err != nil {
+		t.Fatalf("ReconcileCountry refresh: %v", err)
+	}
+	if got := count(setDrop4); got == 0 {
+		t.Error("the block disappeared when the country list was refreshed")
+	}
+}

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-13
+
+Skopos learns your network's language. Traffic arrives with names instead of
+addresses, the dashboard can be steered without touching a file, and every
+control says exactly how far it reaches.
+
 ### Added
 
 - **Names instead of addresses** — Skopos now reads the DNS and mDNS answers
@@ -226,7 +232,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.0
 [0.2.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.2
 [0.2.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.0

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-13
+
+Country blocking learns the difference between an attack and an answer.
+
 ### Fixed
 
 - Reactive country blocking no longer blocks the far end of connections your
@@ -151,7 +155,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.2
 [0.2.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.0
 [0.1.0]: https://github.com/julianhintermann-cmd/skopos/commit/57a56c1

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Block from the alert** — every alert and every incident has a Block
+  button. It opens with the address filled in and asks the three things that
+  matter: how far to reach (that address, or its /24 or /64), how long (1h,
+  24h, 7d, or blank for permanent), and why. The note is not decoration — in
+  a month "why is this blocked?" is the only question you will have, and it
+  follows the block into the Firewall view and the audit log. Before you
+  commit, the dialog says whether enforcement is even on, whether the address
+  is already blocked and until when, and whether the block would cover
+  something protected.
+
+### Fixed
+
+- **The never-block allowlist now holds on every path.** Blocks placed by
+  hand went straight to the kernel without consulting it, and so did
+  per-device policies — the worse of the two, because device rules sit ahead
+  of the conntrack exemption and cut connections already in progress, so
+  confining the router would have taken down the network the dashboard is
+  reached over. Both refuse now and name the allowlist entry they hit, and
+  the device path is filtered at the firewall service as well, so a policy
+  stored before this guard cannot reach the kernel either.
+
 ## [0.3.1] - 2026-08-13
 
 ### Fixed

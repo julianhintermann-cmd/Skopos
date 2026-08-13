@@ -34,7 +34,7 @@ func mkFlow(src, dst string, end time.Time, bytes uint64) model.Flow {
 func TestLiveFlowsTeesPublishesAndBackfills(t *testing.T) {
 	sink := &fakeSink{}
 	pub := &fakePublisher{}
-	lf := newLiveFlows(sink, pub)
+	lf := newLiveFlows(sink, pub, nil)
 
 	base := time.Unix(1000, 0)
 	if err := lf.WriteFlows([]model.Flow{
@@ -67,7 +67,7 @@ func TestLiveFlowsTeesPublishesAndBackfills(t *testing.T) {
 }
 
 func TestLiveFlowsRingIsBounded(t *testing.T) {
-	lf := newLiveFlows(&fakeSink{}, &fakePublisher{})
+	lf := newLiveFlows(&fakeSink{}, &fakePublisher{}, nil)
 	base := time.Unix(0, 0)
 	for i := 0; i < liveRingSize+50; i++ {
 		_ = lf.WriteFlows([]model.Flow{mkFlow("10.0.0.1", "10.0.0.2", base.Add(time.Duration(i)*time.Second), 1)})
@@ -79,7 +79,7 @@ func TestLiveFlowsRingIsBounded(t *testing.T) {
 
 func TestLiveFlowsEmptyBatchDoesNotPublish(t *testing.T) {
 	pub := &fakePublisher{}
-	lf := newLiveFlows(&fakeSink{}, pub)
+	lf := newLiveFlows(&fakeSink{}, pub, nil)
 	if err := lf.WriteFlows(nil); err != nil {
 		t.Fatal(err)
 	}

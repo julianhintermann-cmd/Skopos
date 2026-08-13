@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/geoip"
@@ -52,6 +53,13 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// BlockStats returns per-block packet tallies observed since start; the
+	// capture tap sees blocked packets before netfilter drops them, so these
+	// are the drops (enforce) or would-be drops (observe). Nil-safe.
+	BlockStats func() map[string]blockwatch.Stat
+	// CountryBlockStats returns per-country preventive prefix counts and
+	// whether they are loaded. Nil-safe.
+	CountryBlockStats func() (map[string]int, bool)
 	// Health reports subsystem health for /api/health.
 	Health func() Health
 }

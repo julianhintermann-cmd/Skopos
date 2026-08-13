@@ -91,6 +91,77 @@ func TestIntegrationEnsureBaseAndReconcile(t *testing.T) {
 	}
 }
 
+func TestIntegrationReconcileCountry(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+
+	b := NewNFTablesBackend()
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+
+	// Enough prefixes to cross the chunking boundary, mixed families.
+	var prefixes []netip.Prefix
+	for i := 0; i < 1200; i++ {
+		prefixes = append(prefixes, netip.PrefixFrom(
+			netip.AddrFrom4([4]byte{5, byte(i / 256), byte(i % 256), 0}), 24))
+	}
+	prefixes = append(prefixes, netip.MustParsePrefix("2a00::/16"))
+
+	if err := b.ReconcileCountry(ctx, prefixes); err != nil {
+		t.Fatalf("ReconcileCountry: %v", err)
+	}
+
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table *nftables.Table
+	for _, tb := range tables {
+		if tb.Name == tableName {
+			table = tb
+		}
+	}
+	if table == nil {
+		t.Fatal("skopos table not found")
+	}
+	c4, err := c.GetSetByName(table, setCountry4)
+	if err != nil {
+		t.Fatalf("GetSetByName country4: %v", err)
+	}
+	elems, err := c.GetSetElements(c4)
+	if err != nil {
+		t.Fatalf("GetSetElements: %v", err)
+	}
+	// Interval sets round-trip as start/end pairs; exact accounting differs
+	// by kernel, so assert order of magnitude, not equality.
+	if len(elems) < 1200 {
+		t.Errorf("country4 has %d elements, want >= 1200", len(elems))
+	}
+
+	// Replacing with a shorter list shrinks the set.
+	if err := b.ReconcileCountry(ctx, prefixes[:10]); err != nil {
+		t.Fatalf("ReconcileCountry shrink: %v", err)
+	}
+	elems, _ = c.GetSetElements(c4)
+	if len(elems) == 0 || len(elems) > 40 {
+		t.Errorf("country4 after shrink has %d elements, want a handful", len(elems))
+	}
+
+	// And clearing empties it.
+	if err := b.ReconcileCountry(ctx, nil); err != nil {
+		t.Fatalf("ReconcileCountry clear: %v", err)
+	}
+	elems, _ = c.GetSetElements(c4)
+	if len(elems) != 0 {
+		t.Errorf("country4 after clear has %d elements, want 0", len(elems))
+	}
+}
+
 func TestIntegrationEnsureBaseIdempotent(t *testing.T) {
 	enterNetNS(t)
 	ctx := context.Background()

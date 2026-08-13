@@ -37,6 +37,13 @@ type Backend interface {
 	EnsureBase(ctx context.Context) error
 	// Reconcile makes the enforced rule set exactly equal to desired.
 	Reconcile(ctx context.Context, desired []Rule) error
+	// ReconcileCountry replaces the preventive country-block prefix sets.
+	// Separate from Reconcile because the volume differs by orders of
+	// magnitude (one country is tens of thousands of prefixes), the data
+	// changes rarely, and the semantics differ: country prefixes drop
+	// unsolicited inbound traffic only, never replies to connections the
+	// LAN itself opened.
+	ReconcileCountry(ctx context.Context, prefixes []netip.Prefix) error
 	// Available reports whether the backend can actually enforce (required
 	// capabilities and kernel support present).
 	Available() bool

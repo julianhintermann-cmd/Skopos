@@ -54,6 +54,13 @@ type Config struct {
 	// Gateway is always protected from blocking (the last-resort safety so
 	// Skopos can never lock you out of your own network).
 	Gateway netip.Addr
+	// AlreadyBlocked, when set, reports that a source is inside an active,
+	// actually-enforced block. Findings for such sources are dropped
+	// entirely: the kernel is discarding their packets, and re-alerting on
+	// traffic that only the capture tap still sees would read as the block
+	// not working. Wire it only when enforcement is really on — in observe
+	// mode nothing is dropped, so alerts must keep flowing.
+	AlreadyBlocked func(netip.Addr) bool
 }
 
 // QuietHours suppresses low-severity notifications during a nightly window.
@@ -112,6 +119,11 @@ func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock
 // SetLogger installs a logging callback (optional).
 func (e *Engine) SetLogger(f func(string, ...any)) { e.log = f }
 
+// SetAlreadyBlocked installs the already-blocked check after construction
+// (the block watcher is wired later in startup than the engine). Must be
+// called before the first packet flows; it is not synchronised.
+func (e *Engine) SetAlreadyBlocked(f func(netip.Addr) bool) { e.cfg.AlreadyBlocked = f }
+
 // Raise implements detect.Sink: it is the single entry point from every
 // detector.
 func (e *Engine) Raise(f detect.Finding) {
@@ -119,6 +131,12 @@ func (e *Engine) Raise(f detect.Finding) {
 }
 
 func (e *Engine) handle(ctx context.Context, f detect.Finding) {
+	// A source the firewall is already dropping needs no further alerts or
+	// re-blocks; its ongoing attempts show up in the per-block counters.
+	if e.cfg.AlreadyBlocked != nil && f.Source.IsValid() && e.cfg.AlreadyBlocked(f.Source) {
+		return
+	}
+
 	now := e.clock()
 
 	// Cooldown: at most one notification per (detector, source) per window.

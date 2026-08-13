@@ -29,7 +29,8 @@ func (s *Server) handleGeoIPSummary(w http.ResponseWriter, r *http.Request) {
 	if s.deps.GeoIP == nil || !s.deps.GeoIP.Available() {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false, "out": []CountryStat{}, "in": []CountryStat{},
-			"blocked": s.blockedCountries(),
+			"blocked":          s.blockedCountries(),
+			"blocked_prefixes": s.blockedPrefixCounts(),
 		})
 		return
 	}
@@ -81,9 +82,10 @@ func (s *Server) handleGeoIPSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"available": true,
 		"from":      from, "to": to,
-		"out":     aggregate("lan_wan"),
-		"in":      aggregate("wan_lan"),
-		"blocked": s.blockedCountries(),
+		"out":              aggregate("lan_wan"),
+		"in":               aggregate("wan_lan"),
+		"blocked":          s.blockedCountries(),
+		"blocked_prefixes": s.blockedPrefixCounts(),
 	})
 }
 
@@ -94,9 +96,24 @@ func (s *Server) blockedCountries() []string {
 	return s.deps.Countries.Countries()
 }
 
-// handleSetBlockedCountries replaces the blocked-country list. Blocking is
-// reactive: sources from listed countries are blocked the moment they appear,
-// once enforcement is on.
+// blockedPrefixCounts reports how many prefixes preventive blocking has
+// loaded per country — the UI's evidence that a listed country is actually
+// covered in the kernel, not merely listed.
+func (s *Server) blockedPrefixCounts() map[string]int {
+	if s.deps.CountryBlockStats == nil {
+		return map[string]int{}
+	}
+	counts, _ := s.deps.CountryBlockStats()
+	if counts == nil {
+		return map[string]int{}
+	}
+	return counts
+}
+
+// handleSetBlockedCountries replaces the blocked-country list. Once
+// enforcement is on, the country enforcer loads the listed countries'
+// prefixes into the kernel (preventive), and the reactive detector still
+// blocks stragglers the moment they appear.
 func (s *Server) handleSetBlockedCountries(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Countries == nil {
 		writeError(w, http.StatusNotImplemented, "country blocking unavailable")

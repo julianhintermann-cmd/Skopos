@@ -227,3 +227,28 @@ func TestInWindowCrossesMidnight(t *testing.T) {
 		t.Error("times outside the window should not match")
 	}
 }
+
+func TestAlreadyBlockedSourcesAreSilenced(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	blockedSet := map[string]bool{"203.0.113.5": true}
+	e, store, notif, blocker := baseEngine(Config{
+		Enforcement: Enforce, Cooldown: time.Minute, BlockTTL: time.Hour,
+		AlreadyBlocked: func(a netip.Addr) bool { return blockedSet[a.String()] },
+	}, clock)
+
+	// A source the kernel already drops: no alert, no notification, no
+	// redundant re-block — its traffic shows up in the block counters instead.
+	e.Raise(finding("feeds", "203.0.113.5", model.SeverityCritical, true))
+	if len(store.alerts) != 0 || notif.count() != 0 || blocker.count() != 0 {
+		t.Errorf("already-blocked source raised alerts=%d notifs=%d blocks=%d, want 0/0/0",
+			len(store.alerts), notif.count(), blocker.count())
+	}
+
+	// A fresh source still goes through the full path.
+	e.Raise(finding("feeds", "203.0.113.9", model.SeverityCritical, true))
+	if len(store.alerts) != 1 || notif.count() != 1 || blocker.count() != 1 {
+		t.Errorf("fresh source raised alerts=%d notifs=%d blocks=%d, want 1/1/1",
+			len(store.alerts), notif.count(), blocker.count())
+	}
+}

@@ -1,6 +1,9 @@
 package geoip
 
-import "net/netip"
+import (
+	"context"
+	"net/netip"
+)
 
 // DemoProvider is the country source for demo mode: a handful of static
 // prefixes covering the demo traffic generator's addresses, so the dashboard
@@ -46,4 +49,22 @@ func (d *DemoProvider) Lookup(addr netip.Addr) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// CountryPrefixes implements PrefixEnumerator over the static demo ranges, so
+// preventive country blocking is demonstrable without the real database.
+func (d *DemoProvider) CountryPrefixes(_ context.Context, codes []string) ([]netip.Prefix, map[string]int, error) {
+	want := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		want[c] = true
+	}
+	counts := make(map[string]int, len(codes))
+	var out []netip.Prefix
+	for _, r := range d.ranges {
+		if want[r.country] {
+			out = append(out, r.prefix)
+			counts[r.country]++
+		}
+	}
+	return out, counts, nil
 }

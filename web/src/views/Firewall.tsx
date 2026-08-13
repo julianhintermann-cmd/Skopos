@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, countryFlag, countryName, type Block, type GeoIPSummary } from '../lib/api'
+import { api, countryFlag, countryName, type BlocksResponse, type GeoIPSummary } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput } from '../components/ui'
 import { Th, Td } from './Devices'
 import { useDeviceNames } from '../lib/deviceNames'
-import { formatRelative, formatTime } from '../lib/format'
+import { formatCount, formatRelative, formatTime } from '../lib/format'
 
 // blockName resolves a blocked prefix to a device name when it is a single
 // host that the inventory knows (strip the /32 or /128 the API normalises to).
@@ -14,7 +14,7 @@ function blockName(names: Map<string, string>, prefix: string): string {
 }
 
 export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
-  const { data, loading, error, refresh } = useFetch<{ blocks: Block[] | null }>('/api/blocks', {
+  const { data, loading, error, refresh } = useFetch<BlocksResponse>('/api/blocks', {
     pollMs: 5000,
     onUnauthorized,
   })
@@ -48,8 +48,27 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
     refresh()
   }
 
+  const observing = data?.enforcement === 'observe'
+  const degraded = data?.enforcement === 'enforce' && data?.enforcing === false
+
   return (
     <div className="flex flex-col gap-4">
+      {observing && (
+        <Banner tone="warn" title="Observe mode — nothing is actually blocked">
+          Blocks are recorded and counted, but the kernel drops no packets, so traffic from
+          blocked addresses and countries keeps flowing. When the numbers below look right, arm
+          the firewall with <code className="font-mono">firewall.enforcement: enforce</code> in
+          config.yaml and restart Skopos.
+        </Banner>
+      )}
+      {degraded && (
+        <Banner tone="crit" title="Enforce is set, but the firewall backend is unavailable">
+          Skopos cannot program nftables, so blocks are recorded but not applied. The container
+          needs <code className="font-mono">network_mode: host</code> and the{' '}
+          <code className="font-mono">NET_ADMIN</code> capability, and the kernel must have
+          nf_tables. Check the System view and container logs.
+        </Banner>
+      )}
       {canWrite && (
         <Card className="px-4 py-3.5">
           <CardHeader title="Block an address" sub="IP or CIDR — never blocks the gateway or allowlist" />
@@ -68,7 +87,14 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
       <CountryBlocking canWrite={canWrite} onUnauthorized={onUnauthorized} />
 
       <Card>
-        <CardHeader title="Active blocks" sub={`${blocks.length} in effect`} />
+        <CardHeader
+          title="Active blocks"
+          sub={
+            data?.enforcing
+              ? `${blocks.length} enforced — blocked packets are still visible to the monitor (capture taps the wire before the firewall), counted here as they are dropped`
+              : `${blocks.length} recorded`
+          }
+        />
         {loading && !data ? (
           <Spinner />
         ) : error ? (
@@ -83,6 +109,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                   <Th>Prefix</Th>
                   <Th>Origin</Th>
                   <Th>Reason</Th>
+                  <Th>{data?.enforcing ? 'Dropped' : 'Would drop'}</Th>
                   <Th>Created</Th>
                   <Th>Expires</Th>
                   {canWrite && <Th> </Th>}
@@ -103,6 +130,20 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                       <Pill tone={b.Origin === 'manual' ? 'accent' : 'neutral'}>{b.Origin}</Pill>
                     </Td>
                     <Td muted>{b.Reason || '—'}</Td>
+                    <Td mono>
+                      {b.attempts > 0 ? (
+                        <>
+                          {formatCount(b.attempts)} pkts
+                          {b.last_attempt && (
+                            <div className="font-sans text-xs" style={{ color: 'var(--muted)' }}>
+                              last {formatRelative(b.last_attempt)}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--muted)' }}>—</span>
+                      )}
+                    </Td>
                     <Td muted>{formatTime(b.Created)}</Td>
                     <Td muted>{b.Expires ? formatRelative(b.Expires) : 'permanent'}</Td>
                     {canWrite && (
@@ -127,15 +168,33 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
   )
 }
 
-// CountryBlocking manages the blocked-country list. Blocking is reactive:
-// inbound sources from listed countries are blocked the moment they appear
-// (once enforcement is on), instead of loading half the internet's prefixes
-// into the kernel.
+// Banner is the view's loud qualifier: a firewall page listing "active blocks"
+// while nothing is enforced would be a lie by omission.
+function Banner({ tone, title, children }: { tone: 'warn' | 'crit'; title: string; children: ReactNode }) {
+  const color = tone === 'warn' ? 'var(--warn)' : 'var(--crit)'
+  const bg = tone === 'warn' ? 'var(--warn-tint)' : 'var(--crit-tint)'
+  return (
+    <div className="rounded-lg border px-4 py-3" style={{ background: bg, borderColor: color }}>
+      <p className="text-sm font-semibold" style={{ color }}>
+        {title}
+      </p>
+      <p className="mt-1 text-sm" style={{ color: 'var(--text)' }}>
+        {children}
+      </p>
+    </div>
+  )
+}
+
+// CountryBlocking manages the blocked-country list. Preventive: the listed
+// countries' networks are loaded into the kernel as soon as the GeoIP
+// database is there, so their traffic is dropped before it reaches any
+// service; the reactive detector still catches stragglers on sight.
 function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUnauthorized: () => void }) {
   const { data, refresh } = useFetch<GeoIPSummary>('/api/geoip/summary?window=1h', { onUnauthorized })
   const [input, setInput] = useState('')
   const [err, setErr] = useState('')
   const blocked = data?.blocked ?? []
+  const prefixCounts = data?.blocked_prefixes ?? {}
 
   const save = async (countries: string[]) => {
     setErr('')
@@ -159,7 +218,7 @@ function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUn
     <Card>
       <CardHeader
         title="Country blocking"
-        sub="inbound sources from these countries are blocked on sight (when enforcement is on)"
+        sub="these countries' networks are dropped on the way in (when enforcement is on) — established connections you opened yourself stay untouched"
       />
       <div className="flex flex-col gap-2.5 px-4 pb-4">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -173,6 +232,11 @@ function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUn
               style={{ background: 'var(--crit-tint)', color: 'var(--crit)' }}
             >
               {countryFlag(c)} {countryName(c)}
+              {prefixCounts[c] > 0 && (
+                <span className="font-mono opacity-75" title={`${prefixCounts[c]} networks loaded into the firewall`}>
+                  · {formatCount(prefixCounts[c])} nets
+                </span>
+              )}
               {canWrite && (
                 <button
                   onClick={() => save(blocked.filter((x) => x !== c))}

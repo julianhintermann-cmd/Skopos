@@ -2,6 +2,8 @@ package firewall
 
 import (
 	"context"
+	"net/netip"
+	"sort"
 	"sync"
 )
 
@@ -13,6 +15,8 @@ type MemoryBackend struct {
 	baseEnsured    int
 	reconcileCalls int
 	current        []Rule
+	country        []netip.Prefix
+	countryCalls   int
 }
 
 // NewMemoryBackend returns a memory backend. available controls whether it
@@ -56,4 +60,29 @@ func (m *MemoryBackend) ReconcileCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.reconcileCalls
+}
+
+// ReconcileCountry implements Backend.
+func (m *MemoryBackend) ReconcileCountry(_ context.Context, prefixes []netip.Prefix) error {
+	sorted := append([]netip.Prefix(nil), prefixes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
+	m.mu.Lock()
+	m.country = sorted
+	m.countryCalls++
+	m.mu.Unlock()
+	return nil
+}
+
+// CurrentCountry returns the last reconciled country prefixes (sorted).
+func (m *MemoryBackend) CurrentCountry() []netip.Prefix {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]netip.Prefix(nil), m.country...)
+}
+
+// CountryCalls returns how many times ReconcileCountry was called.
+func (m *MemoryBackend) CountryCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.countryCalls
 }

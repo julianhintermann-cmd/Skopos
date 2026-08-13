@@ -86,12 +86,13 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
   )
 }
 
-export function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'accent' | 'good' | 'warn' }) {
+export function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'accent' | 'good' | 'warn' | 'crit' }) {
   const style = {
     neutral: { color: 'var(--muted)', background: 'var(--surface-2)' },
     accent: { color: 'var(--accent-strong)', background: 'var(--accent-tint)' },
     good: { color: 'var(--good)', background: 'var(--good-tint)' },
     warn: { color: 'var(--warn)', background: 'var(--warn-tint)' },
+    crit: { color: 'var(--crit)', background: 'var(--crit-tint)' },
   }[tone]
   return (
     <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium" style={style}>

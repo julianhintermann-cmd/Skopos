@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/api"
+	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
 	"github.com/julianhintermann-cmd/skopos/internal/cloudflare"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/detect"
@@ -126,8 +127,10 @@ func (a *App) Run(ctx context.Context) error {
 	}, backend, st, a.clock)
 	fw.SetLogger(a.warnf)
 
-	degraded := a.cfg.Firewall.Enforcement == "enforce" && !backend.Available()
-	if degraded {
+	enforceOn := a.cfg.Firewall.Enforcement == "enforce"
+	backendAvail := backend.Available()
+	enforceActive := enforceOn && backendAvail
+	if enforceOn && !backendAvail {
 		a.log.Warn("firewall backend unavailable — running monitor-only", "backend", backend.Name())
 		dispatcher.System(ctx, model.SeverityWarning, "Skopos firewall degraded",
 			"The firewall backend is unavailable; Skopos is monitoring but not enforcing blocks.")
@@ -138,8 +141,25 @@ func (a *App) Run(ctx context.Context) error {
 	// Apply static blocklist from config.
 	a.applyStaticBlocks(ctx, fw)
 
+	// Preventive country blocking: keep the kernel's country sets in sync
+	// with the blocked-country list and the GeoIP database.
+	countryEnf := newCountryEnforcer(geo, countries, fw, a.logf, a.warnf)
+
+	// Blocked traffic is still captured — the tap sits before netfilter — so
+	// tally those packets per block: live proof the firewall works, and in
+	// observe mode a preview of what enforcing would drop.
+	watch := blockwatch.New()
+	if blocks, err := st.ActiveBlocks(ctx); err == nil {
+		watch.Update(blocks)
+	}
+
 	// --- policy ------------------------------------------------------------
 	pol := policyFromConfig(a.cfg, classifier, st, dispatcher, fw, a.clock)
+	if enforceActive {
+		// Sources the kernel is already dropping raise no further alerts;
+		// their ongoing attempts show in the per-block counters instead.
+		pol.SetAlreadyBlocked(watch.Contains)
+	}
 	pol.SetLogger(a.warnf)
 
 	// --- detectors + observers --------------------------------------------
@@ -157,17 +177,23 @@ func (a *App) Run(ctx context.Context) error {
 	observers := a.buildObservers(a.cfg, classifier, st, pol, live)
 	// Blocked-country watch: reactive blocking of inbound sources from listed
 	// countries, throttled per source; policy still owns cooldown/allowlist.
+	// It backs up the preventive sets — and carries the feature alone while
+	// the GeoIP database is still downloading.
 	observers.all = append(observers.all, detect.NewCountryBlock(detect.CountryBlockConfig{
 		Lookup:     geo.Lookup,
 		Blocked:    countries.Contains,
 		Empty:      countries.Empty,
 		IsInternal: classifier.Internal,
 	}, pol, a.clock))
+	// Per-block attempt tallies from the same packet stream.
+	observers.all = append(observers.all, watch)
 
 	// Tee the flow sink: every flushed batch is written to the store as before
 	// and, in addition, projected for the live view — streamed to dashboards
 	// over SSE and kept in a bounded ring so a freshly opened view back-fills.
-	liveSink := newLiveFlows(st, nil)
+	// Flows touching an active block are flagged so the live view can say
+	// "arriving, but dropped" instead of looking like a firewall failure.
+	liveSink := newLiveFlows(st, nil, watch.Contains)
 
 	agg := flow.New(flow.Config{
 		Classifier: classifier,
@@ -182,15 +208,17 @@ func (a *App) Run(ctx context.Context) error {
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
-		Live:       live,
-		LiveFlows:  liveSink,
-		Cloudflare: cf,
-		Speedtest:  runSpeedtest,
-		GeoIP:      geo,
-		Countries:  countries,
-		Reputation: rep,
-		Clock:      a.clock,
-		Health:     a.healthFunc(st, backend, fw),
+		Live:              live,
+		LiveFlows:         liveSink,
+		Cloudflare:        cf,
+		Speedtest:         runSpeedtest,
+		GeoIP:             geo,
+		Countries:         countries,
+		Reputation:        rep,
+		BlockStats:        watch.Stats,
+		CountryBlockStats: countryEnf.Stats,
+		Clock:             a.clock,
+		Health:            a.healthFunc(st, backend, fw),
 	})
 	if err != nil {
 		return fmt.Errorf("building API: %w", err)
@@ -215,6 +243,8 @@ func (a *App) Run(ctx context.Context) error {
 
 	spawn("aggregator", func() { _ = agg.Run(runCtx) })
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })
+	spawn("country-enforcer", func() { countryEnf.run(runCtx) })
+	spawn("blockwatch", func() { a.refreshBlockWatch(runCtx, st, watch) })
 	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {
 		spawn("devices", func() { _ = observers.deviceTracker.Run(runCtx) })
@@ -258,6 +288,24 @@ func (a *App) Run(ctx context.Context) error {
 	cancel()
 	wg.Wait()
 	return nil
+}
+
+// refreshBlockWatch keeps the block watcher's matcher aligned with the stored
+// active blocks. Five seconds of lag is invisible next to the policy cooldown
+// and keeps the packet path free of database reads.
+func (a *App) refreshBlockWatch(ctx context.Context, st *store.Store, w *blockwatch.Watch) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if blocks, err := st.ActiveBlocks(ctx); err == nil {
+				w.Update(blocks)
+			}
+		}
+	}
 }
 
 // broadcastLive pushes the current throughput snapshot to dashboards once a

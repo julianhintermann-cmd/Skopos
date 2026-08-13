@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **World map** — the Traffic view renders the country statistics as a
   choropleth (outbound/inbound toggle), volume-scaled in the accent hue.
+- **Preventive country blocking** — listed countries' networks are enumerated
+  from the GeoIP database and loaded into dedicated kernel sets, so their
+  traffic is dropped on arrival instead of only after a source has already
+  appeared once. Inbound-only behind a conntrack exemption: connections your
+  own devices open toward those countries keep working. The country chips
+  show how many networks are loaded; the reactive block-on-sight detector
+  stays as backstop while the database is still downloading.
+- **Proof the firewall works** — every block now counts the packets seen
+  from/to its prefix ("Dropped" in enforce mode, "Would drop" in observe
+  mode, with the last-attempt time), and live-view flows touching an active
+  block carry a `blocked` badge. The capture tap sits before netfilter, so
+  blocked traffic remains visible while the kernel discards it — previously
+  that read as "blocking doesn't work".
+
+### Changed
+
+- **Observe mode is now unmistakable.** The Firewall view banners when
+  enforcement is off ("nothing is actually blocked") or the backend is
+  unavailable, the Overview tile turns amber in observe mode, and alerts for
+  sources the kernel already drops are suppressed — their ongoing attempts
+  show in the per-block counters instead of re-alerting as if the block had
+  failed.
 
 ### Fixed
 

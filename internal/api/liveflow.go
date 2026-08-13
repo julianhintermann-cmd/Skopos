@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
@@ -23,11 +24,15 @@ type LiveFlow struct {
 	Bytes   uint64    `json:"bytes"`
 	Packets uint64    `json:"packets"`
 	DstName string    `json:"dst_name,omitempty"`
+	// Blocked marks a flow touching an actively blocked prefix. The capture
+	// tap sees such packets before netfilter drops them, so they still appear
+	// here — flagged, so the view can say "arriving, but dropped".
+	Blocked bool `json:"blocked,omitempty"`
 }
 
-// NewLiveFlow projects a model.Flow onto the wire shape.
-func NewLiveFlow(f model.Flow) LiveFlow {
-	return LiveFlow{
+// NewLiveFlow projects a model.Flow onto the wire shape. blocked may be nil.
+func NewLiveFlow(f model.Flow, blocked func(netip.Addr) bool) LiveFlow {
+	lf := LiveFlow{
 		Start:   f.Start,
 		End:     f.End,
 		Src:     f.SrcIP.String(),
@@ -40,13 +45,17 @@ func NewLiveFlow(f model.Flow) LiveFlow {
 		Packets: f.Packets(),
 		DstName: f.DstName,
 	}
+	if blocked != nil && (blocked(f.SrcIP) || blocked(f.DstIP)) {
+		lf.Blocked = true
+	}
+	return lf
 }
 
-// NewLiveFlows projects a batch, preserving order.
-func NewLiveFlows(flows []model.Flow) []LiveFlow {
+// NewLiveFlows projects a batch, preserving order. blocked may be nil.
+func NewLiveFlows(flows []model.Flow, blocked func(netip.Addr) bool) []LiveFlow {
 	out := make([]LiveFlow, len(flows))
 	for i, f := range flows {
-		out[i] = NewLiveFlow(f)
+		out[i] = NewLiveFlow(f, blocked)
 	}
 	return out
 }

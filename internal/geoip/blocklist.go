@@ -25,8 +25,9 @@ var isoCode = regexp.MustCompile(`^[A-Z]{2}$`)
 type Blocklist struct {
 	ks KeyStore
 
-	mu    sync.RWMutex
-	codes map[string]bool
+	mu       sync.RWMutex
+	codes    map[string]bool
+	onChange func()
 }
 
 // NewBlocklist loads the persisted list (an empty one on first run).
@@ -100,6 +101,19 @@ func (b *Blocklist) Set(codes []string) error {
 	}
 	b.mu.Lock()
 	b.codes = clean
+	notify := b.onChange
 	b.mu.Unlock()
+	if notify != nil {
+		notify()
+	}
 	return nil
+}
+
+// SetOnChange registers a callback invoked after every successful Set. The
+// firewall's country enforcer hooks in here so the kernel's preventive sets
+// follow the list without polling.
+func (b *Blocklist) SetOnChange(f func()) {
+	b.mu.Lock()
+	b.onChange = f
+	b.mu.Unlock()
 }

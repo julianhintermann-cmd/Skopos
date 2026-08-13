@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
@@ -227,6 +228,15 @@ func (s *Server) handleAckAlert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// blockRow is a block plus its observed attempt tally. The capture tap sees
+// packets before netfilter drops them, so attempts keep counting while a
+// block works — that is the proof it works, not a sign it doesn't.
+type blockRow struct {
+	model.Block
+	Attempts    uint64     `json:"attempts"`
+	LastAttempt *time.Time `json:"last_attempt,omitempty"`
+}
+
 func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()
@@ -235,7 +245,30 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
+	var stats map[string]blockwatch.Stat
+	if s.deps.BlockStats != nil {
+		stats = s.deps.BlockStats()
+	}
+	rows := make([]blockRow, 0, len(blocks))
+	for _, b := range blocks {
+		row := blockRow{Block: b}
+		if st, ok := stats[b.Prefix.String()]; ok {
+			row.Attempts = st.Attempts
+			if !st.Last.IsZero() {
+				t := st.Last
+				row.LastAttempt = &t
+			}
+		}
+		rows = append(rows, row)
+	}
+	// Enforcement state rides along so the view qualifying these blocks is
+	// atomic with them: "recorded" and "actually dropped" are different
+	// claims, and the UI must never show the second while the first is true.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"blocks":      rows,
+		"enforcement": s.deps.Config.Firewall.Enforcement,
+		"enforcing":   s.deps.Firewall.Enforcing(),
+	})
 }
 
 func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {

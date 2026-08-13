@@ -45,6 +45,9 @@ type Service struct {
 	log     func(string, ...any)
 
 	mu sync.Mutex
+
+	countryMu       sync.Mutex
+	countryPrefixes []netip.Prefix
 }
 
 // NewService creates a firewall service.
@@ -154,6 +157,29 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.backend.Reconcile(ctx, rules)
+}
+
+// SetCountryPrefixes replaces the preventive country-block set. In observe
+// mode (or with the backend unavailable) the list is only remembered, so the
+// UI can still show what enforcement would cover; the kernel is untouched.
+func (s *Service) SetCountryPrefixes(ctx context.Context, prefixes []netip.Prefix) error {
+	s.countryMu.Lock()
+	s.countryPrefixes = append([]netip.Prefix(nil), prefixes...)
+	s.countryMu.Unlock()
+	if !s.Enforcing() {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.backend.ReconcileCountry(ctx, prefixes)
+}
+
+// CountryPrefixCount reports how many prefixes preventive country blocking
+// currently covers (remembered even in observe mode).
+func (s *Service) CountryPrefixCount() int {
+	s.countryMu.Lock()
+	defer s.countryMu.Unlock()
+	return len(s.countryPrefixes)
 }
 
 // rulesFor translates stored blocks into kernel rules, choosing the action by

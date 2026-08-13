@@ -33,7 +33,12 @@ export function Overview({ onUnauthorized }: { onUnauthorized: () => void }) {
           value={String(data.unacked_alerts)}
           tone={data.unacked_alerts > 0 ? 'crit' : 'good'}
         />
-        <StatTile label="Enforcement" value={data.enforcing ? 'On' : 'Observe'} tone={data.enforcing ? 'good' : 'neutral'} />
+        <StatTile
+          label="Enforcement"
+          value={data.enforcing ? 'On' : 'Observe'}
+          tone={data.enforcing ? 'good' : 'warn'}
+          hint={data.enforcing ? undefined : 'blocks are recorded, not applied'}
+        />
       </div>
 
       <Card>

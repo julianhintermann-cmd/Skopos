@@ -187,6 +187,32 @@ view; throughput is pushed once a second so open dashboards never busy-poll.
 - **Frontend:** React + TypeScript + Vite, uPlot for time series.
 - **Images:** `linux/amd64` and `linux/arm64`, on GHCR and Docker Hub.
 
+### How blocking works
+
+Four things about blocking that save you a support ticket:
+
+- **Observe first.** The shipping default is `firewall.enforcement: observe`:
+  every block is recorded, counted and shown, but **no packet is dropped**
+  until you deliberately set `enforce`. The Firewall view carries a banner
+  while you're in observe mode, and each block shows what it *would have*
+  dropped so you can arm enforcement with evidence.
+- **Blocked traffic stays visible — by design.** The capture tap sits on the
+  wire, *before* netfilter. Packets from a blocked address still appear in the
+  Live view (tagged `blocked`) and still tick the block's "Dropped" counter
+  while the kernel discards them before any service sees them. Seeing arrivals
+  from a blocked IP is the block *working*, not failing: what disappears is
+  the response — connections never establish.
+- **Scope.** Rules live in the kernel of the machine running Skopos
+  (`inet skopos` table). They protect that machine — which is exactly where
+  your port forwards point — plus anything it routes. Traffic between other
+  LAN devices and the internet flows through your router, not through Skopos,
+  and is out of its reach.
+- **Countries are blocked preventively.** Listed countries' networks (from the
+  GeoIP database) are loaded into the kernel and dropped on the way in;
+  established connections your own devices opened stay untouched, so blocking
+  a country never cuts off updates or CDNs you actively use. Per-IP blocks,
+  in contrast, are absolute in both directions.
+
 ## Security
 
 Skopos captures traffic and manages a firewall, so it asks for real privileges —

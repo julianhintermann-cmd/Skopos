@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 )
@@ -27,6 +28,12 @@ const (
 	setDrop6   = "drop6"
 	setReject4 = "reject4"
 	setReject6 = "reject6"
+
+	// Preventive country blocking: whole countries' prefixes, dropped on the
+	// way in only (after a ct accept for established flows, so the NAS can
+	// still deliberately reach those countries).
+	setCountry4 = "country_drop4"
+	setCountry6 = "country_drop6"
 )
 
 // nftBackend enforces blocks through a dedicated inet table via netlink.
@@ -104,6 +111,24 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 		b.sets[name] = set
 	}
 
+	// Country sets: intervals without timeout — the enforcer replaces them
+	// wholesale when the list or the GeoIP database changes.
+	for name, keyType := range map[string]nftables.SetDatatype{
+		setCountry4: nftables.TypeIPAddr,
+		setCountry6: nftables.TypeIP6Addr,
+	} {
+		set := &nftables.Set{
+			Table:    table,
+			Name:     name,
+			KeyType:  keyType,
+			Interval: true,
+		}
+		if err := c.AddSet(set, nil); err != nil {
+			return fmt.Errorf("adding set %s: %w", name, err)
+		}
+		b.sets[name] = set
+	}
+
 	// Chains hooked at input, forward and output. Blocks act in both
 	// directions (D4): the NAS also stops talking to a blocked peer.
 	input := c.AddChain(&nftables.Chain{
@@ -126,7 +151,36 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	addMatch(c, table, forward, false)
 	addMatch(c, table, output, false)
 
+	// Country blocking comes after the per-IP rules and behind a conntrack
+	// accept: per-IP blocks are absolute in both directions, while country
+	// prefixes only stop unsolicited inbound traffic — replies to connections
+	// the LAN opened itself (updates, feeds, a CDN that happens to sit there)
+	// keep flowing. Rule order within a chain is the order added here.
+	for _, chain := range []*nftables.Chain{input, forward} {
+		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: ctEstablishedAccept()})
+		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(setCountry4, false, true, false)})
+		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(setCountry6, true, true, false)})
+	}
+
 	return c.Flush()
+}
+
+// ctEstablishedAccept builds "ct state established,related accept". Accept
+// only ends this chain — other tables still see the packet — so it merely
+// exempts established flows from the country rules that follow. On a kernel
+// without conntrack the state reads as untracked and the exemption never
+// matches, which fails closed: country blocking then affects both directions.
+func ctEstablishedAccept() []expr.Any {
+	return []expr.Any{
+		&expr.Ct{Register: 1, Key: expr.CtKeySTATE},
+		&expr.Bitwise{
+			SourceRegister: 1, DestRegister: 1, Len: 4,
+			Mask: binaryutil.NativeEndian.PutUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED),
+			Xor:  binaryutil.NativeEndian.PutUint32(0),
+		},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{0, 0, 0, 0}},
+		&expr.Verdict{Kind: expr.VerdictAccept},
+	}
 }
 
 // addMatch appends rules to chain matching either the source (bySrc=true) or
@@ -240,6 +294,83 @@ func (b *nftBackend) Reconcile(_ context.Context, desired []Rule) error {
 				return fmt.Errorf("populating set %s: %w", name, err)
 			}
 		}
+	}
+	return c.Flush()
+}
+
+// countryChunk is how many prefixes go into one netlink message. Each prefix
+// becomes two set elements (interval start + exclusive end) of a few dozen
+// bytes; a netlink attribute caps at 64 KiB, so 400 prefixes leaves ample
+// headroom. Flushing every few messages keeps single batches small enough for
+// the socket buffer while a whole country streams in.
+const (
+	countryChunk      = 400
+	countryFlushEvery = 8
+)
+
+// ReconcileCountry replaces the country sets with the given prefixes. The
+// first batch carries the set flushes plus the first chunks, so the swap is
+// near-atomic; a country's full list converges over a few batches.
+func (b *nftBackend) ReconcileCountry(_ context.Context, prefixes []netip.Prefix) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.table == nil {
+		return fmt.Errorf("nftables: EnsureBase not called")
+	}
+	c, err := nftables.New()
+	if err != nil {
+		return err
+	}
+
+	for _, name := range []string{setCountry4, setCountry6} {
+		c.FlushSet(b.sets[name])
+	}
+
+	pending := map[string][]nftables.SetElement{}
+	queued := 0
+	queue := func() error {
+		for name, els := range pending {
+			if len(els) == 0 {
+				continue
+			}
+			if err := c.SetAddElements(b.sets[name], els); err != nil {
+				return fmt.Errorf("populating set %s: %w", name, err)
+			}
+			queued++
+		}
+		pending = map[string][]nftables.SetElement{}
+		return nil
+	}
+
+	count := 0
+	for _, p := range prefixes {
+		if !p.IsValid() || p.Bits() == 0 {
+			continue // never a whole address family
+		}
+		name := setCountry4
+		if p.Addr().Is6() {
+			name = setCountry6
+		}
+		start, end := intervalBounds(p)
+		pending[name] = append(pending[name],
+			nftables.SetElement{Key: start},
+			nftables.SetElement{Key: end, IntervalEnd: true},
+		)
+		if count++; count%countryChunk == 0 {
+			if err := queue(); err != nil {
+				return err
+			}
+			if queued >= countryFlushEvery {
+				if err := c.Flush(); err != nil {
+					return fmt.Errorf("flushing country batch: %w", err)
+				}
+				queued = 0
+			}
+		}
+	}
+	if err := queue(); err != nil {
+		return err
 	}
 	return c.Flush()
 }

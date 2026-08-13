@@ -112,9 +112,11 @@ detection:
 # Firewall — blocking behaviour (nftables backend)
 # -----------------------------------------------------------------------------
 firewall:
-  # observe = log every block decision but touch nothing (shipping default).
-  # enforce = actually apply blocks. Arm this deliberately after watching the
-  # observe log; the default gateway is always protected from blocking.
+  # observe = record every block decision but drop NOTHING (shipping default):
+  # traffic from "blocked" addresses keeps flowing, the UI only counts what a
+  # block would have dropped. enforce = actually apply blocks in the kernel.
+  # Arm this deliberately once the observe numbers look right; the default
+  # gateway is always protected from blocking.
   enforcement: observe
   backend: nftables
   block_ttl: 24h         # auto-block lifetime; expires in-kernel. 0 = permanent

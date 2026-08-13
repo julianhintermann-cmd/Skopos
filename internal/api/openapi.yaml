@@ -191,8 +191,14 @@ paths:
   /api/blocks:
     get:
       summary: Active firewall blocks
+      description: >
+        Each block carries `attempts`/`last_attempt` — packets seen from or to
+        the blocked prefix since start (capture taps before netfilter, so these
+        are the drops in enforce mode, the would-be drops in observe mode).
+        The response's `enforcement` ("observe"/"enforce") and `enforcing`
+        (backend actually armed) qualify whether blocks are applied at all.
       responses:
-        "200": { description: Blocks }
+        "200": { description: Blocks with enforcement state }
     post:
       summary: Block an IP or CIDR
       requestBody:
@@ -308,6 +314,38 @@ paths:
       responses:
         "200": { description: The new measurement }
         "502": { description: Measurement failed }
+  /api/geoip/summary:
+    get:
+      summary: Traffic by country plus the blocked-country list
+      description: >
+        `out`/`in` aggregate the window's external traffic by country.
+        `blocked` is the operator's country block list; `blocked_prefixes`
+        reports how many prefixes preventive blocking has loaded per listed
+        country (empty until the GeoIP database is available).
+      parameters:
+        - { name: window, in: query, schema: { type: string }, description: "duration like 24h" }
+      responses:
+        "200": { description: Country summary }
+  /api/geoip/blocked:
+    post:
+      summary: Replace the blocked-country list
+      description: >
+        ISO 3166-1 alpha-2 codes. With enforcement on, the listed countries'
+        prefixes are loaded into the kernel (preventive) and inbound sources
+        are additionally blocked on sight while the database is still
+        downloading. Requires write scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [countries]
+              properties:
+                countries: { type: array, items: { type: string } }
+      responses:
+        "200": { description: New list }
+        "400": { description: Invalid country code }
 components:
   securitySchemes:
     sessionCookie:

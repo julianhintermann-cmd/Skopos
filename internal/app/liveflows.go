@@ -1,6 +1,7 @@
 package app
 
 import (
+	"net/netip"
 	"sort"
 	"sync"
 
@@ -25,15 +26,16 @@ const liveRingSize = 400
 // a freshly opened live view starts populated instead of waiting for the next
 // flush. It satisfies flow.FlowSink and api.LiveFlowProvider.
 type liveFlows struct {
-	next flow.FlowSink
-	hub  eventPublisher
+	next    flow.FlowSink
+	hub     eventPublisher
+	blocked func(netip.Addr) bool // may be nil
 
 	mu   sync.Mutex
 	ring []api.LiveFlow // newest last
 }
 
-func newLiveFlows(next flow.FlowSink, hub eventPublisher) *liveFlows {
-	return &liveFlows{next: next, hub: hub, ring: make([]api.LiveFlow, 0, liveRingSize)}
+func newLiveFlows(next flow.FlowSink, hub eventPublisher, blocked func(netip.Addr) bool) *liveFlows {
+	return &liveFlows{next: next, hub: hub, blocked: blocked, ring: make([]api.LiveFlow, 0, liveRingSize)}
 }
 
 // WriteFlows records the live projection first (so the live view reflects
@@ -41,7 +43,7 @@ func newLiveFlows(next flow.FlowSink, hub eventPublisher) *liveFlows {
 // forwards the batch to the wrapped sink.
 func (l *liveFlows) WriteFlows(flows []model.Flow) error {
 	if len(flows) > 0 {
-		batch := api.NewLiveFlows(flows)
+		batch := api.NewLiveFlows(flows, l.blocked)
 
 		l.mu.Lock()
 		l.ring = append(l.ring, batch...)

@@ -65,6 +65,9 @@ export interface LiveFlow {
   bytes: number
   packets: number
   dst_name?: string
+  // Touches an actively blocked prefix: capture sees the packets arrive, the
+  // kernel drops them right after.
+  blocked?: boolean
 }
 
 export interface Talker {
@@ -105,6 +108,19 @@ export interface Block {
   Created: string
   Expires: string | null
   Active: boolean
+  // Packets seen from/to this prefix since start: proof of drops when
+  // enforcing, a preview of them in observe mode.
+  attempts: number
+  last_attempt?: string
+}
+
+export interface BlocksResponse {
+  blocks: Block[] | null
+  // "observe" or "enforce" from the config — with "observe", blocks are
+  // recorded but nothing is dropped.
+  enforcement: string
+  // True only when enforce is set AND the nftables backend is usable.
+  enforcing: boolean
 }
 
 export interface Device {
@@ -156,6 +172,9 @@ export interface GeoIPSummary {
   out: CountryStat[]
   in: CountryStat[]
   blocked: string[]
+  // Prefixes loaded into the kernel per blocked country (empty until the
+  // GeoIP database is downloaded).
+  blocked_prefixes?: Record<string, number>
 }
 
 // countryFlag renders an ISO 3166-1 alpha-2 code as its emoji flag.

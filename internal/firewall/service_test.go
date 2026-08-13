@@ -156,3 +156,48 @@ func TestUnblockRemovesAndReconciles(t *testing.T) {
 		t.Errorf("kernel should have no rules after unblock, got %d", len(backend.Current()))
 	}
 }
+
+func TestSetCountryPrefixesEnforced(t *testing.T) {
+	backend := NewMemoryBackend(true)
+	svc, _ := newTestService(t, baseConfig(true), backend)
+	ctx := context.Background()
+
+	prefixes := []netip.Prefix{
+		netip.MustParsePrefix("5.0.0.0/8"),
+		netip.MustParsePrefix("2a00::/16"),
+	}
+	if err := svc.SetCountryPrefixes(ctx, prefixes); err != nil {
+		t.Fatal(err)
+	}
+	if got := backend.CurrentCountry(); len(got) != 2 {
+		t.Fatalf("kernel country prefixes = %d, want 2", len(got))
+	}
+	if svc.CountryPrefixCount() != 2 {
+		t.Errorf("CountryPrefixCount = %d, want 2", svc.CountryPrefixCount())
+	}
+
+	// Clearing propagates too.
+	if err := svc.SetCountryPrefixes(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := backend.CurrentCountry(); len(got) != 0 {
+		t.Errorf("kernel country prefixes after clear = %d, want 0", len(got))
+	}
+}
+
+func TestSetCountryPrefixesObserveOnlyRemembers(t *testing.T) {
+	backend := NewMemoryBackend(true)
+	svc, _ := newTestService(t, baseConfig(false), backend)
+	ctx := context.Background()
+
+	if err := svc.SetCountryPrefixes(ctx, []netip.Prefix{netip.MustParsePrefix("5.0.0.0/8")}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.CountryCalls() != 0 {
+		t.Error("observe mode must not touch the kernel")
+	}
+	// Remembered anyway, so the UI can show coverage before arming.
+	if svc.CountryPrefixCount() != 1 {
+		t.Errorf("CountryPrefixCount = %d, want 1", svc.CountryPrefixCount())
+	}
+}

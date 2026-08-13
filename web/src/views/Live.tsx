@@ -223,7 +223,16 @@ function FlowRow({ row, names }: { row: Row; names: Map<string, string> }) {
       <Cell right>{formatBytes(row.bytes)}</Cell>
       <Cell right muted>{formatCount(row.packets)}</Cell>
       <Cell>
-        <DirectionBadge dir={row.dir} />
+        <span className="inline-flex items-center gap-1">
+          <DirectionBadge dir={row.dir} />
+          {row.blocked && (
+            <Pill tone="crit">
+              <span title="This peer is actively blocked — the packets arrived at the wire and were dropped by the firewall.">
+                blocked
+              </span>
+            </Pill>
+          )}
+        </span>
       </Cell>
     </tr>
   )
@@ -254,7 +263,8 @@ function FlowCard({ row, names }: { row: Row; names: Map<string, string> }) {
         <span>{clock(row.end)}</span>
         <span>{row.proto}</span>
         <span className="tabnums">{formatBytes(row.bytes)}</span>
-        <span className="ml-auto">
+        <span className="ml-auto inline-flex items-center gap-1">
+          {row.blocked && <Pill tone="crit">blocked</Pill>}
           <DirectionBadge dir={row.dir} />
         </span>
       </div>

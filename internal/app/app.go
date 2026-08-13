@@ -227,6 +227,11 @@ func (a *App) Run(ctx context.Context) error {
 		a.log.Warn("loading known names", "err", err)
 	}
 	observers.all = append(observers.all, resolver)
+	// The same passive names inventory the device list: a printer announcing
+	// itself over mDNS is filed as "printer.local", not as a bare MAC.
+	if observers.deviceTracker != nil {
+		observers.deviceTracker.SetHostnameLookup(resolver.Lookup)
+	}
 
 	// --- runtime settings ---------------------------------------------------
 	// The YAML is the baseline; the dashboard layers overrides on top and both

@@ -32,11 +32,17 @@ func (d *NewDevice) Report(mac, ip string) {
 	if a, err := netip.ParseAddr(ip); err == nil {
 		src = a
 	}
+	// The address is what an operator recognises; the MAC is the identity the
+	// inventory keys on, so both belong in the alert — the address first.
+	what := ip
+	if what == "" {
+		what = mac
+	}
 	d.sink.Raise(Finding{
 		Detector: "new_device",
 		Source:   src,
 		Severity: d.cfg.Severity,
-		Title:    fmt.Sprintf("New device on the network: %s", mac),
+		Title:    fmt.Sprintf("New device on the network: %s", what),
 		Detail:   fmt.Sprintf("first seen at %s (MAC %s)", ip, mac),
 	})
 }

@@ -178,6 +178,7 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/devices/{mac}/wake", s.requireWrite(http.HandlerFunc(s.handleWakeDevice)))
 	s.mux.Handle("POST /api/devices/{mac}/policy", s.requireWrite(http.HandlerFunc(s.handleSetDevicePolicy)))
 	s.mux.Handle("POST /api/devices/{mac}/presence", s.requireWrite(http.HandlerFunc(s.handleSetDevicePresence)))
+	s.mux.Handle("POST /api/devices/forget", s.requireWrite(http.HandlerFunc(s.handleForgetDevices)))
 	s.mux.Handle("POST /api/speedtest/run", s.requireWrite(http.HandlerFunc(s.handleSpeedtestRun)))
 	s.mux.Handle("POST /api/geoip/blocked", s.requireWrite(http.HandlerFunc(s.handleSetBlockedCountries)))
 	s.mux.Handle("POST /api/auth/totp/setup", s.requireWrite(http.HandlerFunc(s.handleTOTPSetup)))

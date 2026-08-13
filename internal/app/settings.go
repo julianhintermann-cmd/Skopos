@@ -140,14 +140,19 @@ func (a *App) applyDevicePoliciesOnce(ctx context.Context, st *store.Store, fw *
 	}
 	rules := make([]firewall.DeviceRule, 0, len(devices))
 	for _, d := range devices {
-		if !d.IP.IsValid() {
-			continue
-		}
+		var policy firewall.DevicePolicy
 		switch d.Policy {
 		case model.PolicyLANOnly:
-			rules = append(rules, firewall.DeviceRule{Addr: d.IP, Policy: firewall.DeviceLANOnly})
+			policy = firewall.DeviceLANOnly
 		case model.PolicyQuarantine:
-			rules = append(rules, firewall.DeviceRule{Addr: d.IP, Policy: firewall.DeviceQuarantine})
+			policy = firewall.DeviceQuarantine
+		default:
+			continue
+		}
+		// Every address the device answers on, not just its IPv4 one: a
+		// quarantine with a working IPv6 path is not a quarantine.
+		for _, addr := range d.Addrs() {
+			rules = append(rules, firewall.DeviceRule{Addr: addr, Policy: policy})
 		}
 	}
 	if err := fw.SetDevicePolicies(ctx, rules); err != nil {

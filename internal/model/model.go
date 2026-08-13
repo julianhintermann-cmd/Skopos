@@ -138,7 +138,11 @@ func (b Block) Expired(now time.Time) bool {
 type Device struct {
 	ID  int64
 	MAC string
+	// IP and IP6 are the device's addresses, one per family. A dual-stack
+	// machine is one device with two addresses, not two devices — and a
+	// firewall rule that covers only one of them is not a rule at all.
 	IP  netip.Addr
+	IP6 netip.Addr
 	// Label is an operator-assigned name. It is set only through the UI and is
 	// never overwritten by capture, so it takes precedence over the discovered
 	// hostname wherever a device needs a human-readable name.
@@ -189,6 +193,30 @@ func (d Device) Name() string {
 		return d.Label
 	}
 	return d.Hostname
+}
+
+// PrimaryAddr is the address that stands for the device wherever exactly one
+// is needed — its traffic history, for instance. IPv4 wins: on a home network
+// it is the address the operator recognises, and the rollups are keyed by it.
+func (d Device) PrimaryAddr() netip.Addr {
+	if d.IP.IsValid() {
+		return d.IP
+	}
+	return d.IP6
+}
+
+// Addrs returns every address the device is known by, for the places that must
+// cover all of them — blocking a quarantined device that still has a working
+// IPv6 path is not a quarantine.
+func (d Device) Addrs() []netip.Addr {
+	var out []netip.Addr
+	if d.IP.IsValid() {
+		out = append(out, d.IP)
+	}
+	if d.IP6.IsValid() {
+		out = append(out, d.IP6)
+	}
+	return out
 }
 
 // CFZone is a Cloudflare zone (a domain) the operator has connected, plus

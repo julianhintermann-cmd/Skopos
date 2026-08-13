@@ -10,14 +10,43 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
+// MaxMACsPerAddress caps how many inventory entries a single IP address may
+// accumulate.
+//
+// One address, one machine — that is what makes a MAC/IP pairing worth
+// recording. Some traffic breaks the assumption: a tunnel or virtual switch
+// that presents synthetic hardware addresses, a relay that re-frames other
+// hosts' packets, or a NIC randomising its MAC. Each sighting then looked like
+// another new neighbour, and a single address could grow twenty inventory
+// rows and twenty "new device" alerts in an afternoon. Past this many, the
+// address has demonstrated that its link-layer address means nothing, and
+// further sightings stop creating entries. Devices already on record keep
+// updating.
+const MaxMACsPerAddress = 4
+
 // UpsertDevice records or refreshes a LAN device by MAC. It returns whether
 // the device was newly created, which the new-device detector uses to decide
 // whether to raise an alert. First-seen time is preserved across updates.
+//
+// The address is filed by family, so a dual-stack device keeps both without
+// either overwriting the other, and a link-local IPv6 address never displaces
+// a routable one.
 //
 // The insert-or-update runs in one transaction with an explicit existence
 // check so "is new" is correct even under a fixed clock (where comparing
 // timestamps would not tell an insert from an update).
 func (s *Store) UpsertDevice(ctx context.Context, mac, ip, hostname, vendor string) (isNew bool, err error) {
+	addr, _ := netip.ParseAddr(ip)
+	addr = addr.Unmap()
+	col := "ip"
+	if addr.IsValid() && addr.Is6() {
+		col = "ip6"
+	}
+	text := ""
+	if addr.IsValid() {
+		text = addr.String()
+	}
+
 	now := toMs(s.now())
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -25,28 +54,45 @@ func (s *Store) UpsertDevice(ctx context.Context, mac, ip, hostname, vendor stri
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var exists bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE mac = ?)`, mac).Scan(&exists)
-	if err != nil {
+	var cur6 string
+	err = tx.QueryRowContext(ctx, `SELECT ip6 FROM devices WHERE mac = ?`, mac).Scan(&cur6)
+	exists := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
 
 	if exists {
+		// A link-local address is real but useless as an identifier: every
+		// interface has one and it says nothing about the network. Keep it
+		// only until something routable turns up.
+		if col == "ip6" && linkLocal(addr) && cur6 != "" && !linkLocalText(cur6) {
+			text = cur6
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE devices SET
-				ip       = CASE WHEN ? != '' THEN ? ELSE ip END,
+				`+col+`  = CASE WHEN ? != '' THEN ? ELSE `+col+` END,
 				hostname = CASE WHEN ? != '' THEN ? ELSE hostname END,
 				vendor   = CASE WHEN ? != '' THEN ? ELSE vendor END,
 				last_seen_ms = ?
 			WHERE mac = ?`,
-			ip, ip, hostname, hostname, vendor, vendor, now, mac); err != nil {
+			text, text, hostname, hostname, vendor, vendor, now, mac); err != nil {
 			return false, err
 		}
 	} else {
+		if text != "" {
+			var claimed int
+			if err := tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM devices WHERE `+col+` = ?`, text).Scan(&claimed); err != nil {
+				return false, err
+			}
+			if claimed >= MaxMACsPerAddress {
+				return false, nil
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO devices (mac, ip, hostname, vendor, first_seen_ms, last_seen_ms)
+			INSERT INTO devices (mac, `+col+`, hostname, vendor, first_seen_ms, last_seen_ms)
 			VALUES (?,?,?,?,?,?)`,
-			mac, ip, hostname, vendor, now, now); err != nil {
+			mac, text, hostname, vendor, now, now); err != nil {
 			return false, err
 		}
 	}
@@ -56,9 +102,48 @@ func (s *Store) UpsertDevice(ctx context.Context, mac, ip, hostname, vendor stri
 	return !exists, nil
 }
 
+func linkLocal(a netip.Addr) bool { return a.IsValid() && a.IsLinkLocalUnicast() }
+
+func linkLocalText(s string) bool {
+	a, err := netip.ParseAddr(s)
+	return err == nil && a.IsLinkLocalUnicast()
+}
+
 // ListDevices returns known devices, most recently seen first.
 func (s *Store) ListDevices(ctx context.Context) ([]model.Device, error) {
 	return s.queryDevices(ctx, `ORDER BY last_seen_ms DESC`)
+}
+
+// ForgetDevices removes inventory entries by MAC and reports how many rows
+// went. Discovery is passive, so a device that is still on the network comes
+// back on its next packet: this clears out entries that never described a
+// device, not the device itself.
+func (s *Store) ForgetDevices(ctx context.Context, macs []string) (int64, error) {
+	if len(macs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var total int64
+	for _, mac := range macs {
+		res, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE mac = ?`, mac)
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // WatchedDevices returns devices with presence tracking enabled.
@@ -68,7 +153,7 @@ func (s *Store) WatchedDevices(ctx context.Context) ([]model.Device, error) {
 
 func (s *Store) queryDevices(ctx context.Context, tail string) ([]model.Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, policy, first_seen_ms, last_seen_ms
+		SELECT id, mac, ip, ip6, label, hostname, vendor, watch_presence, present, policy, first_seen_ms, last_seen_ms
 		FROM devices `+tail)
 	if err != nil {
 		return nil, err
@@ -78,15 +163,16 @@ func (s *Store) queryDevices(ctx context.Context, tail string) ([]model.Device, 
 	var out []model.Device
 	for rows.Next() {
 		var d model.Device
-		var ip string
+		var ip, ip6 string
 		var watch, present int
 		var policy string
 		var first, last int64
-		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &policy, &first, &last); err != nil {
+		if err := rows.Scan(&d.ID, &d.MAC, &ip, &ip6, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &policy, &first, &last); err != nil {
 			return nil, err
 		}
 		d.Policy = model.DevicePolicy(policy)
 		d.IP, _ = netip.ParseAddr(ip)
+		d.IP6, _ = netip.ParseAddr(ip6)
 		d.WatchPresence = watch != 0
 		d.Present = present != 0
 		d.FirstSeen = fromMs(first)
@@ -145,7 +231,8 @@ func (s *Store) DeviceNameByIP(ctx context.Context, ip string) (string, error) {
 	var label, hostname string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT label, hostname FROM devices
-		WHERE ip = ? ORDER BY last_seen_ms DESC LIMIT 1`, ip).Scan(&label, &hostname)
+		WHERE (ip != '' AND ip = ?) OR (ip6 != '' AND ip6 = ?)
+		ORDER BY last_seen_ms DESC LIMIT 1`, ip, ip).Scan(&label, &hostname)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

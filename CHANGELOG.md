@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The device list inventories devices again.** It used to file the
+  link-layer address of any frame whose IP side looked local, so a subnet
+  broadcast became a neighbour called `192.168.1.255 (ff:ff:ff:ff:ff:ff)` and
+  every mDNS or SSDP group got an entry of its own. Group addresses belong to
+  no machine and are now skipped, and the upgrade removes the entries they
+  already left behind — except any you named, restricted or watched, which are
+  kept whatever they look like.
+- **One address no longer grows a dozen entries.** Traffic that presents a
+  fresh hardware address per sighting — a tunnel, a relay re-framing other
+  hosts' packets, a NIC randomising its MAC — used to add an inventory row and
+  a "new device" alert every time. An address that several MACs have claimed
+  has shown that its MAC means nothing, so it stops creating entries, and the
+  list offers to clear out the ones already there.
+- **Dual-stack devices keep both addresses.** IPv4 and IPv6 have separate
+  columns, so a device that last spoke over IPv6 no longer shows
+  `fe80::8f5:45d3:3bc2:b3ea` where its LAN address used to be. A link-local
+  address never displaces a routable one, and a per-device policy now covers
+  both families — a quarantine with a working IPv6 path was not a quarantine.
+- **Capture handles links that are not Ethernet.** On a VPN tunnel, a PPP link
+  or a 6in4 interface there is no Ethernet header, and reading the first
+  fourteen bytes as one invented hardware addresses that never existed. Those
+  interfaces are now parsed as what they carry: bare IP packets, with no MACs.
+
+### Added
+
+- **Devices you can find and tidy.** The list has a search box, shows both of
+  a device's addresses, marks randomised MACs as what they are, and can forget
+  an entry — singly, or all the noise at once after showing you exactly which
+  entries it means. Forgetting is safe: discovery is passive, so anything
+  still on the network is back within seconds.
+- **Hostnames without asking anyone.** Devices that announce themselves over
+  mDNS are inventoried under that name, so the list reads "printer.local"
+  instead of a bare MAC address.
+
 ## [0.3.0] - 2026-08-13
 
 Skopos learns your network's language. Traffic arrives with names instead of

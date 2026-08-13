@@ -54,6 +54,16 @@ func (s *afpacketSource) Run(ctx context.Context, handle func(flow.Packet)) erro
 	tv := unix.Timeval{Sec: 1}
 	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
 
+	// Not every interface speaks Ethernet. VPN tunnels, PPP links and 6in4
+	// interfaces hand us bare IP packets, and reading the first fourteen
+	// bytes of those as "destination MAC, source MAC, ethertype" invents
+	// hardware addresses that never existed — which then land in the device
+	// inventory as phantom neighbours.
+	parse := ParseFrame
+	if !ethernetLink(ifi) {
+		parse = ParseIPPacket
+	}
+
 	buf := make([]byte, s.snaplen)
 	for {
 		if ctx.Err() != nil {
@@ -69,10 +79,17 @@ func (s *afpacketSource) Run(ctx context.Context, handle func(flow.Packet)) erro
 		if n <= 0 {
 			continue
 		}
-		if p, ok := ParseFrame(buf[:n], time.Now()); ok {
+		if p, ok := parse(buf[:n], time.Now()); ok {
 			handle(p)
 		}
 	}
+}
+
+// ethernetLink reports whether frames from this interface carry an Ethernet
+// header. A six-byte hardware address is the giveaway; the loopback device is
+// the exception that has none yet still frames its packets like Ethernet.
+func ethernetLink(ifi *net.Interface) bool {
+	return len(ifi.HardwareAddr) == 6 || ifi.Flags&net.FlagLoopback != 0
 }
 
 // htons converts a uint16 to network byte order.

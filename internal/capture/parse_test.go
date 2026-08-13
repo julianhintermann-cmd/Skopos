@@ -12,8 +12,9 @@ import (
 
 func ethFrame(etherType uint16, payload []byte) []byte {
 	f := make([]byte, 14)
-	// dst MAC 01:02:03:04:05:06, src MAC aa:bb:cc:dd:ee:ff
-	copy(f[0:6], []byte{1, 2, 3, 4, 5, 6})
+	// dst MAC 02:02:03:04:05:06, src MAC aa:bb:cc:dd:ee:ff — both individual
+	// addresses, since group addresses deliberately parse to no MAC at all.
+	copy(f[0:6], []byte{2, 2, 3, 4, 5, 6})
 	copy(f[6:12], []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff})
 	binary.BigEndian.PutUint16(f[12:14], etherType)
 	return append(f, payload...)
@@ -149,5 +150,55 @@ func TestParseRejectsGarbageWithoutPanic(t *testing.T) {
 				t.Errorf("input %d unexpectedly parsed ok", i)
 			}
 		}()
+	}
+}
+
+func TestMACStringRejectsGroupAddresses(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		{"unicast", []byte{0x6c, 0x1f, 0xf7, 0x92, 0x77, 0x71}, "6c:1f:f7:92:77:71"},
+		{"locally administered unicast", []byte{0xde, 0xad, 0xbe, 0xef, 0x00, 0x20}, "de:ad:be:ef:00:20"},
+		{"broadcast", []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, ""},
+		{"ipv4 multicast", []byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb}, ""},
+		{"ipv6 multicast", []byte{0x33, 0x33, 0x00, 0x00, 0x00, 0xfb}, ""},
+		{"spanning tree", []byte{0x01, 0x80, 0xc2, 0x00, 0x00, 0x00}, ""},
+		{"all zero", []byte{0, 0, 0, 0, 0, 0}, ""},
+		{"short", []byte{0x6c, 0x1f}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := macString(tc.in); got != tc.want {
+				t.Errorf("macString(%x) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Tunnels, PPP links and 6in4 interfaces deliver bare IP packets. Reading the
+// first fourteen bytes of those as an Ethernet header invents MAC addresses.
+func TestParseIPPacketHasNoMACs(t *testing.T) {
+	pkt, ok := ParseIPPacket(ipv4(ipProtoTCP, tcp(1234, 443, 0x02)), time.Unix(0, 0))
+	if !ok {
+		t.Fatal("bare IPv4 packet should parse")
+	}
+	if pkt.SrcIP.String() != "192.168.1.10" || pkt.DstIP.String() != "9.9.9.9" {
+		t.Errorf("addresses = %s -> %s", pkt.SrcIP, pkt.DstIP)
+	}
+	if pkt.SrcMAC != "" || pkt.DstMAC != "" {
+		t.Errorf("a link without an Ethernet header has no MACs, got %q/%q", pkt.SrcMAC, pkt.DstMAC)
+	}
+	if pkt.DstPort != 443 {
+		t.Errorf("dst port = %d, want 443", pkt.DstPort)
+	}
+}
+
+func TestParseIPPacketRejectsGarbage(t *testing.T) {
+	for _, in := range [][]byte{nil, {}, {0x00}, {0xff, 0xff, 0xff}} {
+		if _, ok := ParseIPPacket(in, time.Unix(0, 0)); ok {
+			t.Errorf("ParseIPPacket(%x) should not parse", in)
+		}
 	}
 }

@@ -28,6 +28,25 @@ const (
 	ipProtoICMPv6 = 58
 )
 
+// ParseIPPacket parses a bare IP packet — no link-layer header — into a
+// flow.Packet. Point-to-point links (VPN tunnels, PPP, 6in4) carry no Ethernet
+// header at all, so frames from them have no MAC addresses and must not be
+// read as if they had.
+func ParseIPPacket(pkt []byte, ts time.Time) (flow.Packet, bool) {
+	if len(pkt) < 1 {
+		return flow.Packet{}, false
+	}
+	p := flow.Packet{Time: ts, Size: uint64(len(pkt))}
+	switch pkt[0] >> 4 {
+	case 4:
+		return parseIPv4(pkt, p)
+	case 6:
+		return parseIPv6(pkt, p)
+	default:
+		return flow.Packet{}, false
+	}
+}
+
 // ParseFrame parses one Ethernet frame into a flow.Packet. It returns ok=false
 // for frames it cannot or does not need to turn into a flow (ARP, truncated,
 // unsupported ethertype). It never panics on malformed input.
@@ -179,9 +198,20 @@ func enrichTCPPayload(payload []byte, p flow.Packet) flow.Packet {
 	return p
 }
 
+// macString formats a link-layer address that identifies one device.
+//
+// Only individual (unicast) addresses do. The group bit in the first octet
+// marks broadcast and multicast destinations — ff:ff:ff:ff:ff:ff for an ARP
+// query or a subnet broadcast, 01:00:5e:… and 33:33:… for mDNS, SSDP and NDP.
+// Those belong to no single machine, and the all-zero address is a
+// placeholder. They come back empty so the device inventory skips them
+// instead of filing "192.168.1.255 (ff:ff:ff:ff:ff:ff)" as a neighbour.
 func macString(b []byte) string {
 	const hex = "0123456789abcdef"
-	if len(b) < 6 {
+	if len(b) < 6 || b[0]&0x01 != 0 {
+		return ""
+	}
+	if b[0]|b[1]|b[2]|b[3]|b[4]|b[5] == 0 {
 		return ""
 	}
 	out := make([]byte, 0, 17)

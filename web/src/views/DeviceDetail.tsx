@@ -56,7 +56,8 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
               {d.Policy === 'quarantine' && <Pill tone="crit">quarantined</Pill>}
             </div>
             <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-xs" style={{ color: 'var(--muted)' }}>
-              <span>{d.IP}</span>
+              {d.IP && <span>{d.IP}</span>}
+              {d.IP6 && <span>{d.IP6}</span>}
               <span>{d.MAC}</span>
               {d.Vendor && <span>{d.Vendor}</span>}
               {d.Hostname && d.Label && <span>{d.Hostname}</span>}

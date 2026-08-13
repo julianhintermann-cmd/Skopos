@@ -126,7 +126,10 @@ export interface BlocksResponse {
 export interface Device {
   ID: number
   MAC: string
+  // One address per family — a dual-stack machine is one device with two
+  // addresses. Either may be empty.
   IP: string
+  IP6: string
   Label: string
   Hostname: string
   Vendor: string
@@ -142,6 +145,22 @@ export interface Device {
 // then the discovered hostname. Mirrors model.Device.Name on the backend.
 export function deviceName(d: Device): string {
   return d.Label || d.Hostname || ''
+}
+
+// deviceAddr is the address that stands for the device where only one fits.
+// Mirrors model.Device.PrimaryAddr.
+export function deviceAddr(d: Device): string {
+  return d.IP || d.IP6 || ''
+}
+
+// randomizedMAC reports whether a hardware address was made up by its owner
+// rather than assigned to a manufacturer: the second-lowest bit of the first
+// octet is the "locally administered" flag. Phones and laptops set it to
+// avoid being tracked across networks, which is why the same device can show
+// up under several entries — worth saying out loud in the list.
+export function randomizedMAC(mac: string): boolean {
+  const first = parseInt(mac.slice(0, 2), 16)
+  return Number.isFinite(first) && (first & 0x02) !== 0
 }
 
 export interface PortUsage {

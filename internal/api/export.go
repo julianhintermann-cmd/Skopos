@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -12,6 +13,16 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/store"
 	"github.com/julianhintermann-cmd/skopos/internal/wol"
 )
+
+// addrText prints an address, or nothing at all when the device has none of
+// that family. netip's zero value stringifies as "invalid IP", which is a
+// confusing thing to find in a spreadsheet column.
+func addrText(a netip.Addr) string {
+	if !a.IsValid() {
+		return ""
+	}
+	return a.String()
+}
 
 // beginCSV sets download headers and returns a CSV writer for the response.
 // The filename carries the current date so repeated exports do not collide in
@@ -78,10 +89,10 @@ func (s *Server) handleExportDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cw := beginCSV(w, "devices", s.clock())
-	_ = cw.Write([]string{"name", "label", "hostname", "ip", "mac", "vendor", "first_seen", "last_seen"})
+	_ = cw.Write([]string{"name", "label", "hostname", "ip", "ip6", "mac", "vendor", "first_seen", "last_seen"})
 	for _, d := range devices {
 		_ = cw.Write([]string{
-			d.Name(), d.Label, d.Hostname, d.IP.String(), d.MAC, d.Vendor,
+			d.Name(), d.Label, d.Hostname, addrText(d.IP), addrText(d.IP6), d.MAC, d.Vendor,
 			d.FirstSeen.UTC().Format(time.RFC3339), d.LastSeen.UTC().Format(time.RFC3339),
 		})
 	}

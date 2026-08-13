@@ -1,20 +1,62 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
-import { api, deviceName, type Device } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
+import { api, deviceName, randomizedMAC, type Device } from '../lib/api'
+import { Card, CardHeader, Spinner, EmptyState, Button } from '../components/ui'
 import { useIsMobile } from '../lib/useIsMobile'
 import { formatRelative } from '../lib/format'
+
+// noiseThreshold is how many inventory entries have to share one address
+// before the list calls them noise. One address means one machine; when
+// several hardware addresses claim the same one, none of them is an identity.
+const noiseThreshold = 3
+
+// noiseMACs finds inventory entries that describe traffic rather than a
+// device. Tunnels with synthetic hardware addresses, relays that re-frame
+// other hosts' packets and NICs randomising their MAC each produce a fresh
+// entry per sighting, so a single address can collect a dozen rows. Anything
+// the operator has touched — named, restricted or watched — is never noise,
+// whatever the traffic looks like.
+function noiseMACs(devices: Device[]): Set<string> {
+  const perAddress = new Map<string, Device[]>()
+  for (const d of devices) {
+    for (const addr of [d.IP, d.IP6]) {
+      if (!addr) continue
+      const group = perAddress.get(addr)
+      if (group) group.push(d)
+      else perAddress.set(addr, [d])
+    }
+  }
+  const out = new Set<string>()
+  for (const group of perAddress.values()) {
+    if (group.length < noiseThreshold) continue
+    for (const d of group) {
+      if (!d.Label && !d.Policy && !d.WatchPresence) out.add(d.MAC)
+    }
+  }
+  return out
+}
+
+function matches(d: Device, q: string): boolean {
+  if (!q) return true
+  const hay = [deviceName(d), d.Label, d.Hostname, d.IP, d.IP6, d.MAC, d.Vendor].join(' ').toLowerCase()
+  return hay.includes(q.toLowerCase())
+}
 
 export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, loading, error, refresh } = useFetch<{ devices: Device[] | null }>('/api/devices', {
     pollMs: 10000,
     onUnauthorized,
   })
+  const [query, setQuery] = useState('')
+  const [onlyNoise, setOnlyNoise] = useState(false)
 
-  const devices = data?.devices ?? []
+  const devices = useMemo(() => data?.devices ?? [], [data])
+  const noise = useMemo(() => noiseMACs(devices), [devices])
   const named = devices.filter((d) => d.Label).length
   const isMobile = useIsMobile()
+
+  const shown = devices.filter((d) => (onlyNoise ? noise.has(d.MAC) : true) && matches(d, query))
 
   return (
     <Card>
@@ -32,16 +74,56 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
           </a>
         }
       />
+
+      {devices.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, address, MAC…"
+            className="min-w-0 flex-1 rounded-md border px-2.5 py-1.5 text-sm outline-none sm:max-w-xs"
+            style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          {(query || onlyNoise) && (
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+              {shown.length} of {devices.length}
+            </span>
+          )}
+        </div>
+      )}
+
+      {noise.size > 0 && canWrite && (
+        <NoiseBanner
+          macs={[...noise]}
+          reviewing={onlyNoise}
+          onReview={() => setOnlyNoise((v) => !v)}
+          onDone={() => {
+            setOnlyNoise(false)
+            refresh()
+          }}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
       {loading && !data ? (
         <Spinner />
       ) : error ? (
         <EmptyState>Could not load devices: {error}</EmptyState>
       ) : devices.length === 0 ? (
         <EmptyState>No devices inventoried yet.</EmptyState>
+      ) : shown.length === 0 ? (
+        <EmptyState>Nothing matches “{query}”.</EmptyState>
       ) : isMobile ? (
         <div>
-          {devices.map((d) => (
-            <DeviceCard key={d.ID} device={d} canWrite={canWrite} onChanged={refresh} onUnauthorized={onUnauthorized} />
+          {shown.map((d) => (
+            <DeviceCard
+              key={d.ID}
+              device={d}
+              noise={noise.has(d.MAC)}
+              canWrite={canWrite}
+              onChanged={refresh}
+              onUnauthorized={onUnauthorized}
+            />
           ))}
         </div>
       ) : (
@@ -50,7 +132,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
             <thead>
               <tr style={{ color: 'var(--muted)' }}>
                 <Th>Name</Th>
-                <Th>IP</Th>
+                <Th>Address</Th>
                 <Th>MAC</Th>
                 <Th>Vendor</Th>
                 <Th>First seen</Th>
@@ -59,13 +141,22 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
               </tr>
             </thead>
             <tbody>
-              {devices.map((d) => (
+              {shown.map((d) => (
                 <tr key={d.ID} style={{ borderTop: '1px solid var(--border)' }}>
                   <Td>
                     <NameCell device={d} onSaved={refresh} onUnauthorized={onUnauthorized} />
                   </Td>
-                  <Td mono>{d.IP}</Td>
-                  <Td mono>{d.MAC}</Td>
+                  <Td mono>
+                    <AddressCell device={d} />
+                  </Td>
+                  <Td mono>
+                    <div>{d.MAC}</div>
+                    {randomizedMAC(d.MAC) && (
+                      <div className="text-[0.62rem]" style={{ color: 'var(--muted)' }}>
+                        randomized
+                      </div>
+                    )}
+                  </Td>
                   <Td muted>{d.Vendor || '—'}</Td>
                   <Td muted>{formatRelative(d.FirstSeen)}</Td>
                   <Td muted>{formatRelative(d.LastSeen)}</Td>
@@ -73,6 +164,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
                     <div className="flex items-center justify-end gap-1">
                       {canWrite && <PresenceToggle device={d} onChanged={refresh} onUnauthorized={onUnauthorized} />}
                       {canWrite && <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />}
+                      {canWrite && <ForgetButton mac={d.MAC} onChanged={refresh} onUnauthorized={onUnauthorized} />}
                       <Link
                         to={`/devices/${encodeURIComponent(d.MAC)}`}
                         title="Device details"
@@ -96,15 +188,121 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
   )
 }
 
+// AddressCell shows both of a device's addresses. The IPv4 one leads because
+// it is the address an operator recognises; the IPv6 one sits underneath
+// rather than replacing it, which is what used to happen whenever a device
+// last spoke over IPv6.
+function AddressCell({ device }: { device: Device }) {
+  if (!device.IP && !device.IP6) return <span style={{ color: 'var(--muted)' }}>—</span>
+  return (
+    <div>
+      {device.IP && <div>{device.IP}</div>}
+      {device.IP6 && (
+        <div className={device.IP ? 'text-[0.68rem]' : ''} style={device.IP ? { color: 'var(--muted)' } : undefined}>
+          {device.IP6}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// NoiseBanner offers the one-click cleanup for entries that never described a
+// device. It names the count, lets the operator look at exactly which entries
+// it means before agreeing, and says plainly that discovery is passive — a
+// machine that is still on the network comes straight back.
+function NoiseBanner({
+  macs,
+  reviewing,
+  onReview,
+  onDone,
+  onUnauthorized,
+}: {
+  macs: string[]
+  reviewing: boolean
+  onReview: () => void
+  onDone: () => void
+  onUnauthorized: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const forget = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.post('/api/devices/forget', { macs })
+      onDone()
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mx-4 mb-3 rounded-lg border px-3 py-2.5" style={{ background: 'var(--warn-tint)', borderColor: 'var(--warn)' }}>
+      <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+        {macs.length} {macs.length === 1 ? 'entry does' : 'entries do'} not look like a device
+      </p>
+      <p className="mt-0.5 text-sm" style={{ color: 'var(--muted)' }}>
+        Several hardware addresses are claiming the same IP address. That happens with tunnels, relays and
+        devices that randomise their MAC — each sighting became its own entry. Removing them is safe:
+        discovery is passive, so anything still on the network reappears within seconds.
+      </p>
+      {err && <p className="mt-1 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+      <div className="mt-2 flex items-center gap-2">
+        <Button onClick={onReview}>{reviewing ? 'Show all' : 'Review them'}</Button>
+        <Button onClick={forget} disabled={busy}>
+          {busy ? 'Removing…' : `Remove ${macs.length}`}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ForgetButton drops a single inventory entry.
+function ForgetButton({
+  mac,
+  onChanged,
+  onUnauthorized,
+}: {
+  mac: string
+  onChanged: () => void
+  onUnauthorized: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const forget = async () => {
+    setBusy(true)
+    try {
+      await api.post('/api/devices/forget', { macs: [mac] })
+      onChanged()
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <IconButton label="Forget this entry" onClick={forget} disabled={busy}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+    </IconButton>
+  )
+}
+
 // DeviceCard is the phone rendering of one device: identity block with the
 // inline rename, meta lines, and a thumb-sized action row.
 function DeviceCard({
   device,
+  noise,
   canWrite,
   onChanged,
   onUnauthorized,
 }: {
   device: Device
+  noise: boolean
   canWrite: boolean
   onChanged: () => void
   onUnauthorized: () => void
@@ -125,15 +323,19 @@ function DeviceCard({
         </Link>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.7rem]" style={{ color: 'var(--muted)' }}>
-        <span>{device.IP}</span>
+        {device.IP && <span>{device.IP}</span>}
+        {device.IP6 && <span>{device.IP6}</span>}
         <span>{device.MAC}</span>
+        {randomizedMAC(device.MAC) && <span>randomized</span>}
         {device.Vendor && <span>{device.Vendor}</span>}
         <span>seen {formatRelative(device.LastSeen)}</span>
+        {noise && <span style={{ color: 'var(--warn)' }}>shares its address</span>}
       </div>
       {canWrite && (
         <div className="mt-2 flex items-center gap-1">
           <PresenceToggle device={device} onChanged={onChanged} onUnauthorized={onUnauthorized} />
           <WakeButton mac={device.MAC} onUnauthorized={onUnauthorized} />
+          <ForgetButton mac={device.MAC} onChanged={onChanged} onUnauthorized={onUnauthorized} />
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -119,6 +120,60 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}
+
+// forgetLimit bounds one cleanup request. Well above any real inventory, low
+// enough that a stray call cannot walk the whole table.
+const forgetLimit = 1000
+
+// handleForgetDevices drops inventory entries the operator does not recognise
+// as devices. Discovery is passive and continuous, so this is not a deletion
+// in the usual sense: a machine that is still on the network reappears with
+// its next packet. What it does clear for good is the residue — entries left
+// by traffic that never had a device behind it.
+func (s *Server) handleForgetDevices(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+
+	var req struct {
+		MACs []string `json:"macs"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	macs := make([]string, 0, len(req.MACs))
+	for _, m := range req.MACs {
+		if m = strings.TrimSpace(m); m != "" {
+			macs = append(macs, m)
+		}
+	}
+	if len(macs) == 0 {
+		writeError(w, http.StatusBadRequest, "no devices given")
+		return
+	}
+	if len(macs) > forgetLimit {
+		writeError(w, http.StatusBadRequest, "too many devices in one request")
+		return
+	}
+
+	removed, err := s.deps.Store.ForgetDevices(ctx, macs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	id, _ := identityFrom(r)
+	target := macs[0]
+	detail := "forgot inventory entry"
+	if len(macs) > 1 {
+		target = fmt.Sprintf("%d entries", len(macs))
+		detail = "forgot " + strings.Join(macs, ", ")
+	}
+	_ = s.deps.Store.Audit(ctx, model.AuditEntry{
+		Actor: id.name, Action: "device_forget", Target: target, Detail: detail,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
 }
 
 // handleSetDeviceLabel assigns an operator-chosen name to a device. An empty

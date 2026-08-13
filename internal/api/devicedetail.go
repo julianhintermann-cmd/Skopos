@@ -42,7 +42,7 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	from := to.Add(-window)
 	res := store.ChooseResolution(window)
 
-	ip := device.IP.String()
+	ip := device.PrimaryAddr().String()
 	series, _ := s.deps.Store.DeviceThroughput(ctx, ip, from, to, res)
 	destinations, _ := s.deps.Store.DeviceDestinations(ctx, ip, from, to, res, 15)
 	ports, _ := s.deps.Store.DevicePorts(ctx, ip, from, to, res, 12)

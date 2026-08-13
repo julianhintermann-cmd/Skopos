@@ -40,6 +40,11 @@ type demoDest struct {
 	port uint16
 }
 
+// mdnsGroup is the IPv4 multicast address every mDNS announcement goes to.
+// Its packets carry a real sender but a group destination, which is exactly
+// the case the device inventory has to tell apart.
+var mdnsGroup = netip.MustParseAddr("224.0.0.251")
+
 // DemoOptions configures the generator. The zero value is usable.
 type DemoOptions struct {
 	// Seed makes the synthetic stream reproducible (defaults to a fixed seed
@@ -137,6 +142,17 @@ func (d *DemoSource) Step(handle func(flow.Packet)) {
 		handle(flow.Packet{
 			Time: now, SrcIP: dst.ip, DstIP: dev.ip, SrcPort: dst.port, DstPort: sport,
 			Proto: protoFor(dst.port), Size: respSize,
+		})
+	}
+
+	// Devices announce themselves over mDNS, which is how the inventory
+	// learns a hostname without asking anyone anything.
+	if d.ticks%17 == 3 {
+		dev := d.devices[int(d.ticks/17)%len(d.devices)]
+		handle(flow.Packet{
+			Time: now, SrcIP: dev.ip, DstIP: mdnsGroup, SrcPort: portMDNS, DstPort: portMDNS,
+			Proto: model.ProtoUDP, Size: 120, SrcMAC: dev.mac,
+			Names: []flow.NameRecord{{Addr: dev.ip, Name: dev.name + ".local", TTL: 120}},
 		})
 	}
 

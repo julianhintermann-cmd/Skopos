@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **World map** — the Traffic view renders the country statistics as a
+  choropleth (outbound/inbound toggle), volume-scaled in the accent hue.
+
 ## [0.2.0] - 2026-08-12
 
 The dashboard grows up: real-time everything, devices you can name and wake,

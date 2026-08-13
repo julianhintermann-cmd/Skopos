@@ -5,6 +5,7 @@ import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
 import { CountryBars } from '../components/CountryBars'
+import { TrafficWorldMap } from '../components/TrafficWorldMap'
 import { SheetSelect } from '../components/mobile'
 import { useDeviceNames } from '../lib/deviceNames'
 import { useIsMobile } from '../lib/useIsMobile'
@@ -42,6 +43,8 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
   })
 
   const isMobile = useIsMobile()
+  const [mapDir, setMapDir] = useState<'out' | 'in'>('out')
+  const mapStats = mapDir === 'out' ? (geo.data?.out ?? []) : (geo.data?.in ?? [])
 
   return (
     <div className="flex flex-col gap-4">
@@ -108,6 +111,40 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
                 <TalkerBars talkers={data.top_talkers} names={names} format={(t) => formatBytes(t.bytes)} />
               ) : (
                 <EmptyState>No talkers in this range.</EmptyState>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="World map"
+              sub={`${range.label} · ${mapDir === 'out' ? 'where your traffic goes' : 'who is knocking from outside'}`}
+              right={
+                <div className="flex items-center gap-1">
+                  {(['out', 'in'] as const).map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setMapDir(d)}
+                      className="rounded-md px-2.5 py-1 text-xs font-medium"
+                      style={
+                        d === mapDir
+                          ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
+                          : { background: 'var(--surface-2)', color: 'var(--muted)' }
+                      }
+                    >
+                      {d === 'out' ? 'Outbound' : 'Inbound'}
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+            <div className="px-4 pb-3">
+              {!geo.data?.available ? (
+                <EmptyState>GeoIP database is still downloading — check back in a minute.</EmptyState>
+              ) : mapStats.length > 0 ? (
+                <TrafficWorldMap stats={mapStats} />
+              ) : (
+                <EmptyState>No {mapDir === 'out' ? 'outbound' : 'inbound'} traffic in this range.</EmptyState>
               )}
             </div>
           </Card>

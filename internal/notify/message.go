@@ -29,6 +29,16 @@ type Message struct {
 	// ClickURL, when set, is where tapping the notification should take the
 	// user (the dashboard alert, usually).
 	ClickURL string
+	// Actions are buttons the notification offers. Each carries a URL that
+	// performs exactly one operation; ntfy renders them, other channels
+	// ignore them.
+	Actions []Action
+}
+
+// Action is one notification button.
+type Action struct {
+	Label string
+	URL   string
 }
 
 // ntfyPriority maps a severity to ntfy's 1–5 priority scale.

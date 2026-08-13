@@ -313,6 +313,9 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("building API: %w", err)
 	}
 	srv.SetLogger(a.logf)
+	// Notifications carry working buttons: the API mints a signed link per
+	// alert that authorises exactly one block or mute.
+	dispatcher.SetActionBuilder(srv.AlertActions)
 	// Now that the hub exists, let the tee publish to it. This assignment
 	// happens-before the aggregator goroutine starts, so no lock is needed.
 	liveSink.hub = srv.Hub()

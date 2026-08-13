@@ -60,6 +60,11 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
             <HealthItem label="Firewall" value={h.firewall} neutral />
             <HealthItem label="Enforcement" value={h.enforcing ? 'Enforcing' : 'Observe'} ok={h.enforcing} neutral={!h.enforcing} />
             <HealthItem label="Cold storage" ok={h.cold_storage_ok} value={h.cold_storage_ok ? 'Writable' : 'Unreachable'} />
+            <HealthItem
+              label="Visibility"
+              value={h.mirror ? 'Mirror port' : 'This machine'}
+              neutral
+            />
             <HealthItem label="Version" value={h.version || 'dev'} neutral />
           </div>
         )}

@@ -69,6 +69,13 @@ capture:
   flow_flush: 10s
   flow_idle_timeout: 60s
 
+  # If a switch mirrors the LAN onto one of this machine's interfaces, name it
+  # under `interfaces` above and list it here. Skopos then sees every device's
+  # traffic instead of only its own. Blocking is unchanged: it still acts only
+  # on traffic passing this machine's kernel.
+  mirror:
+    interfaces: []
+
 # -----------------------------------------------------------------------------
 # Detection — what counts as suspicious, and alert throttling
 # -----------------------------------------------------------------------------

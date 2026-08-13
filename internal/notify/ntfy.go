@@ -61,6 +61,17 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 	}
 	req.Header.Set("Tags", strings.Join(tags, ","))
 
+	if len(m.Actions) > 0 {
+		specs := make([]string, 0, len(m.Actions))
+		for _, a := range m.Actions {
+			// ntfy separates action fields with commas, so a label or URL
+			// containing one would split the spec; ours never do, and
+			// sanitising keeps that true for future callers.
+			specs = append(specs, fmt.Sprintf("http, %s, %s, method=GET, clear=true",
+				sanitizeAction(a.Label), sanitizeAction(a.URL)))
+		}
+		req.Header.Set("Actions", strings.Join(specs, "; "))
+	}
 	if m.ClickURL != "" {
 		req.Header.Set("Click", m.ClickURL)
 	}
@@ -83,4 +94,9 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 		return fmt.Errorf("ntfy returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// sanitizeAction strips the characters ntfy's action syntax reserves.
+func sanitizeAction(s string) string {
+	return strings.NewReplacer(",", " ", ";", " ", "\n", " ").Replace(s)
 }

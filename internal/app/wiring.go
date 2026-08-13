@@ -99,6 +99,13 @@ func (a *App) buildObservers(cfg *config.Config, classifier *flow.Classifier, st
 		set.all = append(set.all, set.feeds)
 	}
 
+	// Behavioural baseline: what is unusual for each device, as opposed to
+	// what someone decided is too much in absolute terms.
+	set.all = append(set.all, detect.NewBaseline(detect.BaselineConfig{
+		Severity:   model.SeverityWarning,
+		IsInternal: classifier.Internal,
+	}, pol, a.clock))
+
 	// Device inventory and the new-device detector, when capture supports it.
 	if cfg.Capture.Devices {
 		var onNew capture.NewDeviceFunc
@@ -158,6 +165,7 @@ func (a *App) healthFunc(st *store.Store, backend firewall.Backend, fw *firewall
 			h.Capture = "afpacket"
 		}
 		h.Firewall = backend.Name()
+		h.Mirror = len(a.cfg.Capture.Mirror.Interfaces) > 0
 		// DB writable check.
 		if _, err := st.CountUnackedAlerts(context.Background()); err != nil {
 			h.OK = false

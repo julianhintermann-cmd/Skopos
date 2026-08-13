@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import type { GeoIPSummary, TimePoint, Talker } from '../lib/api'
+import { api, type GeoIPSummary, type LiveFlow, type TimePoint, type Talker } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
@@ -149,6 +149,8 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
             </div>
           </Card>
 
+          <FlowSearch onUnauthorized={onUnauthorized} />
+
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader title="Destination countries" sub={`${range.label} · where your traffic goes`} />
@@ -178,5 +180,159 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
         </>
       )}
     </div>
+  )
+}
+
+// FlowSearch answers "what actually happened at 3am" from the raw flow
+// records the rollups have already summarised away.
+function FlowSearch({ onUnauthorized }: { onUnauthorized: () => void }) {
+  const [address, setAddress] = useState('')
+  const [port, setPort] = useState('')
+  const [name, setName] = useState('')
+  const [win, setWin] = useState('24h')
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ flows: LiveFlow[] | null; count: number } | null>(null)
+  const [err, setErr] = useState('')
+
+  const run = async () => {
+    setBusy(true)
+    setErr('')
+    const params = new URLSearchParams({ window: win, limit: '300' })
+    if (address.trim()) params.set('address', address.trim())
+    if (port.trim()) params.set('port', port.trim())
+    if (name.trim()) params.set('name', name.trim())
+    setQuery(params.toString())
+    try {
+      setResult(await api.get(`/api/search?${params.toString()}`))
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+      setErr((e as Error).message)
+      setResult(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const flows = result?.flows ?? []
+
+  return (
+    <Card>
+      <CardHeader
+        title="Search history"
+        sub="the raw flow records — filter by address, port or domain, over a window"
+      />
+      <div className="flex flex-col gap-3 px-4 pb-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Address" value={address} onChange={setAddress} placeholder="192.168.1.20 or 10.0.0.0/8" width="w-52" />
+          <Field label="Port" value={port} onChange={setPort} placeholder="443" width="w-24" />
+          <Field label="Domain" value={name} onChange={setName} placeholder="youtube.com" width="w-44" />
+          <label className="flex w-28 flex-col gap-1">
+            <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
+              Window
+            </span>
+            <select
+              value={win}
+              onChange={(e) => setWin(e.target.value)}
+              className="rounded-md border px-2.5 py-1.5 text-sm"
+              style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            >
+              {['1h', '24h', '168h', '720h'].map((w) => (
+                <option key={w} value={w}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={run}
+            disabled={busy}
+            className="rounded-md px-3 py-1.5 text-xs font-medium"
+            style={{ background: 'var(--accent)', color: 'white' }}
+          >
+            {busy ? 'Searching…' : 'Search'}
+          </button>
+        </div>
+
+        {err && <p className="text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+
+        {result && (
+          <>
+            <div className="flex items-center justify-between text-xs" style={{ color: 'var(--muted)' }}>
+              <span>{result.count} flows</span>
+              {query && (
+                <a href={`/api/search?${query}`} target="_blank" rel="noreferrer" className="hover:underline">
+                  open as JSON
+                </a>
+              )}
+            </div>
+            {flows.length === 0 ? (
+              <EmptyState>Nothing matched.</EmptyState>
+            ) : (
+              <div className="max-h-96 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr style={{ color: 'var(--muted)' }}>
+                      <th className="px-2 py-1 text-left font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]">Time</th>
+                      <th className="px-2 py-1 text-left font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]">Source</th>
+                      <th className="px-2 py-1 text-left font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]">Destination</th>
+                      <th className="px-2 py-1 text-right font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]">Volume</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {flows.map((f, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td className="px-2 py-1 font-mono text-xs" style={{ color: 'var(--muted)' }}>
+                          {new Date(f.start).toLocaleString(undefined, { hour12: false })}
+                        </td>
+                        <td className="px-2 py-1 font-mono text-xs">
+                          {f.src}:{f.src_port}
+                        </td>
+                        <td className="px-2 py-1 text-xs">
+                          {f.dst_name || <span className="font-mono">{f.dst}</span>}
+                          <span className="font-mono" style={{ color: 'var(--muted)' }}>
+                            :{f.dst_port}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-xs tabnums">{formatBytes(f.bytes)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  width,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  width: string
+}) {
+  return (
+    <label className={`flex flex-col gap-1 ${width}`}>
+      <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
+        {label}
+      </span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="rounded-md border px-2.5 py-1.5 font-mono text-sm"
+        style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+      />
+    </label>
   )
 }

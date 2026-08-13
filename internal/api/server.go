@@ -139,6 +139,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+	// Notification buttons. The signed, single-purpose token in the path is
+	// the credential; see actions.go.
+	s.mux.HandleFunc("GET /api/actions/{token}", s.handleAction)
 
 	// Read endpoints.
 	s.mux.Handle("GET /api/stream", s.requireRead(http.HandlerFunc(s.handleStream)))
@@ -164,6 +167,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /metrics", s.requireRead(http.HandlerFunc(s.handleMetrics)))
 	s.mux.Handle("GET /api/updates", s.requireRead(http.HandlerFunc(s.handleUpdates)))
 	s.mux.Handle("GET /api/domains", s.requireRead(http.HandlerFunc(s.handleDomains)))
+	s.mux.Handle("GET /api/search", s.requireRead(http.HandlerFunc(s.handleSearch)))
 	s.mux.Handle("GET /api/settings", s.requireRead(http.HandlerFunc(s.handleGetSettings)))
 	s.mux.Handle("GET /api/incidents", s.requireRead(http.HandlerFunc(s.handleIncidents)))
 	s.mux.Handle("GET /api/incidents/{id}", s.requireRead(http.HandlerFunc(s.handleIncident)))

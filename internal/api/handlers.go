@@ -24,7 +24,11 @@ type Health struct {
 	Firewall  string `json:"firewall"`
 	Enforcing bool   `json:"enforcing"`
 	ColdOK    bool   `json:"cold_storage_ok"`
-	Detail    string `json:"detail,omitempty"`
+	// Mirror is true when at least one capture interface is declared as a
+	// mirror/SPAN port: Skopos then sees the whole segment, while blocking
+	// still acts only on traffic passing this machine.
+	Mirror bool   `json:"mirror"`
+	Detail string `json:"detail,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

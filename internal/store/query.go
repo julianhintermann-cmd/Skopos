@@ -3,7 +3,11 @@ package store
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"strings"
 	"time"
+
+	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
 // Resolution selects which rollup table a time-series query reads from.
@@ -166,4 +170,114 @@ func (s *Store) CountFlows(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows`).Scan(&n)
 	return n, err
+}
+
+// SearchFilter narrows a flow search. Empty fields are ignored, so the same
+// query serves "everything from this device" and "port 22 in the last hour".
+type SearchFilter struct {
+	From, To time.Time
+	// Address matches either endpoint; a bare IP or a CIDR.
+	Address string
+	Port    int
+	Proto   string
+	Dir     string
+	// Name matches the resolved destination name, as a substring.
+	Name  string
+	Limit int
+}
+
+// SearchFlows returns raw flows matching the filter, newest first. Built for
+// the question "what actually happened at 3am", which the aggregated views
+// cannot answer.
+func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, error) {
+	if f.Limit <= 0 || f.Limit > 5000 {
+		f.Limit = 500
+	}
+	q := `SELECT start_ms, end_ms, src_ip, dst_ip, src_port, dst_port, proto, direction,
+	             out_bytes, out_packets, in_bytes, in_packets, dst_name
+	      FROM flows WHERE start_ms >= ? AND start_ms < ?`
+	args := []any{toMs(f.From), toMs(f.To)}
+
+	if f.Address != "" {
+		if p, err := netip.ParsePrefix(f.Address); err == nil {
+			// A range: compare on the text form's prefix is wrong, so filter
+			// in Go below. Mark it by leaving the SQL open.
+			_ = p
+		} else if _, err := netip.ParseAddr(f.Address); err == nil {
+			q += ` AND (src_ip = ? OR dst_ip = ?)`
+			args = append(args, f.Address, f.Address)
+		} else {
+			return nil, fmt.Errorf("store: %q is not an address or CIDR", f.Address)
+		}
+	}
+	if f.Port > 0 {
+		q += ` AND (src_port = ? OR dst_port = ?)`
+		args = append(args, f.Port, f.Port)
+	}
+	if f.Proto != "" {
+		// Protocols are stored numerically, as on the wire.
+		var n uint8
+		switch strings.ToLower(f.Proto) {
+		case "tcp":
+			n = uint8(model.ProtoTCP)
+		case "udp":
+			n = uint8(model.ProtoUDP)
+		case "icmp":
+			n = uint8(model.ProtoICMP)
+		default:
+			return nil, fmt.Errorf("store: unknown protocol %q", f.Proto)
+		}
+		q += ` AND proto = ?`
+		args = append(args, n)
+	}
+	if f.Dir != "" {
+		q += ` AND direction = ?`
+		args = append(args, f.Dir)
+	}
+	if f.Name != "" {
+		q += ` AND dst_name LIKE ?`
+		args = append(args, "%"+f.Name+"%")
+	}
+	q += ` ORDER BY start_ms DESC LIMIT ?`
+	args = append(args, f.Limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	// A CIDR filter is applied here: SQLite has no network types, and the
+	// alternative — a text prefix match — would be wrong at every boundary
+	// that is not a byte boundary.
+	var cidr netip.Prefix
+	if f.Address != "" {
+		if p, err := netip.ParsePrefix(f.Address); err == nil {
+			cidr = p
+		}
+	}
+
+	var out []model.Flow
+	for rows.Next() {
+		var (
+			fl            model.Flow
+			start, end    int64
+			src, dst, dir string
+			proto         uint8
+		)
+		if err := rows.Scan(&start, &end, &src, &dst, &fl.SrcPort, &fl.DstPort, &proto, &dir,
+			&fl.OutBytes, &fl.OutPackets, &fl.InBytes, &fl.InPackets, &fl.DstName); err != nil {
+			return nil, err
+		}
+		fl.Start, fl.End = fromMs(start), fromMs(end)
+		fl.SrcIP, _ = netip.ParseAddr(src)
+		fl.DstIP, _ = netip.ParseAddr(dst)
+		fl.Proto = model.Protocol(proto)
+		fl.Dir = model.Direction(dir)
+		if cidr.IsValid() && !cidr.Contains(fl.SrcIP.Unmap()) && !cidr.Contains(fl.DstIP.Unmap()) {
+			continue
+		}
+		out = append(out, fl)
+	}
+	return out, rows.Err()
 }

@@ -6,7 +6,7 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 
 | Option | Type | Default | Description |
 | ------ | ---- | ------- | ----------- |
-| `interfaces` | list of string | `[auto]` | Interfaces lists the network interfaces to capture on, e.g. ["eth0", "eth1"]. The special value "auto" resolves to the interface of the default route at startup. |
+| `interfaces` | list of string | `[auto]` | Interfaces lists the network interfaces to capture on, e.g. ["eth0", "eth1"]. The special value "auto" resolves to the interface of the default route at startup. Naming an interface fed by a switch's mirror/SPAN port makes Skopos see the whole LAN's traffic rather than only this machine's — see capture.mirror. |
 | **`network`** | object | | Network groups address-classification settings shared by capture, detection and the firewall. |
 | `network.private_ranges` | list of string | `[10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, fc00::/7, fe80::/10]` | PrivateRanges are the CIDR ranges treated as "internal" when classifying traffic (LAN↔WAN, LAN↔LAN) and choosing block behaviour. Defaults to RFC 1918, IPv6 ULA and link-local ranges. |
 | **`storage`** | object | | Storage configures the hot (SSD) and cold (HDD/NAS) data paths and how long data is retained at each resolution. |
@@ -32,6 +32,8 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | `capture.devices` | boolean | `true` | Devices enables the LAN device inventory built from ARP/NDP traffic and mDNS/DHCP names. Required by the new_device detector. |
 | `capture.flow_flush` | string | `10s` | FlowFlush is how often aggregated flow counters are flushed from memory to the database. |
 | `capture.flow_idle_timeout` | string | `1m0s` | FlowIdleTimeout is how long a flow may stay silent before it is considered finished and flushed. |
+| **`capture.mirror`** | object | | Mirror declares which interfaces carry mirrored traffic from a switch's SPAN port or a tap. |
+| `capture.mirror.interfaces` | list of string |  | Interfaces are fed by a switch's mirror/SPAN port, or a tap: they carry other devices' traffic, not this machine's. Declaring them changes nothing about how packets are captured — it tells Skopos that what it sees is the whole segment, so the dashboard can say plainly that visibility is network-wide while blocking still only acts on traffic passing this machine's kernel. |
 | **`detection`** | object | | Detection configures the detectors that decide what counts as suspicious, and how alerts are throttled. |
 | **`detection.portscan`** | object | | Portscan detects vertical scans (many ports on one target) and horizontal scans (one port across many targets). |
 | `detection.portscan.enabled` | boolean | `true` | Enabled turns the detector on or off. |

@@ -7,7 +7,7 @@
         "type": "string"
       },
       "type": "array",
-      "description": "Interfaces lists the network interfaces to capture on, e.g.\n[\"eth0\", \"eth1\"]. The special value \"auto\" resolves to the interface\nof the default route at startup."
+      "description": "Interfaces lists the network interfaces to capture on, e.g.\n[\"eth0\", \"eth1\"]. The special value \"auto\" resolves to the interface\nof the default route at startup.\n\nNaming an interface fed by a switch's mirror/SPAN port makes Skopos\nsee the whole LAN's traffic rather than only this machine's — see\ncapture.mirror."
     },
     "network": {
       "properties": {
@@ -131,6 +131,20 @@
           "type": "string",
           "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
           "description": "FlowIdleTimeout is how long a flow may stay silent before it is\nconsidered finished and flushed."
+        },
+        "mirror": {
+          "properties": {
+            "interfaces": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "description": "Interfaces are fed by a switch's mirror/SPAN port, or a tap: they\ncarry other devices' traffic, not this machine's. Declaring them\nchanges nothing about how packets are captured — it tells Skopos that\nwhat it sees is the whole segment, so the dashboard can say plainly\nthat visibility is network-wide while blocking still only acts on\ntraffic passing this machine's kernel."
+            }
+          },
+          "additionalProperties": false,
+          "type": "object",
+          "description": "Mirror declares which interfaces carry mirrored traffic from a\nswitch's SPAN port or a tap."
         }
       },
       "additionalProperties": false,

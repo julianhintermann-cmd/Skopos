@@ -356,5 +356,9 @@ export interface Health {
   firewall: string
   enforcing: boolean
   cold_storage_ok: boolean
+  // True when a capture interface is a mirror/SPAN port: Skopos sees the
+  // whole segment, while blocking still acts only on traffic passing this
+  // machine.
+  mirror?: boolean
   detail?: string
 }

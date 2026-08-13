@@ -207,6 +207,11 @@ Four things about blocking that save you a support ticket:
   your port forwards point — plus anything it routes. Traffic between other
   LAN devices and the internet flows through your router, not through Skopos,
   and is out of its reach.
+- **Want Skopos to see the whole LAN?** Point a switch mirror/SPAN port at
+  one of the NAS's interfaces, name it under `interfaces`, and list it under
+  `capture.mirror.interfaces`. Skopos then observes every device's traffic,
+  not just its own — visibility becomes network-wide while blocking keeps the
+  reach described here.
 - **Per-device policies have the same reach.** "LAN only" and "Quarantine"
   are kernel rules on the device's address; they bite on traffic this machine
   sees or routes. If your NAS is not the gateway, a device's own path out

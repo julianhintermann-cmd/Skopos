@@ -11,6 +11,10 @@ type Config struct {
 	// Interfaces lists the network interfaces to capture on, e.g.
 	// ["eth0", "eth1"]. The special value "auto" resolves to the interface
 	// of the default route at startup.
+	//
+	// Naming an interface fed by a switch's mirror/SPAN port makes Skopos
+	// see the whole LAN's traffic rather than only this machine's — see
+	// capture.mirror.
 	Interfaces []string `yaml:"interfaces" json:"interfaces,omitempty"`
 
 	// Network groups address-classification settings shared by capture,
@@ -123,6 +127,17 @@ type Backup struct {
 	At ClockTime `yaml:"at" json:"at,omitzero"`
 }
 
+// Mirror declares that an interface carries mirrored traffic.
+type Mirror struct {
+	// Interfaces are fed by a switch's mirror/SPAN port, or a tap: they
+	// carry other devices' traffic, not this machine's. Declaring them
+	// changes nothing about how packets are captured — it tells Skopos that
+	// what it sees is the whole segment, so the dashboard can say plainly
+	// that visibility is network-wide while blocking still only acts on
+	// traffic passing this machine's kernel.
+	Interfaces []string `yaml:"interfaces" json:"interfaces,omitempty"`
+}
+
 // Capture tunes packet capture and enrichment.
 type Capture struct {
 	// SampleThresholdPPS is the packets-per-second rate above which
@@ -152,6 +167,10 @@ type Capture struct {
 	// FlowIdleTimeout is how long a flow may stay silent before it is
 	// considered finished and flushed.
 	FlowIdleTimeout Duration `yaml:"flow_idle_timeout" json:"flow_idle_timeout,omitzero"`
+
+	// Mirror declares which interfaces carry mirrored traffic from a
+	// switch's SPAN port or a tap.
+	Mirror Mirror `yaml:"mirror" json:"mirror,omitzero"`
 }
 
 // Detection configures detectors and alert policy.

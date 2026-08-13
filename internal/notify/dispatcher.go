@@ -26,6 +26,7 @@ type Dispatcher struct {
 	channels      []Channel
 	externalURL   string
 	systemEnabled bool
+	actions       func(model.Alert) []Action
 	log           func(string, ...any)
 	resolveName   func(netip.Addr) string
 }
@@ -79,8 +80,16 @@ func (d *Dispatcher) Notify(ctx context.Context, a model.Alert) {
 		Category: CategoryAlert,
 		ClickURL: d.alertClickURL(a),
 	}
+	if d.actions != nil {
+		m.Actions = d.actions(a)
+	}
 	d.deliver(ctx, m)
 }
+
+// SetActionBuilder installs the source of notification buttons. The API layer
+// provides it, because the buttons carry signed single-purpose links only it
+// can mint.
+func (d *Dispatcher) SetActionBuilder(f func(model.Alert) []Action) { d.actions = f }
 
 // System sends an operational message (start after crash, firewall degraded,
 // cold storage unreachable, feed update failed, update available). It is a

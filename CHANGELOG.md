@@ -23,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prometheus metrics** — `/metrics` now actually exists (the config knob
   had nothing behind it): throughput, enforcement state, active blocks,
   unacked alerts, per-block drop counters and per-country prefix counts.
+- **Behavioural baseline** — Skopos learns each device's usual hourly volume
+  and reports departures from it: the printer that suddenly uploads a
+  gigabyte, the camera that starts talking at 3am. It needs a few hours of
+  history before it judges anything, has an absolute floor so a quiet device
+  cannot alert over a kilobyte, and never suggests a block — unusual is not
+  malicious.
+- **Search the history** — the Traffic view can query the raw flow records by
+  address (or CIDR), port, protocol, direction and domain over a window, for
+  the question the aggregates cannot answer: what actually happened at 3am.
+- **Notification buttons** — ntfy pushes carry "Block 24h" and "Mute"
+  buttons. Each is a signed, single-purpose, expiring link: a leaked
+  notification grants one temporary block of one address, never API access.
+  They appear once `server.external_url` is set.
+- **Mirror-port mode** — declare a switch SPAN/tap interface under
+  `capture.mirror.interfaces` and Skopos sees the whole segment instead of
+  only this machine's traffic. The System view says which of the two you are
+  getting, since visibility and enforcement have different reach.
 - **Incidents** — the Alerts view groups events by source and episode: one
   attacker with forty scan attempts is one row saying "40 events", expandable
   to the individual alerts, acknowledgeable in one click. Two hours of quiet

@@ -87,6 +87,19 @@ func migrate(db *sql.DB) (applied int, err error) {
 		return 0, err
 	}
 
+	// A database newer than this binary means someone rolled the image back
+	// over a schema it does not know. Today's migrations are additive enough
+	// to survive that, but a future one that drops or renames a column would
+	// not be, and starting up cheerfully against a schema from the future is
+	// how a rollback turns into data loss. Refuse, and say which versions are
+	// involved so the operator can pick the right image or restore a backup.
+	if len(ms) > 0 && current > ms[len(ms)-1].version {
+		return 0, fmt.Errorf(
+			"database schema is version %d but this build only knows %d: it was written by a newer Skopos. "+
+				"Run the newer version, or restore a backup taken before the upgrade",
+			current, ms[len(ms)-1].version)
+	}
+
 	for _, m := range ms {
 		if m.version <= current {
 			continue

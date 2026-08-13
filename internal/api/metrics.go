@@ -38,6 +38,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	metric("skopos_firewall_enforcing", "1 when blocks are applied to the kernel.", "gauge",
 		boolValue(s.deps.Firewall.Enforcing()))
 
+	// Findings the policy worker could not keep up with. Dropping them beats
+	// stalling packet capture, but it is not something to keep quiet about:
+	// a non-zero value here means alerts and blocks went missing.
+	if s.deps.PolicyDropped != nil {
+		metric("skopos_findings_dropped_total",
+			"Detector findings discarded because the policy queue was full.",
+			"counter", float64(s.deps.PolicyDropped()))
+	}
+
 	blocks, err := s.deps.Store.ActiveBlocks(ctx)
 	if err == nil {
 		metric("skopos_active_blocks", "Blocks currently in effect.", "gauge", float64(len(blocks)))

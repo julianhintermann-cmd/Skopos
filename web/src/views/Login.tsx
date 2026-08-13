@@ -22,10 +22,15 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
     } catch (err) {
       if (err instanceof APIError && err.status === 429) {
         setError('Too many attempts. Please wait a moment.')
-      } else if (err instanceof APIError && err.message.includes('one-time code')) {
+      } else if (err instanceof APIError && err.otpRequired) {
         // The password was right; the server wants the second factor.
         setOtpRequired(true)
-        setError(otp ? 'Wrong one-time code.' : '')
+        setError('')
+      } else if (otpRequired) {
+        // Already past the password step, so the only thing that can be wrong
+        // is the code — saying "invalid credentials" here sends the operator
+        // hunting for a password problem that does not exist.
+        setError('Wrong one-time code.')
       } else {
         setError('Invalid credentials.')
       }

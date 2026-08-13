@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/detect"
@@ -94,9 +95,26 @@ type Engine struct {
 
 	allow *netset.Set
 
+	// Findings arrive on the capture goroutine — the one reading frames off
+	// the wire — and handling one writes to SQLite, posts to ntfy over HTTP
+	// and talks to netlink. Doing that inline stalls packet capture for as
+	// long as the slowest of them takes, which on a 15-second HTTP timeout is
+	// long enough to lose a great deal of traffic, precisely while an attack
+	// is in progress. The queue hands the work to a goroutine instead.
+	queue   chan detect.Finding
+	async   atomic.Bool
+	dropped atomic.Uint64
+
 	mu       sync.Mutex
 	cooldown map[string]*cooldownState
 }
+
+// findingQueue is how many findings may be waiting for the worker. Generous
+// enough that ordinary bursts never touch it, bounded because the alternative
+// to dropping under a flood is blocking capture, and a monitor that stops
+// seeing traffic is worse than one that misses a redundant alert about a
+// source it has already reacted to.
+const findingQueue = 1024
 
 type cooldownState struct {
 	lastNotified time.Time
@@ -126,9 +144,32 @@ func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock
 		clock:    clock,
 		log:      func(string, ...any) {},
 		allow:    allow,
+		queue:    make(chan detect.Finding, findingQueue),
 		cooldown: make(map[string]*cooldownState),
 	}
 }
+
+// Run drains findings until ctx is cancelled. Until it is called the engine
+// handles findings inline on the caller's goroutine, which is what tests want
+// and what a caller that never starts a worker gets.
+func (e *Engine) Run(ctx context.Context) {
+	e.async.Store(true)
+	defer e.async.Store(false)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case f := <-e.queue:
+			e.handle(ctx, f)
+		}
+	}
+}
+
+// DroppedFindings counts findings discarded because the queue was full. It is
+// reported as a metric rather than kept quiet: dropping them is the right
+// trade against stalling capture, but it is still something the operator is
+// entitled to know happened.
+func (e *Engine) DroppedFindings() uint64 { return e.dropped.Load() }
 
 // SetLogger installs a logging callback (optional).
 func (e *Engine) SetLogger(f func(string, ...any)) { e.log = f }
@@ -167,9 +208,19 @@ func (e *Engine) Apply(enforcement Enforcement, cooldown, blockTTL time.Duration
 }
 
 // Raise implements detect.Sink: it is the single entry point from every
-// detector.
+// detector, and it is called from the packet path, so it must not block.
 func (e *Engine) Raise(f detect.Finding) {
-	e.handle(context.Background(), f)
+	if !e.async.Load() {
+		e.handle(context.Background(), f)
+		return
+	}
+	select {
+	case e.queue <- f:
+	default:
+		if n := e.dropped.Add(1); n == 1 || n%100 == 0 {
+			e.log("policy: finding queue full, dropped %d so far (%s from %s)", n, f.Detector, f.Source)
+		}
+	}
 }
 
 func (e *Engine) handle(ctx context.Context, f detect.Finding) {

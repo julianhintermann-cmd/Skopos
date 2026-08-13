@@ -320,6 +320,7 @@ func (a *App) Run(ctx context.Context) error {
 		GeoIP:               geo,
 		Countries:           countries,
 		Reputation:          rep,
+		PolicyDropped:       pol.DroppedFindings,
 		BlockStats:          watch.Stats,
 		CountryBlockStats:   countryEnf.Stats,
 		Updates:             updates.Status,
@@ -353,6 +354,11 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
+	// The policy worker starts before capture: from here on, a detector
+	// firing hands its finding to this goroutine instead of doing the
+	// database write, the notification and the netlink call on the goroutine
+	// that is supposed to be reading packets off the wire.
+	spawn("policy", func() { pol.Run(runCtx) })
 	spawn("aggregator", func() { _ = agg.Run(runCtx) })
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })
 	spawn("country-enforcer", func() { countryEnf.run(runCtx) })

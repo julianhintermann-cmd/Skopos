@@ -66,6 +66,9 @@ type Deps struct {
 	// Updates reports whether a newer release exists (nil disables the
 	// endpoint's answer).
 	Updates func() updatecheck.Status
+	// PolicyDropped reports findings the policy worker discarded because its
+	// queue was full — the price of never blocking packet capture.
+	PolicyDropped func() uint64
 	// BlockStats returns per-block packet tallies observed since start; the
 	// capture tap sees blocked packets before netfilter drops them, so these
 	// are the drops (enforce) or would-be drops (observe). Nil-safe.

@@ -3,9 +3,14 @@
 
 export class APIError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  // otpRequired is the login endpoint saying the password was right and it
+  // wants the second factor. It travels as a field rather than as text in the
+  // message, so the login form branches on a fact instead of on wording.
+  otpRequired: boolean
+  constructor(status: number, message: string, otpRequired = false) {
     super(message)
     this.status = status
+    this.otpRequired = otpRequired
   }
 }
 
@@ -16,9 +21,22 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     init.body = JSON.stringify(body)
   }
   const resp = await fetch(path, init)
-  if (resp.status === 401) throw new APIError(401, 'unauthorized')
+  // 401 carries two different meanings here: "your session is gone, go to the
+  // login screen", and login's own "right password, now the one-time code".
+  // Reading the body tells them apart. Throwing away the body unread — which
+  // is what this used to do — made enabling 2FA a permanent lockout: the form
+  // never learned to ask for the code and reported invalid credentials for a
+  // password that was correct.
   const text = await resp.text()
-  const data = text ? JSON.parse(text) : {}
+  let data: { error?: string; otp_required?: boolean } = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = {}
+  }
+  if (resp.status === 401) {
+    throw new APIError(401, data.error || 'unauthorized', data.otp_required === true)
+  }
   if (!resp.ok) throw new APIError(resp.status, data.error || resp.statusText)
   return data as T
 }

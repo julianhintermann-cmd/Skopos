@@ -45,9 +45,16 @@ export function formatTime(iso: string): string {
 
 export function formatRelative(iso: string): string {
   const then = new Date(iso).getTime()
-  const secs = Math.max(0, (Date.now() - then) / 1000)
-  if (secs < 60) return `${Math.floor(secs)}s ago`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`
-  return `${Math.floor(secs / 86400)}d ago`
+  const diff = (Date.now() - then) / 1000
+  const secs = Math.abs(diff)
+  const unit =
+    secs < 60
+      ? `${Math.floor(secs)}s`
+      : secs < 3600
+        ? `${Math.floor(secs / 60)}m`
+        : secs < 86400
+          ? `${Math.floor(secs / 3600)}h`
+          : `${Math.floor(secs / 86400)}d`
+  // A block's expiry sits in the future; everything else is in the past.
+  return diff >= 0 ? `${unit} ago` : `in ${unit}`
 }

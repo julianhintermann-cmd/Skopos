@@ -209,10 +209,12 @@ func TestSetCountryPrefixesObserveOnlyRemembers(t *testing.T) {
 // take down is the one they need to reach the dashboard from.
 func TestManualBlockRefusesProtected(t *testing.T) {
 	svc, _ := newTestService(t, baseConfig(true), NewMemoryBackend(true))
-	svc.SetProtected([]netip.Prefix{
+	if err := svc.SetProtected(context.Background(), []netip.Prefix{
 		netip.MustParsePrefix("192.168.1.1/32"),
 		netip.MustParsePrefix("10.0.0.0/8"),
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	cases := []struct {

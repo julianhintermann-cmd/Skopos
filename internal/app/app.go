@@ -140,6 +140,13 @@ func (a *App) Run(ctx context.Context) error {
 		dispatcher.System(ctx, model.SeverityWarning, "Skopos firewall degraded",
 			"The firewall backend is unavailable; Skopos is monitoring but not enforcing blocks.")
 	}
+	// The never-block list has to be in place before anything is restored or
+	// blocked, or the first thing Skopos does on a cold start is apply the
+	// blocks it would refuse a second later. applySettings sets it again from
+	// the effective settings; this is the same list, early.
+	if err := fw.SetProtected(ctx, protectedFromConfig(a.cfg)); err != nil {
+		a.log.Error("applying the never-block list", "err", err)
+	}
 	if err := fw.Restore(ctx); err != nil {
 		a.log.Error("restoring firewall state", "err", err)
 	}
@@ -466,6 +473,22 @@ func (a *App) applyStaticBlocks(ctx context.Context, fw *firewall.Service) {
 			a.log.Warn("applying static block", "prefix", entry, "err", err)
 		}
 	}
+}
+
+// protectedFromConfig derives the never-block list straight from the YAML,
+// for the window before the settings layer is up. It mirrors what the policy
+// engine computes: the configured allowlist plus the default gateways.
+func protectedFromConfig(cfg *config.Config) []netip.Prefix {
+	var out []netip.Prefix
+	for _, e := range cfg.Firewall.Allowlist {
+		if p, err := parsePrefix(e); err == nil {
+			out = append(out, p)
+		}
+	}
+	for _, gw := range resolveGateways() {
+		out = append(out, netip.PrefixFrom(gw, gw.BitLen()))
+	}
+	return out
 }
 
 func parsePrefix(s string) (netip.Prefix, error) {

@@ -21,3 +21,5 @@ func (unsupportedBackend) EnsureBase(context.Context) error                     
 func (unsupportedBackend) Reconcile(context.Context, []Rule) error                { return nil }
 func (unsupportedBackend) ReconcileCountry(context.Context, []netip.Prefix) error { return nil }
 func (unsupportedBackend) ReconcileDevices(context.Context, []DeviceRule) error   { return nil }
+
+func (unsupportedBackend) ReconcileProtected(context.Context, []netip.Prefix) error { return nil }

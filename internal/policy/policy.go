@@ -59,9 +59,9 @@ type Config struct {
 	// Allowlist holds never-block prefixes. The gateway is protected in
 	// addition, regardless of this list.
 	Allowlist []netip.Prefix
-	// Gateway is always protected from blocking (the last-resort safety so
+	// Gateways are always protected from blocking (the last-resort safety so
 	// Skopos can never lock you out of your own network).
-	Gateway netip.Addr
+	Gateways []netip.Addr
 	// Muter, when set, suppresses matching findings' alerts and
 	// notifications. Blocking is unaffected: silencing a nuisance must not
 	// silently disarm the protection that goes with it.
@@ -112,8 +112,10 @@ func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock
 	for _, p := range cfg.Allowlist {
 		allow.Add(p)
 	}
-	if cfg.Gateway.IsValid() {
-		allow.Add(netip.PrefixFrom(cfg.Gateway, cfg.Gateway.BitLen()))
+	for _, gw := range cfg.Gateways {
+		if gw.IsValid() {
+			allow.Add(netip.PrefixFrom(gw, gw.BitLen()))
+		}
 	}
 	allow.Build()
 	return &Engine{
@@ -147,8 +149,10 @@ func (e *Engine) Apply(enforcement Enforcement, cooldown, blockTTL time.Duration
 	for _, p := range allowlist {
 		allow.Add(p)
 	}
-	if e.cfg.Gateway.IsValid() {
-		allow.Add(netip.PrefixFrom(e.cfg.Gateway, e.cfg.Gateway.BitLen()))
+	for _, gw := range e.cfg.Gateways {
+		if gw.IsValid() {
+			allow.Add(netip.PrefixFrom(gw, gw.BitLen()))
+		}
 	}
 	allow.Build()
 
@@ -276,10 +280,12 @@ func (e *Engine) Protected(addr netip.Addr) bool {
 func (e *Engine) ProtectedPrefixes() []netip.Prefix {
 	e.mu.Lock()
 	out := append([]netip.Prefix(nil), e.cfg.Allowlist...)
-	gw := e.cfg.Gateway
+	gateways := append([]netip.Addr(nil), e.cfg.Gateways...)
 	e.mu.Unlock()
-	if gw.IsValid() {
-		out = append(out, netip.PrefixFrom(gw, gw.BitLen()))
+	for _, gw := range gateways {
+		if gw.IsValid() {
+			out = append(out, netip.PrefixFrom(gw, gw.BitLen()))
+		}
 	}
 	return out
 }

@@ -147,7 +147,7 @@ func policyFromConfig(cfg *config.Config, classifier *flow.Classifier, st *store
 			MinSeverity: model.Severity(cfg.Detection.QuietHours.MinSeverity),
 		},
 		Allowlist: allow,
-		Gateway:   resolveGateway(),
+		Gateways:  resolveGateways(),
 	}, st, disp, fw, clock)
 }
 

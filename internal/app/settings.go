@@ -80,7 +80,9 @@ func (a *App) applySettings(ctx context.Context, r settings.Runtime,
 		To:          clockToTime(config.ClockTime{Hour: r.QuietHours.ToHour, Minute: r.QuietHours.ToMinute}),
 		MinSeverity: severityOr(r.QuietHours.MinSeverity, "critical"),
 	}, allow)
-	fw.SetProtected(pol.ProtectedPrefixes())
+	if err := fw.SetProtected(ctx, pol.ProtectedPrefixes()); err != nil {
+		a.log.Error("applying the never-block list", "err", err)
+	}
 
 	// Detectors.
 	if obs.portscan != nil {

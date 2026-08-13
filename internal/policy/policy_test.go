@@ -152,7 +152,7 @@ func TestAllowlistAndGatewayNeverBlocked(t *testing.T) {
 	e, _, _, blocker := baseEngine(Config{
 		Enforcement: Enforce, Cooldown: time.Minute, BlockTTL: time.Hour,
 		Allowlist: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
-		Gateway:   netip.MustParseAddr("192.168.1.1"),
+		Gateways:  []netip.Addr{netip.MustParseAddr("192.168.1.1")},
 	}, func() time.Time { return now })
 
 	// Allowlisted source: no block.

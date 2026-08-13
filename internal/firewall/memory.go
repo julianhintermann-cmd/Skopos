@@ -19,6 +19,7 @@ type MemoryBackend struct {
 	countryCalls   int
 	devices        []DeviceRule
 	deviceCalls    int
+	protected      []netip.Prefix
 }
 
 // NewMemoryBackend returns a memory backend. available controls whether it
@@ -98,6 +99,23 @@ func (m *MemoryBackend) ReconcileCountry(_ context.Context, prefixes []netip.Pre
 	m.countryCalls++
 	m.mu.Unlock()
 	return nil
+}
+
+// ReconcileProtected implements Backend.
+func (m *MemoryBackend) ReconcileProtected(_ context.Context, prefixes []netip.Prefix) error {
+	sorted := append([]netip.Prefix(nil), prefixes...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
+	m.mu.Lock()
+	m.protected = sorted
+	m.mu.Unlock()
+	return nil
+}
+
+// CurrentProtected returns the last reconciled never-block prefixes (sorted).
+func (m *MemoryBackend) CurrentProtected() []netip.Prefix {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]netip.Prefix(nil), m.protected...)
 }
 
 // CurrentCountry returns the last reconciled country prefixes (sorted).

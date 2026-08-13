@@ -140,10 +140,33 @@ func (s *Service) SetDefaultTTL(d time.Duration) {
 
 // SetProtected replaces the never-block set. The settings layer calls it with
 // the same list the policy engine gets, so the two cannot drift apart.
-func (s *Service) SetProtected(prefixes []netip.Prefix) {
+//
+// It reconciles rather than only recording: allowlisting an address that is
+// already blocked has to lift that block now, not at whatever unrelated event
+// happens to trigger the next reconcile.
+func (s *Service) SetProtected(ctx context.Context, prefixes []netip.Prefix) error {
 	s.cfgMu.Lock()
 	s.cfg.Protected = append([]netip.Prefix(nil), prefixes...)
 	s.cfgMu.Unlock()
+
+	if !s.Enforcing() {
+		return nil
+	}
+	s.mu.Lock()
+	if err := s.backend.ReconcileProtected(ctx, prefixes); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+	// Drop any stored block the new list now covers, and re-apply the device
+	// policies through the same filter.
+	if err := s.Reconcile(ctx); err != nil {
+		return err
+	}
+	s.countryMu.Lock()
+	devices := append([]DeviceRule(nil), s.devicePolicies...)
+	s.countryMu.Unlock()
+	return s.SetDevicePolicies(ctx, devices)
 }
 
 // ProtectedPrefixes returns the never-block set, so the dashboard can warn
@@ -337,6 +360,16 @@ func (s *Service) CountryPrefixCount() int {
 func (s *Service) rulesFor(blocks []model.Block) []Rule {
 	rules := make([]Rule, 0, len(blocks))
 	for _, b := range blocks {
+		// Refusing new blocks on protected addresses is not enough on its
+		// own: an operator can allowlist an address that is already blocked
+		// — "oh, that one is fine after all" — and the stored block would
+		// otherwise keep being pushed to the kernel on every reconcile while
+		// the dashboard listed the address as protected. The allowlist wins,
+		// and it wins from the next reconcile rather than only for whatever
+		// happens to be created afterwards.
+		if _, blocked := s.Protects(b.Prefix); blocked {
+			continue
+		}
 		action := s.cfg.ActionExternal
 		if s.cfg.IsInternal(b.Prefix.Addr()) {
 			action = s.cfg.ActionInternal

@@ -32,8 +32,10 @@ const (
 	// Preventive country blocking: whole countries' prefixes, dropped on the
 	// way in only (after a ct accept for established flows, so the NAS can
 	// still deliberately reach those countries).
-	setCountry4 = "country_drop4"
-	setCountry6 = "country_drop6"
+	setCountry4   = "country_drop4"
+	setCountry6   = "country_drop6"
+	setProtected4 = "protected4"
+	setProtected6 = "protected6"
 
 	// Per-device policy: the LAN ranges to compare against, plus the two
 	// device sets.
@@ -127,10 +129,12 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	// Country and LAN sets: intervals without timeout — replaced wholesale
 	// when the list, the GeoIP database or the configuration changes.
 	for name, keyType := range map[string]nftables.SetDatatype{
-		setCountry4: nftables.TypeIPAddr,
-		setCountry6: nftables.TypeIP6Addr,
-		setLAN4:     nftables.TypeIPAddr,
-		setLAN6:     nftables.TypeIP6Addr,
+		setCountry4:   nftables.TypeIPAddr,
+		setCountry6:   nftables.TypeIP6Addr,
+		setLAN4:       nftables.TypeIPAddr,
+		setLAN6:       nftables.TypeIP6Addr,
+		setProtected4: nftables.TypeIPAddr,
+		setProtected6: nftables.TypeIP6Addr,
 	} {
 		set := &nftables.Set{
 			Table:    table,
@@ -205,8 +209,18 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	// prefixes only stop unsolicited inbound traffic — replies to connections
 	// the LAN opened itself (updates, feeds, a CDN that happens to sit there)
 	// keep flowing. Rule order within a chain is the order added here.
+	// The never-block list sits between the conntrack accept and the country
+	// drop, and matches the source only — the same field the country rule
+	// matches. Placed any earlier it would short-circuit the per-device
+	// policies; written as a destination match it would accept every inbound
+	// packet to the LAN when the LAN is allowlisted, which would quietly
+	// disable country blocking altogether. Here it does exactly one thing:
+	// an address the operator marked never-block is not dropped for the
+	// country it happens to sit in.
 	for _, chain := range []*nftables.Chain{input, forward} {
 		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: ctEstablishedAccept()})
+		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: acceptExprs(setProtected4, false)})
+		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: acceptExprs(setProtected6, true)})
 		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(setCountry4, false, true, false)})
 		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(setCountry6, true, true, false)})
 	}
@@ -241,6 +255,43 @@ func (b *nftBackend) loadLANRanges() error {
 		)
 	}
 	for _, name := range []string{setLAN4, setLAN6} {
+		c.FlushSet(b.sets[name])
+		if els := elements[name]; len(els) > 0 {
+			if err := c.SetAddElements(b.sets[name], els); err != nil {
+				return fmt.Errorf("populating set %s: %w", name, err)
+			}
+		}
+	}
+	return c.Flush()
+}
+
+// ReconcileProtected replaces the never-block sets.
+func (b *nftBackend) ReconcileProtected(_ context.Context, prefixes []netip.Prefix) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.table == nil {
+		return fmt.Errorf("nftables: EnsureBase not called")
+	}
+	c, err := nftables.New()
+	if err != nil {
+		return err
+	}
+	elements := map[string][]nftables.SetElement{}
+	for _, p := range prefixes {
+		if !p.IsValid() || p.Bits() == 0 {
+			continue
+		}
+		name := setProtected4
+		if p.Addr().Is6() {
+			name = setProtected6
+		}
+		start, end := intervalBounds(p)
+		elements[name] = append(elements[name],
+			nftables.SetElement{Key: start},
+			nftables.SetElement{Key: end, IntervalEnd: true},
+		)
+	}
+	for _, name := range []string{setProtected4, setProtected6} {
 		c.FlushSet(b.sets[name])
 		if els := elements[name]; len(els) > 0 {
 			if err := c.SetAddElements(b.sets[name], els); err != nil {
@@ -390,6 +441,22 @@ func matchExprs(setName string, v6, bySrc, reject bool) []expr.Any {
 		exprs = append(exprs, &expr.Verdict{Kind: expr.VerdictDrop})
 	}
 	return exprs
+}
+
+// acceptExprs matches a source address against a set and accepts it,
+// short-circuiting the rules that follow in the same chain.
+func acceptExprs(setName string, v6 bool) []expr.Any {
+	offset, length := addrField(v6, true)
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{nfproto(v6)}},
+		&expr.Payload{
+			DestRegister: 1, Base: expr.PayloadBaseNetworkHeader,
+			Offset: offset, Len: length,
+		},
+		&expr.Lookup{SourceRegister: 1, SetName: setName},
+		&expr.Verdict{Kind: expr.VerdictAccept},
+	}
 }
 
 func nfproto(v6 bool) byte {

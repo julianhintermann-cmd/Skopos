@@ -142,7 +142,11 @@ export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
   return (
     <div className="flex flex-col gap-4">
       {blockFor?.Source && (
+        // Keyed on the target: without it React reuses the instance when the
+        // operator opens the dialog on one alert and then another, and the
+        // note typed for the first would be saved against the second.
         <BlockDialog
+          key={blockFor.ID}
           source={blockFor.Source}
           detector={blockFor.Detector}
           onClose={() => setBlockFor(null)}
@@ -290,6 +294,7 @@ function Incidents({
     <div className="flex flex-col gap-4">
       {muteFor && (
         <MuteDialog
+          key={muteFor.id}
           incident={muteFor}
           onClose={() => setMuteFor(null)}
           onDone={() => {
@@ -300,6 +305,7 @@ function Incidents({
       )}
       {blockFor && (
         <BlockDialog
+          key={blockFor.id}
           source={blockFor.source}
           detector={blockFor.detectors?.[0] ?? ''}
           onClose={() => setBlockFor(null)}

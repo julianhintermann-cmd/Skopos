@@ -64,6 +64,13 @@ type Backend interface {
 	// unsolicited inbound traffic only, never replies to connections the
 	// LAN itself opened.
 	ReconcileCountry(ctx context.Context, prefixes []netip.Prefix) error
+	// ReconcileProtected replaces the never-block set. Its rule accepts a
+	// matching source ahead of the country drop, so an address the operator
+	// marked never-block keeps reaching them even when its whole country is
+	// blocked. It sits behind the per-device policies deliberately: those are
+	// explicit, per-device decisions and are refused for protected addresses
+	// before they ever get here.
+	ReconcileProtected(ctx context.Context, prefixes []netip.Prefix) error
 	// Available reports whether the backend can actually enforce (required
 	// capabilities and kernel support present).
 	Available() bool

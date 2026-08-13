@@ -14,6 +14,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
+	"github.com/julianhintermann-cmd/skopos/internal/updatecheck"
 )
 
 // LiveProvider supplies the current live throughput snapshot for the overview
@@ -53,6 +54,9 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// Updates reports whether a newer release exists (nil disables the
+	// endpoint's answer).
+	Updates func() updatecheck.Status
 	// BlockStats returns per-block packet tallies observed since start; the
 	// capture tap sees blocked packets before netfilter drops them, so these
 	// are the drops (enforce) or would-be drops (observe). Nil-safe.
@@ -148,6 +152,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/speedtest", s.requireRead(http.HandlerFunc(s.handleSpeedtestHistory)))
 	s.mux.Handle("GET /api/geoip/summary", s.requireRead(http.HandlerFunc(s.handleGeoIPSummary)))
 	s.mux.Handle("GET /api/reputation", s.requireRead(http.HandlerFunc(s.handleReputation)))
+	s.mux.Handle("GET /metrics", s.requireRead(http.HandlerFunc(s.handleMetrics)))
+	s.mux.Handle("GET /api/updates", s.requireRead(http.HandlerFunc(s.handleUpdates)))
 	s.mux.Handle("GET /api/integrations/abuseipdb", s.requireRead(http.HandlerFunc(s.handleAbuseIPDBStatus)))
 
 	// Write endpoints.

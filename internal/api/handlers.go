@@ -12,6 +12,8 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
+	"github.com/julianhintermann-cmd/skopos/internal/updatecheck"
+	"github.com/julianhintermann-cmd/skopos/internal/version"
 )
 
 // Health is the /api/health payload.
@@ -392,4 +394,14 @@ func parsePrefixOrIP(s string) (netip.Prefix, error) {
 		return netip.Prefix{}, err
 	}
 	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// handleUpdates reports whether a newer release exists. Disabled or
+// not-yet-run checks answer honestly rather than claiming "up to date".
+func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Updates == nil {
+		writeJSON(w, http.StatusOK, updatecheck.Status{Current: version.Version})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.Updates())
 }

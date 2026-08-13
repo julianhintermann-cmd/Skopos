@@ -105,6 +105,8 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | `logging.max_backups` | integer | `10` | MaxBackups is the number of rotated log files to keep. |
 | **`metrics`** | object | | Metrics configures the optional Prometheus endpoint. |
 | `metrics.enabled` | boolean |  | Enabled serves Prometheus metrics on /metrics. |
+| **`updates`** | object | | Updates configures the daily release check. |
+| `updates.check` | boolean | `true` | Check asks GitHub's public releases endpoint once a day whether a newer Skopos exists, shows the answer in the System view and sends one notification per new version. Nothing is transmitted but the request itself. On by default — a monitoring tool that silently runs a stale image is worse than one that asks. |
 | `demo` | boolean |  | Demo replaces live capture with a synthetic traffic generator so the dashboard can be explored without any privileges or real traffic. |
 
 See [`deploy/config.example.yaml`](../deploy/config.example.yaml) for a fully-commented example.

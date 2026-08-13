@@ -43,6 +43,9 @@ type Config struct {
 	// Metrics configures the optional Prometheus endpoint.
 	Metrics Metrics `yaml:"metrics" json:"metrics,omitzero"`
 
+	// Updates configures the daily release check.
+	Updates Updates `yaml:"updates" json:"updates,omitzero"`
+
 	// Demo replaces live capture with a synthetic traffic generator so the
 	// dashboard can be explored without any privileges or real traffic.
 	Demo bool `yaml:"demo" json:"demo,omitempty"`
@@ -451,4 +454,14 @@ type Logging struct {
 type Metrics struct {
 	// Enabled serves Prometheus metrics on /metrics.
 	Enabled bool `yaml:"enabled" json:"enabled,omitempty"`
+}
+
+// Updates configures the release check.
+type Updates struct {
+	// Check asks GitHub's public releases endpoint once a day whether a
+	// newer Skopos exists, shows the answer in the System view and sends one
+	// notification per new version. Nothing is transmitted but the request
+	// itself. On by default — a monitoring tool that silently runs a stale
+	// image is worse than one that asks.
+	Check bool `yaml:"check" json:"check"`
 }

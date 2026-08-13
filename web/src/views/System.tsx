@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type Health, type AuditEntry, type SpeedtestResult } from '../lib/api'
+import { api, type Health, type AuditEntry, type SpeedtestResult, type UpdateStatus } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
 import { Sparkline } from '../components/Sparkline'
 import { Th, Td } from './Devices'
@@ -9,6 +9,7 @@ import { formatTime, formatRelative } from '../lib/format'
 export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const health = useFetch<Health>('/api/health', { pollMs: 5000, onUnauthorized })
   const audit = useFetch<{ audit: AuditEntry[] | null }>('/api/audit?limit=50', { pollMs: 10000, onUnauthorized })
+  const updates = useFetch<UpdateStatus>('/api/updates', { pollMs: 300000, onUnauthorized })
   const [testResult, setTestResult] = useState<string>('')
 
   const sendTest = async () => {
@@ -24,8 +25,28 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
   const h = health.data
   const entries = audit.data?.audit ?? []
 
+  const up = updates.data
+
   return (
     <div className="flex flex-col gap-4">
+      {up?.update_available && (
+        <a
+          href={up.url}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-lg border px-4 py-3 no-underline"
+          style={{ background: 'var(--accent-tint)', borderColor: 'var(--accent)' }}
+        >
+          <p className="text-sm font-semibold" style={{ color: 'var(--accent-strong)' }}>
+            Skopos {up.latest} is available
+          </p>
+          <p className="mt-1 text-sm" style={{ color: 'var(--text)' }}>
+            You are running {up.current}. Pull the new image and recreate the container — your data and
+            settings survive. Read the release notes →
+          </p>
+        </a>
+      )}
+
       <Card>
         <CardHeader title="Health" sub="subsystem status" />
         {health.loading && !h ? (

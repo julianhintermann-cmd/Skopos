@@ -109,5 +109,6 @@ func Default() *Config {
 			MaxBackups: 10,
 		},
 		Metrics: Metrics{Enabled: false},
+		Updates: Updates{Check: true},
 	}
 }

@@ -176,7 +176,16 @@ logging:
   max_backups: 10
 
 metrics:
-  enabled: false         # serve Prometheus metrics on /metrics
+  enabled: false         # serve Prometheus metrics on /metrics (read scope)
+
+# -----------------------------------------------------------------------------
+# Updates — a daily look at the public releases page
+# -----------------------------------------------------------------------------
+updates:
+  # Asks GitHub once a day whether a newer Skopos exists, shows it in the
+  # System view and notifies once per new version. Nothing but the request
+  # leaves the box. Set to false for an air-gapped install.
+  check: true
 
 # Replace live capture with synthetic traffic — explore the UI with no
 # privileges and no real network. Also settable with SKOPOS_DEMO=1.

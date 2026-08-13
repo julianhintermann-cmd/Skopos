@@ -30,6 +30,8 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
 	"github.com/julianhintermann-cmd/skopos/internal/store"
+	"github.com/julianhintermann-cmd/skopos/internal/updatecheck"
+	"github.com/julianhintermann-cmd/skopos/internal/version"
 )
 
 // App is a fully wired Skopos runtime.
@@ -218,6 +220,15 @@ func (a *App) Run(ctx context.Context) error {
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
 	rep := reputation.New(st, secretBox, a.clock)
 
+	// Release check: a monitoring tool quietly running a stale image is a
+	// failure mode of its own. One notification per new version, never a
+	// nag; the System view carries the state.
+	updates := updatecheck.New(version.Version, a.clock)
+	updates.SetNotifier(func(v, url string) {
+		dispatcher.System(ctx, model.SeverityInfo, "Skopos "+v+" is available",
+			"A newer release is published. Release notes: "+url)
+	})
+
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
@@ -230,6 +241,7 @@ func (a *App) Run(ctx context.Context) error {
 		Reputation:        rep,
 		BlockStats:        watch.Stats,
 		CountryBlockStats: countryEnf.Stats,
+		Updates:           updates.Status,
 		Clock:             a.clock,
 		Health:            a.healthFunc(st, backend, fw),
 	})
@@ -257,6 +269,9 @@ func (a *App) Run(ctx context.Context) error {
 	spawn("aggregator", func() { _ = agg.Run(runCtx) })
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })
 	spawn("country-enforcer", func() { countryEnf.run(runCtx) })
+	if a.cfg.Updates.Check {
+		spawn("update-check", func() { updates.Run(runCtx) })
+	}
 	spawn("blockwatch", func() { a.refreshBlockWatch(runCtx, st, watch) })
 	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {

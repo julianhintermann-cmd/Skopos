@@ -1,0 +1,117 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/julianhintermann-cmd/skopos/internal/version"
+)
+
+// handleMetrics serves the Prometheus text exposition format. Hand-rolled
+// rather than pulled from a client library: the exported set is small and
+// static, and the image stays free of a dependency tree for nine gauges.
+// The endpoint is behind the read scope like every other read — point your
+// scraper at it with an API token (or none, in an `auth: none` LAN).
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !s.deps.Config.Metrics.Enabled {
+		writeError(w, http.StatusNotFound, "metrics endpoint is disabled (metrics.enabled)")
+		return
+	}
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+
+	var b strings.Builder
+	metric := func(name, help, typ string, value float64, labels ...string) {
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n%s%s %g\n",
+			name, help, name, typ, name, labelSet(labels), value)
+	}
+
+	metric("skopos_build_info", "Build information; always 1.", "gauge", 1, "version", version.Version)
+
+	live := s.liveSnapshot()
+	metric("skopos_throughput_bits_per_second", "Current observed throughput.", "gauge", live.BitsPerSecond)
+	metric("skopos_throughput_packets_per_second", "Current observed packet rate.", "gauge", live.PacketsPerSecond)
+	metric("skopos_capture_sampling", "1 when the capture is sampling to keep up.", "gauge", boolValue(live.Sampling))
+
+	metric("skopos_firewall_enforcing", "1 when blocks are applied to the kernel.", "gauge",
+		boolValue(s.deps.Firewall.Enforcing()))
+
+	blocks, err := s.deps.Store.ActiveBlocks(ctx)
+	if err == nil {
+		metric("skopos_active_blocks", "Blocks currently in effect.", "gauge", float64(len(blocks)))
+	}
+	if unacked, err := s.deps.Store.CountUnackedAlerts(ctx); err == nil {
+		metric("skopos_unacked_alerts", "Alerts not yet acknowledged.", "gauge", float64(unacked))
+	}
+	if flows, err := s.deps.Store.CountFlows(ctx); err == nil {
+		metric("skopos_flows_stored", "Raw flow records in hot storage.", "gauge", float64(flows))
+	}
+	if devices, err := s.deps.Store.ListDevices(ctx); err == nil {
+		metric("skopos_devices", "Devices in the LAN inventory.", "gauge", float64(len(devices)))
+	}
+
+	// Per-block attempt counters: the packets the firewall dropped (or would
+	// drop while observing), labelled by prefix.
+	if s.deps.BlockStats != nil {
+		stats := s.deps.BlockStats()
+		if len(stats) > 0 {
+			b.WriteString("# HELP skopos_block_attempts_total Packets seen from or to a blocked prefix since start.\n")
+			b.WriteString("# TYPE skopos_block_attempts_total counter\n")
+			prefixes := make([]string, 0, len(stats))
+			for p := range stats {
+				prefixes = append(prefixes, p)
+			}
+			sort.Strings(prefixes)
+			for _, p := range prefixes {
+				fmt.Fprintf(&b, "skopos_block_attempts_total%s %d\n",
+					labelSet([]string{"prefix", p}), stats[p].Attempts)
+			}
+		}
+	}
+
+	if s.deps.CountryBlockStats != nil {
+		counts, _ := s.deps.CountryBlockStats()
+		if len(counts) > 0 {
+			b.WriteString("# HELP skopos_country_prefixes Networks loaded into the kernel per blocked country.\n")
+			b.WriteString("# TYPE skopos_country_prefixes gauge\n")
+			codes := make([]string, 0, len(counts))
+			for c := range counts {
+				codes = append(codes, c)
+			}
+			sort.Strings(codes)
+			for _, c := range codes {
+				fmt.Fprintf(&b, "skopos_country_prefixes%s %d\n", labelSet([]string{"country", c}), counts[c])
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write([]byte(b.String()))
+}
+
+// labelSet renders alternating key/value pairs as a Prometheus label set.
+func labelSet(kv []string) string {
+	if len(kv) < 2 {
+		return ""
+	}
+	parts := make([]string, 0, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		parts = append(parts, fmt.Sprintf("%s=%q", kv[i], escapeLabel(kv[i+1])))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+// escapeLabel escapes the three characters the exposition format reserves in
+// label values.
+func escapeLabel(v string) string {
+	return strings.NewReplacer("\\", `\\`, "\"", `\"`, "\n", `\n`).Replace(v)
+}
+
+func boolValue(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}

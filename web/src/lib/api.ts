@@ -167,6 +167,16 @@ export interface CountryStat {
   flows: number
 }
 
+export interface UpdateStatus {
+  checked: boolean
+  current: string
+  latest?: string
+  update_available: boolean
+  url?: string
+  last_check?: string
+  error?: string
+}
+
 export interface GeoIPSummary {
   available: boolean
   out: CountryStat[]

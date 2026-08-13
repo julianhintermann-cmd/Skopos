@@ -525,6 +525,20 @@
       "type": "object",
       "description": "Metrics configures the optional Prometheus endpoint."
     },
+    "updates": {
+      "properties": {
+        "check": {
+          "type": "boolean",
+          "description": "Check asks GitHub's public releases endpoint once a day whether a\nnewer Skopos exists, shows the answer in the System view and sends one\nnotification per new version. Nothing is transmitted but the request\nitself. On by default — a monitoring tool that silently runs a stale\nimage is worse than one that asks."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "check"
+      ],
+      "description": "Updates configures the daily release check."
+    },
     "demo": {
       "type": "boolean",
       "description": "Demo replaces live capture with a synthetic traffic generator so the\ndashboard can be explored without any privileges or real traffic."

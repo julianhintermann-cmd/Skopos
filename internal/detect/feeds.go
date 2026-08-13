@@ -183,6 +183,29 @@ func parseFeed(body []byte, set *netset.Set) int {
 	return n
 }
 
+var (
+	cgnatRange  = netip.MustParsePrefix("100.64.0.0/10")
+	v4Broadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+)
+
+// routableUnicast reports whether addr can plausibly be an external internet
+// peer. Border-firewall lists like FireHOL Level 1 deliberately include bogon
+// space — multicast, broadcast, CGNAT, RFC1918 — because at an internet edge
+// such sources are spoofed. Inside a LAN those ranges are everyday traffic
+// (mDNS, SSDP, DHCP broadcasts, carrier-grade NAT), so a feed match on them
+// is an artifact, never a threat.
+func routableUnicast(addr netip.Addr) bool {
+	a := addr.Unmap()
+	if !a.IsValid() || a.IsMulticast() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
+		a.IsLoopback() || a.IsUnspecified() || a.IsPrivate() {
+		return false
+	}
+	if a.Is4() && (a == v4Broadcast || cgnatRange.Contains(a)) {
+		return false
+	}
+	return true
+}
+
 // Observe implements flow.Observer. It checks the external endpoint of the
 // packet against the blocklist set.
 func (f *Feeds) Observe(p flow.Packet) {
@@ -199,6 +222,10 @@ func (f *Feeds) Observe(p flow.Packet) {
 		peer = p.DstIP
 	default:
 		return // purely internal traffic
+	}
+	// Only judge addresses that can actually exist on the public internet.
+	if !routableUnicast(peer) {
+		return
 	}
 	if !set.Contains(peer) {
 		return

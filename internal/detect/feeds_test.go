@@ -156,3 +156,37 @@ func TestNewDeviceReports(t *testing.T) {
 		t.Errorf("unexpected finding: %+v", f)
 	}
 }
+
+// TestFeedsIgnoresBogonMatches reproduces the FireHOL-Level-1 noise: the list
+// deliberately contains multicast, broadcast, CGNAT and RFC1918 space (border
+// bogons). Inside a LAN those are mDNS, SSDP, DHCP and carrier-NAT traffic and
+// must never raise a finding — while genuine public blocklisted peers still do.
+func TestFeedsIgnoresBogonMatches(t *testing.T) {
+	fetch := &fakeFetcher{bodies: map[string]string{
+		"https://feed.example/list": "224.0.0.0/3\n100.64.0.0/10\n10.0.0.0/8\n45.153.34.0/24\n",
+	}}
+	var findings []Finding
+	f := NewFeeds(FeedsConfig{
+		Lists:      []string{"https://feed.example/list"},
+		Severity:   model.SeverityCritical,
+		IsInternal: internalPred(),
+	}, SinkFunc(func(fi Finding) { findings = append(findings, fi) }), fetch, nil)
+	if _, err := f.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Everyday LAN chatter that FireHOL's bogon entries would match.
+	f.Observe(extPkt("192.168.1.10", "239.255.255.250")) // SSDP multicast
+	f.Observe(extPkt("192.168.1.10", "224.0.0.251"))     // mDNS
+	f.Observe(extPkt("192.168.1.10", "255.255.255.255")) // DHCP broadcast
+	f.Observe(extPkt("192.168.1.10", "100.67.0.225"))    // CGNAT peer
+	if len(findings) != 0 {
+		t.Fatalf("bogon traffic raised %d findings: %+v", len(findings), findings)
+	}
+
+	// A real blocklisted public address still fires.
+	f.Observe(extPkt("45.153.34.47", "192.168.1.10"))
+	if len(findings) != 1 || findings[0].Source != netip.MustParseAddr("45.153.34.47") {
+		t.Fatalf("expected one finding for the public peer, got %+v", findings)
+	}
+}

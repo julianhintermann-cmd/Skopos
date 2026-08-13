@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **World map** — the Traffic view renders the country statistics as a
   choropleth (outbound/inbound toggle), volume-scaled in the accent hue.
 
+### Fixed
+
+- Blocklist feeds no longer raise alerts for bogon space. Border lists like
+  FireHOL Level 1 include multicast, broadcast, CGNAT and RFC1918 ranges by
+  design; inside a LAN those matched everyday mDNS/SSDP/DHCP traffic and
+  produced critical alerts for addresses like 239.255.255.250. Feed matches
+  now only consider routable public unicast addresses.
+
 ## [0.2.0] - 2026-08-12
 
 The dashboard grows up: real-time everything, devices you can name and wake,

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-13
+
+Blocking you can believe: the firewall now proves it is working, whole
+countries are dropped preventively, and observe mode stops pretending.
+
 ### Added
 
 - **World map** — the Traffic view renders the country statistics as a
@@ -130,6 +135,7 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.1
 [0.2.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.0
 [0.1.0]: https://github.com/julianhintermann-cmd/skopos/commit/57a56c1

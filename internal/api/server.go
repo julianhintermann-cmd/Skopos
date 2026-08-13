@@ -54,6 +54,9 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// ApplyDevicePolicies pushes per-device rules to the kernel right after
+	// an edit, instead of waiting for the periodic sync. Nil-safe.
+	ApplyDevicePolicies func()
 	// Settings owns the runtime-editable configuration subset (nil disables
 	// the settings endpoints).
 	Settings SettingsManager
@@ -163,6 +166,7 @@ func (s *Server) routes() {
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
 	s.mux.Handle("POST /api/devices/{mac}/wake", s.requireWrite(http.HandlerFunc(s.handleWakeDevice)))
+	s.mux.Handle("POST /api/devices/{mac}/policy", s.requireWrite(http.HandlerFunc(s.handleSetDevicePolicy)))
 	s.mux.Handle("POST /api/devices/{mac}/presence", s.requireWrite(http.HandlerFunc(s.handleSetDevicePresence)))
 	s.mux.Handle("POST /api/speedtest/run", s.requireWrite(http.HandlerFunc(s.handleSpeedtestRun)))
 	s.mux.Handle("POST /api/geoip/blocked", s.requireWrite(http.HandlerFunc(s.handleSetBlockedCountries)))

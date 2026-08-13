@@ -132,6 +132,8 @@ export interface Device {
   Vendor: string
   WatchPresence: boolean
   Present: boolean
+  // "" (unrestricted), "lan_only" or "quarantine".
+  Policy?: string
   FirstSeen: string
   LastSeen: string
 }

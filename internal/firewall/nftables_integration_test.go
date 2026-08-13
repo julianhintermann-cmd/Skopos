@@ -32,7 +32,7 @@ func TestIntegrationEnsureBaseAndReconcile(t *testing.T) {
 	enterNetNS(t)
 	ctx := context.Background()
 
-	b := NewNFTablesBackend()
+	b := NewNFTablesBackend(nil)
 	if !b.Available() {
 		t.Fatal("backend should be available as root with nftables")
 	}
@@ -95,7 +95,7 @@ func TestIntegrationReconcileCountry(t *testing.T) {
 	enterNetNS(t)
 	ctx := context.Background()
 
-	b := NewNFTablesBackend()
+	b := NewNFTablesBackend(nil)
 	if err := b.EnsureBase(ctx); err != nil {
 		t.Fatalf("EnsureBase: %v", err)
 	}
@@ -166,12 +166,73 @@ func TestIntegrationEnsureBaseIdempotent(t *testing.T) {
 	enterNetNS(t)
 	ctx := context.Background()
 
-	b := NewNFTablesBackend()
+	b := NewNFTablesBackend(nil)
 	if err := b.EnsureBase(ctx); err != nil {
 		t.Fatalf("first EnsureBase: %v", err)
 	}
 	// Calling again must not error (it rebuilds cleanly).
 	if err := b.EnsureBase(ctx); err != nil {
 		t.Fatalf("second EnsureBase: %v", err)
+	}
+}
+
+func TestIntegrationReconcileDevices(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+
+	b := NewNFTablesBackend([]netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")})
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+	if err := b.ReconcileDevices(ctx, []DeviceRule{
+		{Addr: netip.MustParseAddr("192.168.1.50"), Policy: DeviceLANOnly},
+		{Addr: netip.MustParseAddr("192.168.1.51"), Policy: DeviceQuarantine},
+	}); err != nil {
+		t.Fatalf("ReconcileDevices: %v", err)
+	}
+
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, _ := c.ListTables()
+	var table *nftables.Table
+	for _, tb := range tables {
+		if tb.Name == tableName {
+			table = tb
+		}
+	}
+	if table == nil {
+		t.Fatal("skopos table not found")
+	}
+	for name, want := range map[string]int{setDevLANOnly4: 1, setDevQuar4: 1} {
+		set, err := c.GetSetByName(table, name)
+		if err != nil {
+			t.Fatalf("GetSetByName %s: %v", name, err)
+		}
+		els, err := c.GetSetElements(set)
+		if err != nil {
+			t.Fatalf("GetSetElements %s: %v", name, err)
+		}
+		if len(els) != want {
+			t.Errorf("%s has %d elements, want %d", name, len(els), want)
+		}
+	}
+	// The LAN set the lan_only rule compares against must be populated too.
+	lan, err := c.GetSetByName(table, setLAN4)
+	if err != nil {
+		t.Fatalf("GetSetByName lan4: %v", err)
+	}
+	if els, _ := c.GetSetElements(lan); len(els) == 0 {
+		t.Error("lan4 must hold the configured private ranges")
+	}
+
+	// Clearing empties the device sets.
+	if err := b.ReconcileDevices(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := c.GetSetByName(table, setDevQuar4)
+	if els, _ := c.GetSetElements(set); len(els) != 0 {
+		t.Errorf("device set should be empty after clearing, got %d", len(els))
 	}
 }

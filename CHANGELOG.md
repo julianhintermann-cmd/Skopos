@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prometheus metrics** — `/metrics` now actually exists (the config knob
   had nothing behind it): throughput, enforcement state, active blocks,
   unacked alerts, per-block drop counters and per-country prefix counts.
+- **Per-device policy** — confine a device from its detail page: "LAN only"
+  drops its traffic to and from the internet, "Quarantine" drops everything
+  including local traffic. Implemented as kernel rules keyed on the device's
+  address, ahead of the conntrack exemption so an established connection is
+  cut too, and re-derived every 30 seconds so a DHCP lease change follows the
+  device. The UI states plainly that this reaches only traffic passing the
+  machine running Skopos.
 - **Settings you can actually change** — enforcement, automatic block
   lifetime, alert cooldown, the never-block allowlist and both threshold
   detectors are now editable in the dashboard and apply immediately. No

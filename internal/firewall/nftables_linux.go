@@ -34,6 +34,15 @@ const (
 	// still deliberately reach those countries).
 	setCountry4 = "country_drop4"
 	setCountry6 = "country_drop6"
+
+	// Per-device policy: the LAN ranges to compare against, plus the two
+	// device sets.
+	setLAN4        = "lan4"
+	setLAN6        = "lan6"
+	setDevLANOnly4 = "dev_lanonly4"
+	setDevLANOnly6 = "dev_lanonly6"
+	setDevQuar4    = "dev_quarantine4"
+	setDevQuar6    = "dev_quarantine6"
 )
 
 // nftBackend enforces blocks through a dedicated inet table via netlink.
@@ -42,12 +51,16 @@ type nftBackend struct {
 	mu    sync.Mutex
 	table *nftables.Table
 	sets  map[string]*nftables.Set
+	// lan holds the configured private ranges, so per-device rules can ask
+	// "is the other end outside our network?".
+	lan []netip.Prefix
 }
 
-// NewNFTablesBackend creates the nftables backend. It does not touch the
-// kernel until EnsureBase is called.
-func NewNFTablesBackend() Backend {
-	return &nftBackend{sets: make(map[string]*nftables.Set)}
+// NewNFTablesBackend creates the nftables backend. lanRanges are the private
+// ranges per-device policies compare against. It does not touch the kernel
+// until EnsureBase is called.
+func NewNFTablesBackend(lanRanges []netip.Prefix) Backend {
+	return &nftBackend{sets: make(map[string]*nftables.Set), lan: lanRanges}
 }
 
 func (b *nftBackend) Name() string { return "nftables" }
@@ -111,11 +124,13 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 		b.sets[name] = set
 	}
 
-	// Country sets: intervals without timeout — the enforcer replaces them
-	// wholesale when the list or the GeoIP database changes.
+	// Country and LAN sets: intervals without timeout — replaced wholesale
+	// when the list, the GeoIP database or the configuration changes.
 	for name, keyType := range map[string]nftables.SetDatatype{
 		setCountry4: nftables.TypeIPAddr,
 		setCountry6: nftables.TypeIP6Addr,
+		setLAN4:     nftables.TypeIPAddr,
+		setLAN6:     nftables.TypeIP6Addr,
 	} {
 		set := &nftables.Set{
 			Table:    table,
@@ -123,6 +138,20 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 			KeyType:  keyType,
 			Interval: true,
 		}
+		if err := c.AddSet(set, nil); err != nil {
+			return fmt.Errorf("adding set %s: %w", name, err)
+		}
+		b.sets[name] = set
+	}
+
+	// Device sets hold single addresses, so no interval flag is needed.
+	for name, keyType := range map[string]nftables.SetDatatype{
+		setDevLANOnly4: nftables.TypeIPAddr,
+		setDevLANOnly6: nftables.TypeIP6Addr,
+		setDevQuar4:    nftables.TypeIPAddr,
+		setDevQuar6:    nftables.TypeIP6Addr,
+	} {
+		set := &nftables.Set{Table: table, Name: name, KeyType: keyType}
 		if err := c.AddSet(set, nil); err != nil {
 			return fmt.Errorf("adding set %s: %w", name, err)
 		}
@@ -151,6 +180,26 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	addMatch(c, table, forward, false)
 	addMatch(c, table, output, false)
 
+	// Per-device policy sits with the per-IP blocks, ahead of the conntrack
+	// accept: a quarantined or LAN-confined device stays confined for
+	// established connections too, which is the whole point of pulling its
+	// plug from here.
+	for _, chain := range []*nftables.Chain{input, forward, output} {
+		for _, v6 := range []bool{false, true} {
+			quar, lanOnly, lanSet := setDevQuar4, setDevLANOnly4, setLAN4
+			if v6 {
+				quar, lanOnly, lanSet = setDevQuar6, setDevLANOnly6, setLAN6
+			}
+			// Quarantine: absolute, either endpoint.
+			c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(quar, v6, true, false)})
+			c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(quar, v6, false, false)})
+			// LAN-only: drop when this device is one end and the *other* end
+			// is outside the configured private ranges.
+			c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: lanOnlyExprs(lanOnly, lanSet, v6, true)})
+			c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: lanOnlyExprs(lanOnly, lanSet, v6, false)})
+		}
+	}
+
 	// Country blocking comes after the per-IP rules and behind a conntrack
 	// accept: per-IP blocks are absolute in both directions, while country
 	// prefixes only stop unsolicited inbound traffic — replies to connections
@@ -162,6 +211,123 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 		c.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: matchExprs(setCountry6, true, true, false)})
 	}
 
+	if err := c.Flush(); err != nil {
+		return err
+	}
+	// The LAN ranges are static configuration; load them once here.
+	return b.loadLANRanges()
+}
+
+// loadLANRanges fills the lan4/lan6 sets from the configured private ranges.
+// Callers hold b.mu.
+func (b *nftBackend) loadLANRanges() error {
+	c, err := nftables.New()
+	if err != nil {
+		return err
+	}
+	elements := map[string][]nftables.SetElement{}
+	for _, p := range b.lan {
+		if !p.IsValid() || p.Bits() == 0 {
+			continue
+		}
+		name := setLAN4
+		if p.Addr().Is6() {
+			name = setLAN6
+		}
+		start, end := intervalBounds(p)
+		elements[name] = append(elements[name],
+			nftables.SetElement{Key: start},
+			nftables.SetElement{Key: end, IntervalEnd: true},
+		)
+	}
+	for _, name := range []string{setLAN4, setLAN6} {
+		c.FlushSet(b.sets[name])
+		if els := elements[name]; len(els) > 0 {
+			if err := c.SetAddElements(b.sets[name], els); err != nil {
+				return fmt.Errorf("populating set %s: %w", name, err)
+			}
+		}
+	}
+	return c.Flush()
+}
+
+// lanOnlyExprs builds "ip [s|d]addr @devices ip [d|s]addr != @lan drop": the
+// device is one endpoint, the peer is outside the private ranges.
+func lanOnlyExprs(devSet, lanSet string, v6, deviceIsSrc bool) []expr.Any {
+	devOff, devLen := addrField(v6, deviceIsSrc)
+	peerOff, peerLen := addrField(v6, !deviceIsSrc)
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{nfproto(v6)}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: devOff, Len: devLen},
+		&expr.Lookup{SourceRegister: 1, SetName: devSet},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: peerOff, Len: peerLen},
+		&expr.Lookup{SourceRegister: 1, SetName: lanSet, Invert: true},
+		&expr.Verdict{Kind: expr.VerdictDrop},
+	}
+}
+
+// addrField returns the payload offset and length of the source or
+// destination address for the given family.
+func addrField(v6, src bool) (offset, length uint32) {
+	if v6 {
+		if src {
+			return 8, 16
+		}
+		return 24, 16
+	}
+	if src {
+		return 12, 4
+	}
+	return 16, 4
+}
+
+// ReconcileDevices replaces the per-device policy sets.
+func (b *nftBackend) ReconcileDevices(_ context.Context, rules []DeviceRule) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.table == nil {
+		return fmt.Errorf("nftables: EnsureBase not called")
+	}
+	c, err := nftables.New()
+	if err != nil {
+		return err
+	}
+
+	elements := map[string][]nftables.SetElement{}
+	for _, r := range rules {
+		addr := r.Addr.Unmap()
+		if !addr.IsValid() {
+			continue
+		}
+		v6 := addr.Is6()
+		var name string
+		switch r.Policy {
+		case DeviceQuarantine:
+			name = setDevQuar4
+			if v6 {
+				name = setDevQuar6
+			}
+		case DeviceLANOnly:
+			name = setDevLANOnly4
+			if v6 {
+				name = setDevLANOnly6
+			}
+		default:
+			continue
+		}
+		elements[name] = append(elements[name], nftables.SetElement{Key: ipBytes(addr)})
+	}
+
+	for _, name := range []string{setDevQuar4, setDevQuar6, setDevLANOnly4, setDevLANOnly6} {
+		c.FlushSet(b.sets[name])
+		if els := elements[name]; len(els) > 0 {
+			if err := c.SetAddElements(b.sets[name], els); err != nil {
+				return fmt.Errorf("populating set %s: %w", name, err)
+			}
+		}
+	}
 	return c.Flush()
 }
 
@@ -206,22 +372,7 @@ func addMatch(c *nftables.Conn, table *nftables.Table, chain *nftables.Chain, by
 
 // matchExprs builds "ip[6] [s|d]addr @set <verdict>".
 func matchExprs(setName string, v6, bySrc, reject bool) []expr.Any {
-	var offset, length uint32
-	if v6 {
-		length = 16
-		if bySrc {
-			offset = 8 // src addr offset in IPv6 header
-		} else {
-			offset = 24
-		}
-	} else {
-		length = 4
-		if bySrc {
-			offset = 12 // src addr offset in IPv4 header
-		} else {
-			offset = 16
-		}
-	}
+	offset, length := addrField(v6, bySrc)
 
 	exprs := []expr.Any{
 		// Match L3 protocol family via meta nfproto.

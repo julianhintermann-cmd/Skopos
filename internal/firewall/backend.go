@@ -29,6 +29,23 @@ type Rule struct {
 	Expires *time.Time
 }
 
+// DevicePolicy is what a per-device rule enforces.
+type DevicePolicy string
+
+const (
+	// DeviceLANOnly drops the device's traffic to and from the internet
+	// while leaving local traffic alone — the IoT lockdown.
+	DeviceLANOnly DevicePolicy = "lan_only"
+	// DeviceQuarantine drops all of the device's traffic, local included.
+	DeviceQuarantine DevicePolicy = "quarantine"
+)
+
+// DeviceRule confines one device by address.
+type DeviceRule struct {
+	Addr   netip.Addr
+	Policy DevicePolicy
+}
+
 // Backend is the kernel abstraction. Implementations must be idempotent:
 // EnsureBase can be called on every start, and Reconcile makes the kernel's
 // block set exactly match desired, adding and removing as needed.
@@ -37,6 +54,9 @@ type Backend interface {
 	EnsureBase(ctx context.Context) error
 	// Reconcile makes the enforced rule set exactly equal to desired.
 	Reconcile(ctx context.Context, desired []Rule) error
+	// ReconcileDevices replaces the per-device policy rules: which LAN
+	// devices may reach the internet, and which are cut off entirely.
+	ReconcileDevices(ctx context.Context, rules []DeviceRule) error
 	// ReconcileCountry replaces the preventive country-block prefix sets.
 	// Separate from Reconcile because the volume differs by orders of
 	// magnitude (one country is tens of thousands of prefixes), the data

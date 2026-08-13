@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
-import { deviceName, type DeviceDetail as Detail } from '../lib/api'
+import { api, deviceName, type DeviceDetail as Detail } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
@@ -16,11 +16,11 @@ const windows = [
   { label: '30d', value: '720h', hint: 'Last 30 days' },
 ]
 
-export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void }) {
+export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite?: boolean }) {
   const { mac = '' } = useParams()
   const [win, setWin] = useState(windows[0])
   const isMobile = useIsMobile()
-  const { data, loading, error } = useFetch<Detail>(
+  const { data, loading, error, refresh } = useFetch<Detail>(
     `/api/devices/${encodeURIComponent(mac)}/detail?window=${win.value}`,
     { pollMs: 15000, onUnauthorized },
   )
@@ -52,6 +52,8 @@ export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void })
               <h1 className="text-lg font-semibold tracking-tight">{name || 'Unnamed device'}</h1>
               {d.Label && <Pill tone="accent">named</Pill>}
               {d.WatchPresence && <Pill tone={d.Present ? 'good' : 'neutral'}>{d.Present ? 'home' : 'away'}</Pill>}
+              {d.Policy === 'lan_only' && <Pill tone="warn">LAN only</Pill>}
+              {d.Policy === 'quarantine' && <Pill tone="crit">quarantined</Pill>}
             </div>
             <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-xs" style={{ color: 'var(--muted)' }}>
               <span>{d.IP}</span>
@@ -66,6 +68,8 @@ export function DeviceDetail({ onUnauthorized }: { onUnauthorized: () => void })
           </div>
         </div>
       </Card>
+
+      <DevicePolicyCard mac={mac} policy={d.Policy ?? ''} canWrite={!!canWrite} onChange={refresh} />
 
       <div className="flex items-center gap-1.5">
         {isMobile ? (
@@ -179,4 +183,81 @@ const knownServices: Record<string, string> = {
 
 function serviceName(port: number, proto: string): string {
   return knownServices[`${port}/${proto}`] ?? '—'
+}
+
+// DevicePolicyCard confines a device. The hint is deliberately explicit about
+// reach: these rules live in the kernel of the machine running Skopos, so a
+// device's own route to the internet through the router is only affected when
+// that traffic actually passes this machine. Promising more would be a
+// security feature that quietly does nothing.
+function DevicePolicyCard({
+  mac,
+  policy,
+  canWrite,
+  onChange,
+}: {
+  mac: string
+  policy: string
+  canWrite: boolean
+  onChange: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const set = async (next: string) => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.post(`/api/devices/${encodeURIComponent(mac)}/policy`, { policy: next })
+      onChange()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const options = [
+    { value: '', label: 'Unrestricted', hint: 'No per-device rule.' },
+    { value: 'lan_only', label: 'LAN only', hint: 'Drop this device\'s traffic to and from the internet.' },
+    { value: 'quarantine', label: 'Quarantine', hint: 'Drop all of this device\'s traffic, local included.' },
+  ]
+
+  return (
+    <Card>
+      <CardHeader
+        title="Device policy"
+        sub="what this device is allowed to reach — applied in the kernel, enforced only where traffic passes this machine"
+      />
+      <div className="flex flex-col gap-2 px-4 pb-4">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              onClick={() => canWrite && set(o.value)}
+              disabled={!canWrite || busy}
+              title={o.hint}
+              className="rounded-md px-3 py-1.5 text-xs font-medium"
+              style={
+                policy === o.value
+                  ? {
+                      background: o.value === '' ? 'var(--surface-2)' : 'var(--crit-tint)',
+                      color: o.value === '' ? 'var(--text)' : 'var(--crit)',
+                    }
+                  : { background: 'var(--surface-2)', color: 'var(--muted)' }
+              }
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>
+          {options.find((o) => o.value === policy)?.hint}{' '}
+          {policy !== '' &&
+            'Traffic that never reaches this machine — a device going straight out through your router — cannot be stopped from here.'}
+        </p>
+        {err && <p className="text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+      </div>
+    </Card>
+  )
 }

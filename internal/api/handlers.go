@@ -405,3 +405,52 @@ func (s *Server) handleUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, s.deps.Updates())
 }
+
+// handleSetDevicePolicy confines a device: "lan_only" cuts it off from the
+// internet, "quarantine" cuts it off entirely, empty lifts the restriction.
+//
+// Like every Skopos rule this acts in the kernel of the machine running
+// Skopos, so it bites on traffic that machine sees or routes. On a NAS that
+// is not the network's gateway, a device's own path to the internet runs
+// through the router and stays out of reach — the UI says so plainly rather
+// than implying a guarantee that is not there.
+func (s *Server) handleSetDevicePolicy(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+
+	mac := strings.TrimSpace(r.PathValue("mac"))
+	var req struct {
+		Policy string `json:"policy"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	policy := model.DevicePolicy(strings.TrimSpace(req.Policy))
+	if !policy.Valid() {
+		writeError(w, http.StatusBadRequest, "policy must be empty, lan_only or quarantine")
+		return
+	}
+	switch err := s.deps.Store.SetDevicePolicy(ctx, mac, policy); {
+	case errors.Is(err, store.ErrDeviceNotFound):
+		writeError(w, http.StatusNotFound, "no device with that mac")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id, _ := identityFrom(r)
+	detail := "policy cleared"
+	if policy != model.PolicyOpen {
+		detail = "policy " + string(policy)
+	}
+	_ = s.deps.Store.Audit(ctx, model.AuditEntry{
+		Actor: id.name, Action: "device_policy", Target: mac, Detail: detail,
+	})
+	// Push it to the kernel now instead of waiting for the sync loop, so the
+	// operator sees the effect immediately.
+	if s.deps.ApplyDevicePolicies != nil {
+		s.deps.ApplyDevicePolicies()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "policy": policy})
+}

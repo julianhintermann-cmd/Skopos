@@ -112,3 +112,45 @@ func settingsAuditor(st *store.Store, clock func() time.Time) func(settings.Runt
 		})
 	}
 }
+
+// syncDevicePolicies keeps the kernel's per-device rules aligned with the
+// device inventory. A device's address can change with DHCP, so the rules are
+// re-derived on an interval rather than only when the operator edits them.
+func (a *App) syncDevicePolicies(ctx context.Context, st *store.Store, fw *firewall.Service) {
+	a.applyDevicePoliciesOnce(ctx, st, fw)
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.applyDevicePoliciesOnce(ctx, st, fw)
+		}
+	}
+}
+
+// applyDevicePoliciesOnce derives the kernel rules from the inventory and
+// pushes them.
+func (a *App) applyDevicePoliciesOnce(ctx context.Context, st *store.Store, fw *firewall.Service) {
+	devices, err := st.RestrictedDevices(ctx)
+	if err != nil {
+		a.warnf("device policies: loading: %v", err)
+		return
+	}
+	rules := make([]firewall.DeviceRule, 0, len(devices))
+	for _, d := range devices {
+		if !d.IP.IsValid() {
+			continue
+		}
+		switch d.Policy {
+		case model.PolicyLANOnly:
+			rules = append(rules, firewall.DeviceRule{Addr: d.IP, Policy: firewall.DeviceLANOnly})
+		case model.PolicyQuarantine:
+			rules = append(rules, firewall.DeviceRule{Addr: d.IP, Policy: firewall.DeviceQuarantine})
+		}
+	}
+	if err := fw.SetDevicePolicies(ctx, rules); err != nil {
+		a.warnf("device policies: applying: %v", err)
+	}
+}

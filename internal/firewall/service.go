@@ -52,6 +52,7 @@ type Service struct {
 
 	countryMu       sync.Mutex
 	countryPrefixes []netip.Prefix
+	devicePolicies  []DeviceRule
 }
 
 // NewService creates a firewall service.
@@ -98,15 +99,22 @@ func (s *Service) SetEnforce(ctx context.Context, on bool) error {
 		}
 		s.countryMu.Lock()
 		prefixes := append([]netip.Prefix(nil), s.countryPrefixes...)
+		devices := append([]DeviceRule(nil), s.devicePolicies...)
 		s.countryMu.Unlock()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if err := s.backend.ReconcileDevices(ctx, devices); err != nil {
+			return err
+		}
 		return s.backend.ReconcileCountry(ctx, prefixes)
 	}
-	// Switching to observe: clear both rule sets so nothing keeps dropping.
+	// Switching to observe: clear every rule set so nothing keeps dropping.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.backend.Reconcile(ctx, nil); err != nil {
+		return err
+	}
+	if err := s.backend.ReconcileDevices(ctx, nil); err != nil {
 		return err
 	}
 	return s.backend.ReconcileCountry(ctx, nil)
@@ -229,6 +237,28 @@ func (s *Service) SetCountryPrefixes(ctx context.Context, prefixes []netip.Prefi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.backend.ReconcileCountry(ctx, prefixes)
+}
+
+// SetDevicePolicies pushes the per-device rules into the kernel. Like
+// country prefixes they are remembered in observe mode so the UI can show
+// what enforcement would cover.
+func (s *Service) SetDevicePolicies(ctx context.Context, rules []DeviceRule) error {
+	s.countryMu.Lock()
+	s.devicePolicies = append([]DeviceRule(nil), rules...)
+	s.countryMu.Unlock()
+	if !s.Enforcing() {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.backend.ReconcileDevices(ctx, rules)
+}
+
+// DevicePolicyCount reports how many devices carry a policy.
+func (s *Service) DevicePolicyCount() int {
+	s.countryMu.Lock()
+	defer s.countryMu.Unlock()
+	return len(s.devicePolicies)
 }
 
 // CountryPrefixCount reports how many prefixes preventive country blocking

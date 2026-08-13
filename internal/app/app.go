@@ -121,7 +121,7 @@ func (a *App) Run(ctx context.Context) error {
 	})
 
 	// --- firewall ----------------------------------------------------------
-	backend := firewall.NewNFTablesBackend()
+	backend := firewall.NewNFTablesBackend(classifier.Ranges())
 	fw := firewall.NewService(firewall.Config{
 		Enforce:        a.cfg.Firewall.Enforcement == "enforce",
 		ActionExternal: firewall.Action(a.cfg.Firewall.ActionExternal),
@@ -255,22 +255,31 @@ func (a *App) Run(ctx context.Context) error {
 			"A newer release is published. Release notes: "+url)
 	})
 
+	// Applying device policies on demand, so an edit in the UI reaches the
+	// kernel immediately instead of at the next sync tick.
+	applyDevicePolicies := func() {
+		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.applyDevicePoliciesOnce(c, st, fw)
+	}
+
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
-		Live:              live,
-		LiveFlows:         liveSink,
-		Cloudflare:        cf,
-		Speedtest:         runSpeedtest,
-		GeoIP:             geo,
-		Countries:         countries,
-		Reputation:        rep,
-		BlockStats:        watch.Stats,
-		CountryBlockStats: countryEnf.Stats,
-		Updates:           updates.Status,
-		Settings:          setman,
-		Clock:             a.clock,
-		Health:            a.healthFunc(st, backend, fw),
+		Live:                live,
+		LiveFlows:           liveSink,
+		Cloudflare:          cf,
+		Speedtest:           runSpeedtest,
+		GeoIP:               geo,
+		Countries:           countries,
+		Reputation:          rep,
+		BlockStats:          watch.Stats,
+		CountryBlockStats:   countryEnf.Stats,
+		Updates:             updates.Status,
+		Settings:            setman,
+		ApplyDevicePolicies: applyDevicePolicies,
+		Clock:               a.clock,
+		Health:              a.healthFunc(st, backend, fw),
 	})
 	if err != nil {
 		return fmt.Errorf("building API: %w", err)
@@ -301,6 +310,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	spawn("blockwatch", func() { a.refreshBlockWatch(runCtx, st, watch) })
 	spawn("names", func() { resolver.Run(runCtx, 30*time.Second) })
+	spawn("device-policies", func() { a.syncDevicePolicies(runCtx, st, fw) })
 	spawn("domains", func() { domains.Run(runCtx, time.Minute) })
 	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {

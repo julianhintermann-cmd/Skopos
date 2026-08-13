@@ -16,11 +16,12 @@ func (s *Store) DeviceByMAC(ctx context.Context, mac string) (model.Device, erro
 	var d model.Device
 	var ip string
 	var watch, present int
+	var policy string
 	var first, last int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, first_seen_ms, last_seen_ms
+		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, policy, first_seen_ms, last_seen_ms
 		FROM devices WHERE mac = ?`, mac).
-		Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &first, &last)
+		Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &policy, &first, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Device{}, ErrDeviceNotFound
 	}
@@ -30,6 +31,7 @@ func (s *Store) DeviceByMAC(ctx context.Context, mac string) (model.Device, erro
 	d.IP, _ = netip.ParseAddr(ip)
 	d.WatchPresence = watch != 0
 	d.Present = present != 0
+	d.Policy = model.DevicePolicy(policy)
 	d.FirstSeen = fromMs(first)
 	d.LastSeen = fromMs(last)
 	return d, nil

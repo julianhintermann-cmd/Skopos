@@ -17,6 +17,8 @@ type MemoryBackend struct {
 	current        []Rule
 	country        []netip.Prefix
 	countryCalls   int
+	devices        []DeviceRule
+	deviceCalls    int
 }
 
 // NewMemoryBackend returns a memory backend. available controls whether it
@@ -60,6 +62,31 @@ func (m *MemoryBackend) ReconcileCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.reconcileCalls
+}
+
+// ReconcileDevices implements Backend.
+func (m *MemoryBackend) ReconcileDevices(_ context.Context, rules []DeviceRule) error {
+	sorted := append([]DeviceRule(nil), rules...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Addr.String() < sorted[j].Addr.String() })
+	m.mu.Lock()
+	m.devices = sorted
+	m.deviceCalls++
+	m.mu.Unlock()
+	return nil
+}
+
+// CurrentDevices returns the last reconciled device rules (sorted).
+func (m *MemoryBackend) CurrentDevices() []DeviceRule {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]DeviceRule(nil), m.devices...)
+}
+
+// DeviceCalls returns how many times ReconcileDevices was called.
+func (m *MemoryBackend) DeviceCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deviceCalls
 }
 
 // ReconcileCountry implements Backend.

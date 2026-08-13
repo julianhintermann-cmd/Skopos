@@ -149,8 +149,36 @@ type Device struct {
 	// this device; Present is the tracker's last known state.
 	WatchPresence bool
 	Present       bool
-	FirstSeen     time.Time
-	LastSeen      time.Time
+	// Policy restricts what this device may reach. Empty means unrestricted.
+	Policy    DevicePolicy
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
+// DevicePolicy is the per-device egress rule. The motivating case is an IoT
+// gadget with no business on the internet: LANOnly confines it to the local
+// network while leaving everything else untouched.
+type DevicePolicy string
+
+const (
+	// PolicyOpen is the default: no per-device restriction.
+	PolicyOpen DevicePolicy = ""
+	// PolicyLANOnly drops this device's traffic to and from the internet,
+	// leaving local traffic alone.
+	PolicyLANOnly DevicePolicy = "lan_only"
+	// PolicyQuarantine drops all of this device's traffic in both
+	// directions, local included — the "unplug it without walking over"
+	// switch for a compromised machine.
+	PolicyQuarantine DevicePolicy = "quarantine"
+)
+
+// Valid reports whether p is a known policy.
+func (p DevicePolicy) Valid() bool {
+	switch p {
+	case PolicyOpen, PolicyLANOnly, PolicyQuarantine:
+		return true
+	}
+	return false
 }
 
 // Name is the best human-readable label for the device: the operator's label

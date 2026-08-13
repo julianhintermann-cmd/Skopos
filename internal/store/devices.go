@@ -68,7 +68,7 @@ func (s *Store) WatchedDevices(ctx context.Context) ([]model.Device, error) {
 
 func (s *Store) queryDevices(ctx context.Context, tail string) ([]model.Device, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, first_seen_ms, last_seen_ms
+		SELECT id, mac, ip, label, hostname, vendor, watch_presence, present, policy, first_seen_ms, last_seen_ms
 		FROM devices `+tail)
 	if err != nil {
 		return nil, err
@@ -80,10 +80,12 @@ func (s *Store) queryDevices(ctx context.Context, tail string) ([]model.Device, 
 		var d model.Device
 		var ip string
 		var watch, present int
+		var policy string
 		var first, last int64
-		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &first, &last); err != nil {
+		if err := rows.Scan(&d.ID, &d.MAC, &ip, &d.Label, &d.Hostname, &d.Vendor, &watch, &present, &policy, &first, &last); err != nil {
 			return nil, err
 		}
+		d.Policy = model.DevicePolicy(policy)
 		d.IP, _ = netip.ParseAddr(ip)
 		d.WatchPresence = watch != 0
 		d.Present = present != 0
@@ -173,4 +175,22 @@ func (s *Store) SetDeviceLabel(ctx context.Context, mac, label string) error {
 		return ErrDeviceNotFound
 	}
 	return nil
+}
+
+// SetDevicePolicy assigns a per-device network policy (empty clears it).
+func (s *Store) SetDevicePolicy(ctx context.Context, mac string, policy model.DevicePolicy) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE devices SET policy = ? WHERE mac = ?`, string(policy), mac)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// RestrictedDevices returns every device carrying a policy, so the firewall
+// can translate them into kernel rules.
+func (s *Store) RestrictedDevices(ctx context.Context) ([]model.Device, error) {
+	return s.queryDevices(ctx, `WHERE policy != '' ORDER BY ip`)
 }

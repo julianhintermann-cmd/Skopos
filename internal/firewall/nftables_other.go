@@ -15,8 +15,9 @@ type unsupportedBackend struct{}
 // NewNFTablesBackend returns a backend that is never available off Linux.
 func NewNFTablesBackend() Backend { return &unsupportedBackend{} }
 
-func (unsupportedBackend) Name() string                                          { return "nftables (unsupported)" }
-func (unsupportedBackend) Available() bool                                       { return false }
-func (unsupportedBackend) EnsureBase(context.Context) error                      { return nil }
-func (unsupportedBackend) Reconcile(context.Context, []Rule) error               { return nil }
+func (unsupportedBackend) Name() string                                           { return "nftables (unsupported)" }
+func (unsupportedBackend) Available() bool                                        { return false }
+func (unsupportedBackend) EnsureBase(context.Context) error                       { return nil }
+func (unsupportedBackend) Reconcile(context.Context, []Rule) error                { return nil }
 func (unsupportedBackend) ReconcileCountry(context.Context, []netip.Prefix) error { return nil }
+func (unsupportedBackend) ReconcileDevices(context.Context, []DeviceRule) error   { return nil }

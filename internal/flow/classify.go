@@ -53,3 +53,10 @@ func (c *Classifier) Direction(src, dst netip.Addr) model.Direction {
 		return model.DirWANtoWAN
 	}
 }
+
+// Ranges returns the configured private ranges. The firewall needs them to
+// express "this device may talk to the LAN but not the internet" as a kernel
+// rule.
+func (c *Classifier) Ranges() []netip.Prefix {
+	return append([]netip.Prefix(nil), c.private...)
+}

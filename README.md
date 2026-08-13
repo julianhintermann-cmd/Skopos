@@ -207,6 +207,11 @@ Four things about blocking that save you a support ticket:
   your port forwards point — plus anything it routes. Traffic between other
   LAN devices and the internet flows through your router, not through Skopos,
   and is out of its reach.
+- **Per-device policies have the same reach.** "LAN only" and "Quarantine"
+  are kernel rules on the device's address; they bite on traffic this machine
+  sees or routes. If your NAS is not the gateway, a device's own path out
+  through the router is not affected — the dashboard says so rather than
+  implying a guarantee it cannot make.
 - **Countries are blocked preventively.** Listed countries' networks (from the
   GeoIP database) are loaded into the kernel and dropped on the way in;
   established connections your own devices opened stay untouched, so blocking

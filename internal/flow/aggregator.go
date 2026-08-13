@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ type Aggregator struct {
 	sink       FlowSink
 	observer   Observer
 	flush      time.Duration
+	nameLookup func(netip.Addr) string
 
 	mu    sync.Mutex
 	flows map[key]*entry
@@ -53,6 +55,9 @@ type Config struct {
 	Sink       FlowSink
 	Observer   Observer // may be nil
 	Flush      time.Duration
+	// NameLookup resolves an address to a hostname learned from passive DNS,
+	// filling in flows whose own packets carried no name. Optional.
+	NameLookup func(netip.Addr) string
 }
 
 // New creates an Aggregator.
@@ -65,6 +70,7 @@ func New(cfg Config) *Aggregator {
 		sink:       cfg.Sink,
 		observer:   cfg.Observer,
 		flush:      cfg.Flush,
+		nameLookup: cfg.NameLookup,
 		flows:      make(map[key]*entry),
 	}
 }
@@ -95,6 +101,11 @@ func (a *Aggregator) Add(p Packet) {
 		dir:   a.classifier.Direction(p.SrcIP, p.DstIP),
 		start: p.Time,
 		end:   p.Time,
+	}
+	// Most flows carry no name of their own — the DNS lookup that resolved
+	// the address happened in an earlier packet. Ask passive DNS.
+	if p.DstName == "" && a.nameLookup != nil {
+		e.dstName = a.nameLookup(p.DstIP)
 	}
 	e.addForward(p)
 	a.flows[k] = e

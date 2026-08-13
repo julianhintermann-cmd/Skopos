@@ -6,6 +6,7 @@ import { Login } from './views/Login'
 import { Overview } from './views/Overview'
 import { Live } from './views/Live'
 import { DeviceDetail } from './views/DeviceDetail'
+import { Domains } from './views/Domains'
 import { Traffic } from './views/Traffic'
 import { Devices } from './views/Devices'
 import { Firewall } from './views/Firewall'
@@ -67,6 +68,7 @@ export default function App() {
           <Route index element={<Overview onUnauthorized={onUnauthorized} />} />
           <Route path="live" element={<Live onUnauthorized={onUnauthorized} />} />
           <Route path="traffic" element={<Traffic onUnauthorized={onUnauthorized} />} />
+          <Route path="domains" element={<Domains onUnauthorized={onUnauthorized} />} />
           <Route path="devices" element={<Devices onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="devices/:mac" element={<DeviceDetail onUnauthorized={onUnauthorized} />} />
           <Route path="firewall" element={<Firewall onUnauthorized={onUnauthorized} canWrite={canWrite} />} />

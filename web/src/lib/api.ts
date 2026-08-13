@@ -159,12 +159,28 @@ export interface DeviceDetail {
   series: TimePoint[] | null
   destinations: Talker[] | null
   ports: PortUsage[] | null
+  domains: DomainStat[] | null
+  fingerprints: Fingerprint[] | null
 }
 
 export interface CountryStat {
   country: string
   bytes: number
   flows: number
+}
+
+export interface DomainStat {
+  name: string
+  flows: number
+  bytes: number
+  devices: number
+}
+
+export interface Fingerprint {
+  ja4: string
+  hits: number
+  first_seen: string
+  last_seen: string
 }
 
 export interface UpdateStatus {

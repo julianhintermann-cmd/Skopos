@@ -54,7 +54,7 @@ function Reputation({ ip }: { ip: string }) {
           Abuse {score}% · {info.abuse_reports} reports
         </span>
       ) : (
-        <span style={{ color: 'var(--muted)' }}>Connect AbuseIPDB in Settings for abuse scores.</span>
+        <span style={{ color: 'var(--muted)' }}>No attack reports on record for this address.</span>
       )}
     </div>
   )

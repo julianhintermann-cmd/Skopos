@@ -6,6 +6,7 @@ const en = {
   'nav.overview': 'Overview',
   'nav.live': 'Live',
   'nav.traffic': 'Traffic',
+  'nav.domains': 'Domains',
   'nav.devices': 'Devices',
   'nav.firewall': 'Firewall',
   'nav.alerts': 'Alerts',

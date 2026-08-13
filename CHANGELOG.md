@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Names instead of addresses** — Skopos now reads the DNS and mDNS answers
+  and TLS server names that pass the wire, so flows, top destinations and
+  alerts show `youtube.com` where they used to show `142.250.185.78`. Learned
+  passively from traffic Skopos already sees: nothing is queried, nothing is
+  sent anywhere, and names survive restarts.
+- **Domains view** — which domains the network contacted, by volume, for the
+  last hour/day/week, and the same list per device on its detail page.
+- **TLS client fingerprints (JA4)** — each device's TLS handshakes are
+  fingerprinted, identifying client software independently of address or
+  port. Shown per device; the same browser keeps the same fingerprint even
+  when it shuffles cipher order.
+- **Prometheus metrics** — `/metrics` now actually exists (the config knob
+  had nothing behind it): throughput, enforcement state, active blocks,
+  unacked alerts, per-block drop counters and per-country prefix counts.
+- **Release check** — a daily look at the public releases page, a banner in
+  the System view and one notification per new version, so a stale image
+  cannot go unnoticed. Off with `updates.check: false`.
+
+### Changed
+
+- **IP reputation now works without any account.** Attack history comes from
+  DShield (SANS Internet Storm Center) alongside RDAP ownership — both open,
+  keyless sources — so the "who is this?" lookup is fully populated on a
+  fresh install instead of asking the operator to register for an API key
+  and paste it into Settings. The API-key handling and its Settings card are
+  gone with it.
+
 ## [0.2.2] - 2026-08-13
 
 Country blocking learns the difference between an attack and an answer.

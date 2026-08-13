@@ -133,6 +133,10 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 		flags := b[13]
 		// SYN set, ACK clear => a fresh connection attempt.
 		p.SYN = flags&0x02 != 0 && flags&0x10 == 0
+		dataOff := int(b[12]>>4) * 4
+		if dataOff >= 20 && dataOff < len(b) {
+			p = enrichTCPPayload(b[dataOff:], p)
+		}
 		return p, true
 	case ipProtoUDP:
 		if len(b) < 8 {
@@ -141,6 +145,9 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 		p.Proto = model.ProtoUDP
 		p.SrcPort = binary.BigEndian.Uint16(b[0:2])
 		p.DstPort = binary.BigEndian.Uint16(b[2:4])
+		if p.SrcPort == portDNS || p.SrcPort == portMDNS || p.DstPort == portMDNS {
+			p.Names = parseDNSNames(b[8:])
+		}
 		return p, true
 	case ipProtoICMP, ipProtoICMPv6:
 		p.Proto = model.ProtoICMP
@@ -148,6 +155,28 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 	default:
 		return flow.Packet{}, false
 	}
+}
+
+// enrichTCPPayload reads what a TCP payload can tell us without keeping any
+// connection state: a TLS ClientHello gives the server name and the client's
+// JA4 fingerprint, DNS-over-TCP gives name mappings. Anything else is left
+// untouched — payload bytes never leave this function.
+func enrichTCPPayload(payload []byte, p flow.Packet) flow.Packet {
+	if p.SrcPort == portDNS || p.DstPort == portDNS {
+		// DNS over TCP prefixes the message with a 2-byte length.
+		if len(payload) > 2 {
+			p.Names = parseDNSNames(payload[2:])
+		}
+		return p
+	}
+	if hello, ok := parseClientHello(payload); ok {
+		if hello.SNI != "" {
+			p.DstName = hello.SNI
+			p.Names = append(p.Names, flow.NameRecord{Addr: p.DstIP.Unmap(), Name: hello.SNI})
+		}
+		p.JA4 = hello.JA4
+	}
+	return p
 }
 
 func macString(b []byte) string {

@@ -26,6 +26,7 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/flow"
 	"github.com/julianhintermann-cmd/skopos/internal/geoip"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
+	"github.com/julianhintermann-cmd/skopos/internal/names"
 	"github.com/julianhintermann-cmd/skopos/internal/notify"
 	"github.com/julianhintermann-cmd/skopos/internal/reputation"
 	"github.com/julianhintermann-cmd/skopos/internal/secret"
@@ -190,6 +191,14 @@ func (a *App) Run(ctx context.Context) error {
 	}, pol, a.clock))
 	// Per-block attempt tallies from the same packet stream.
 	observers.all = append(observers.all, watch)
+	// Passive DNS: learn address→name from DNS/mDNS answers and TLS SNI, so
+	// the dashboard can say "youtube.com" instead of "142.250.185.78".
+	resolver := names.New(st, classifier.Internal, a.clock)
+	resolver.SetLogger(a.warnf)
+	if err := resolver.Warm(ctx); err != nil {
+		a.log.Warn("loading known names", "err", err)
+	}
+	observers.all = append(observers.all, resolver)
 
 	// Tee the flow sink: every flushed batch is written to the store as before
 	// and, in addition, projected for the live view — streamed to dashboards
@@ -208,17 +217,20 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		return f.Dir == model.DirWANtoLAN && countryEnf.Covered(f.SrcIP)
 	}
-	liveSink := newLiveFlows(st, nil, blockedFlow)
+	// Domain contacts ride the same batches: one row per device/domain/hour.
+	domains := newDomainRecorder(st, st, classifier.Internal, a.warnf)
+	liveSink := newLiveFlows(domains, nil, blockedFlow)
 
 	agg := flow.New(flow.Config{
 		Classifier: classifier,
 		Sink:       liveSink,
 		Observer:   observers,
 		Flush:      a.cfg.Capture.FlowFlush.Std(),
+		NameLookup: resolver.Lookup,
 	})
 
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
-	rep := reputation.New(st, secretBox, a.clock)
+	rep := reputation.New(a.clock)
 
 	// Release check: a monitoring tool quietly running a stale image is a
 	// failure mode of its own. One notification per new version, never a
@@ -273,6 +285,8 @@ func (a *App) Run(ctx context.Context) error {
 		spawn("update-check", func() { updates.Run(runCtx) })
 	}
 	spawn("blockwatch", func() { a.refreshBlockWatch(runCtx, st, watch) })
+	spawn("names", func() { resolver.Run(runCtx, 30*time.Second) })
+	spawn("domains", func() { domains.Run(runCtx, time.Minute) })
 	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {
 		spawn("devices", func() { _ = observers.deviceTracker.Run(runCtx) })

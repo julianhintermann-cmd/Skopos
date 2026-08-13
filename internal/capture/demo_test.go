@@ -17,15 +17,44 @@ func TestDemoStepEmitsTraffic(t *testing.T) {
 	if len(pkts) == 0 {
 		t.Fatal("demo step emitted no packets")
 	}
-	// Baseline traffic comes in request/reply pairs, so the count is even and
-	// small.
-	if len(pkts)%2 != 0 {
-		t.Errorf("baseline packets should come in pairs, got %d", len(pkts))
+	// Baseline traffic comes in request/reply pairs; the occasional DNS
+	// answer that teaches a name rides alongside them.
+	var exchanges, dnsAnswers int
+	for _, p := range pkts {
+		if p.SrcPort == portDNS && len(p.Names) > 0 {
+			dnsAnswers++
+			continue
+		}
+		exchanges++
+	}
+	if exchanges%2 != 0 {
+		t.Errorf("baseline packets should come in pairs, got %d (plus %d DNS answers)", exchanges, dnsAnswers)
 	}
 	for _, p := range pkts {
 		if !p.SrcIP.IsValid() || !p.DstIP.IsValid() {
 			t.Errorf("packet has invalid address: %+v", p)
 		}
+	}
+}
+
+func TestDemoTeachesNamesAndFingerprints(t *testing.T) {
+	d := NewDemoSource(DemoOptions{Seed: 1, Now: func() time.Time { return time.Unix(1000, 0) }})
+	var named, fingerprinted int
+	for i := 0; i < 20; i++ {
+		d.Step(func(p flow.Packet) {
+			if len(p.Names) > 0 {
+				named++
+			}
+			if p.JA4 != "" {
+				fingerprinted++
+			}
+		})
+	}
+	if named == 0 {
+		t.Error("demo must emit name observations so passive DNS has data")
+	}
+	if fingerprinted == 0 {
+		t.Error("demo must emit JA4 fingerprints")
 	}
 }
 

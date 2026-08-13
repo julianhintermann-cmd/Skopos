@@ -30,6 +30,20 @@ type Packet struct {
 	DstMAC string
 	// Optional parsed name for the destination (DNS answer / TLS SNI).
 	DstName string
+	// Names carries address→name mappings learned from a DNS or mDNS
+	// response, so later flows to those addresses can be shown by name.
+	Names []NameRecord
+	// JA4 is the TLS client fingerprint of a ClientHello, when this packet
+	// carried one. Identifies the client software independently of address
+	// or port — the same browser keeps the same fingerprint.
+	JA4 string
+}
+
+// NameRecord is one address→name mapping observed in a DNS/mDNS answer.
+type NameRecord struct {
+	Addr netip.Addr
+	Name string
+	TTL  uint32
 }
 
 // key identifies a flow: a canonical 5-tuple. Flows are unidirectional; the

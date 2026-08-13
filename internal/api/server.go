@@ -154,7 +154,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/reputation", s.requireRead(http.HandlerFunc(s.handleReputation)))
 	s.mux.Handle("GET /metrics", s.requireRead(http.HandlerFunc(s.handleMetrics)))
 	s.mux.Handle("GET /api/updates", s.requireRead(http.HandlerFunc(s.handleUpdates)))
-	s.mux.Handle("GET /api/integrations/abuseipdb", s.requireRead(http.HandlerFunc(s.handleAbuseIPDBStatus)))
+	s.mux.Handle("GET /api/domains", s.requireRead(http.HandlerFunc(s.handleDomains)))
 
 	// Write endpoints.
 	s.mux.Handle("POST /api/devices/{mac}/label", s.requireWrite(http.HandlerFunc(s.handleSetDeviceLabel)))
@@ -162,8 +162,6 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/devices/{mac}/presence", s.requireWrite(http.HandlerFunc(s.handleSetDevicePresence)))
 	s.mux.Handle("POST /api/speedtest/run", s.requireWrite(http.HandlerFunc(s.handleSpeedtestRun)))
 	s.mux.Handle("POST /api/geoip/blocked", s.requireWrite(http.HandlerFunc(s.handleSetBlockedCountries)))
-	s.mux.Handle("POST /api/integrations/abuseipdb", s.requireWrite(http.HandlerFunc(s.handleAbuseIPDBConnect)))
-	s.mux.Handle("DELETE /api/integrations/abuseipdb", s.requireWrite(http.HandlerFunc(s.handleAbuseIPDBDisconnect)))
 	s.mux.Handle("POST /api/auth/totp/setup", s.requireWrite(http.HandlerFunc(s.handleTOTPSetup)))
 	s.mux.Handle("POST /api/auth/totp/enable", s.requireWrite(http.HandlerFunc(s.handleTOTPEnable)))
 	s.mux.Handle("POST /api/auth/totp/disable", s.requireWrite(http.HandlerFunc(s.handleTOTPDisable)))

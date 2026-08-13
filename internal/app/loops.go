@@ -107,6 +107,13 @@ func (a *App) spawnMaintenance(ctx context.Context, spawn func(string, func()), 
 				if _, err := st.EnforceHotLimit(ctx, a.cfg.Storage.HotMaxSize.Bytes()); err != nil {
 					a.log.Warn("hot-limit enforcement", "err", err)
 				}
+				// Passive DNS follows the raw-flow retention: names outlive
+				// the flows that taught them by exactly one retention window,
+				// which is what makes older history still readable.
+				cutoff := a.clock().Add(-a.cfg.Storage.Retention.Rollup1h.Std())
+				if err := st.PruneNames(ctx, cutoff); err != nil {
+					a.log.Warn("pruning names", "err", err)
+				}
 			}
 		}
 	})

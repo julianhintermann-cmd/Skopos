@@ -20,14 +20,18 @@ type DemoSource struct {
 	step  time.Duration
 	ticks uint64
 
-	devices []demoDevice
-	dests   []demoDest
+	devices  []demoDevice
+	dests    []demoDest
+	resolver netip.Addr // the LAN resolver whose answers teach names
 }
 
 type demoDevice struct {
 	ip   netip.Addr
 	mac  string
 	name string
+	// ja4 is a plausible TLS client fingerprint, distinct per device class
+	// so the demo shows what the real fingerprinting looks like.
+	ja4 string
 }
 
 type demoDest struct {
@@ -60,13 +64,16 @@ func NewDemoSource(opts DemoOptions) *DemoSource {
 		now:  opts.Now,
 		step: opts.Step,
 	}
+	// The JA4 values are shaped like real fingerprints (and distinct per
+	// device class) so the demo shows what live capture produces.
 	d.devices = []demoDevice{
-		{netip.MustParseAddr("192.168.1.20"), "de:ad:be:ef:00:20", "living-room-tv"},
-		{netip.MustParseAddr("192.168.1.21"), "de:ad:be:ef:00:21", "julians-macbook"},
-		{netip.MustParseAddr("192.168.1.22"), "de:ad:be:ef:00:22", "pixel-phone"},
-		{netip.MustParseAddr("192.168.1.23"), "de:ad:be:ef:00:23", "home-assistant"},
-		{netip.MustParseAddr("192.168.1.24"), "de:ad:be:ef:00:24", "work-laptop"},
+		{netip.MustParseAddr("192.168.1.20"), "de:ad:be:ef:00:20", "living-room-tv", "t13d1516h2_8daaf6152771_b0da82dd1658"},
+		{netip.MustParseAddr("192.168.1.21"), "de:ad:be:ef:00:21", "julians-macbook", "t13d1517h2_8daaf6152771_e5627efa2ab1"},
+		{netip.MustParseAddr("192.168.1.22"), "de:ad:be:ef:00:22", "pixel-phone", "t13d1613h2_8daaf6152771_02713d6af862"},
+		{netip.MustParseAddr("192.168.1.23"), "de:ad:be:ef:00:23", "home-assistant", "t13d1412h2_e8f1e7e78f70_5ac7197df9d2"},
+		{netip.MustParseAddr("192.168.1.24"), "de:ad:be:ef:00:24", "work-laptop", "t13d1517h2_8daaf6152771_7c62d0c0d8e7"},
 	}
+	d.resolver = netip.MustParseAddr("192.168.1.1")
 	d.dests = []demoDest{
 		{netip.MustParseAddr("140.82.121.3"), "github.com", 443},
 		{netip.MustParseAddr("151.101.1.140"), "reddit.com", 443},
@@ -110,10 +117,22 @@ func (d *DemoSource) Step(handle func(flow.Packet)) {
 		reqSize := uint64(80 + d.rng.Intn(400))
 		respSize := uint64(200 + d.rng.Intn(12000))
 
+		// A real client learns the name first (DNS) and then presents it in
+		// the TLS handshake; the demo mirrors both so passive DNS, the
+		// domains view and JA4 have something to show.
+		if d.rng.Intn(6) == 0 {
+			handle(flow.Packet{
+				Time: now, SrcIP: d.resolver, DstIP: dev.ip, SrcPort: portDNS, DstPort: sport,
+				Proto: model.ProtoUDP, Size: 90 + uint64(d.rng.Intn(60)),
+				Names: []flow.NameRecord{{Addr: dst.ip, Name: dst.name, TTL: 300}},
+			})
+		}
 		handle(flow.Packet{
 			Time: now, SrcIP: dev.ip, DstIP: dst.ip, SrcPort: sport, DstPort: dst.port,
 			Proto: protoFor(dst.port), Size: reqSize, SYN: true,
 			SrcMAC: dev.mac, DstName: dst.name,
+			Names: []flow.NameRecord{{Addr: dst.ip, Name: dst.name}},
+			JA4:   dev.ja4,
 		})
 		handle(flow.Packet{
 			Time: now, SrcIP: dst.ip, DstIP: dev.ip, SrcPort: dst.port, DstPort: sport,

@@ -265,11 +265,12 @@ type KernelHealth struct {
 	// long the gap has been open rather than just that one exists.
 	FailingSince time.Time `json:"failing_since,omitzero"`
 	Error        string    `json:"error,omitempty"`
-	// ContentsChecked is false when the sets could only be checked for
-	// existence, because the desired state could not be read to compare them
-	// against. The structural half of the check still ran; saying so beats a
-	// clean bill of health that quietly covered less ground than usual.
-	ContentsChecked bool `json:"contents_checked"`
+	// SetsChecked is false when the emptiness half of the check was skipped,
+	// because the desired state could not be read to know which sets ought to
+	// hold something. The structural half — table, chains, rule counts, and that
+	// every set exists — still ran; saying so beats a clean bill of health that
+	// quietly covered less ground than usual.
+	SetsChecked bool `json:"sets_checked"`
 }
 
 // KernelHealth returns the outcome of the last verification pass.
@@ -283,11 +284,11 @@ func (s *Service) KernelHealth() KernelHealth {
 	return h
 }
 
-func (s *Service) recordHealth(ok, contents bool, err error) {
+func (s *Service) recordHealth(ok, setsChecked bool, err error) {
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
 	s.health.OK = ok
-	s.health.ContentsChecked = contents
+	s.health.SetsChecked = setsChecked
 	s.health.CheckedAt = s.clock()
 	if ok {
 		s.health.FailingSince = time.Time{}
@@ -360,10 +361,17 @@ func (s *Service) Verify(ctx context.Context) error {
 // merges ranges and interval sets store two elements per range — so the
 // invariant is the one that actually matters: a set Skopos believes it filled
 // must not be empty in the kernel.
-// It reports whether the contents could be compared at all, so a pass that
-// covered less ground than usual is visible rather than indistinguishable from
-// a full one.
-func (s *Service) checkKernel(ctx context.Context) (contents bool, err error) {
+//
+// Note what this deliberately does not do: it never reads the elements back and
+// compares them to what Skopos meant to put there. A set holding entirely the
+// wrong addresses is not empty, and so passes. The emptiness invariant is the
+// strongest one that survives coalescing; anything stronger would flag healthy
+// kernels, and a check that cries wolf gets ignored.
+//
+// It reports whether that emptiness half ran at all, so a pass that covered
+// less ground than usual is visible rather than indistinguishable from a full
+// one.
+func (s *Service) checkKernel(ctx context.Context) (setsChecked bool, err error) {
 	if err := s.backend.Verify(ctx); err != nil {
 		return false, err
 	}

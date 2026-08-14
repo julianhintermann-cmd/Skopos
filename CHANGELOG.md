@@ -38,8 +38,9 @@ said enforcing. Nothing ever asked the kernel.
 
 - **The firewall checks itself, against the kernel.** Every two minutes Skopos
   reads back what the kernel actually holds — the table, all three chains,
-  their rule counts, and the contents of all fourteen sets — and rebuilds from
-  the stored state when any of it is missing. It detects a wiped ruleset, a
+  their exact rule counts, and all fourteen sets, none of which may sit empty
+  while Skopos holds rules for it — and rebuilds from the stored state when any
+  of it is missing. It detects a wiped ruleset, a
   deleted or flushed chain, a single deleted rule, and an emptied set, and it
   repairs all of them without waiting for anyone to notice. What it found and
   when is reported as it happened, so a view can say "unconfirmed since 09:14"

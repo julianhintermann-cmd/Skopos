@@ -10,6 +10,18 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
+// internalFactor raises the bar for sources inside the private ranges.
+//
+// One threshold for the whole world was a self-inflicted outage waiting to
+// happen: a backup, an rsync or a media library scan opens hundreds of
+// connections in seconds, which is ordinary on a LAN and alarming from the
+// internet. With Block on, the same number that catches a flood from outside
+// would auto-block the machine doing the backup — and with the internal action
+// set to reject, cut it off mid-transfer. The port-scan detector already
+// separates the two; this brings the rate detector into line without adding
+// two more knobs nobody would know how to set.
+const internalFactor = 10
+
 // RateConfig configures the rate/flood detector.
 type RateConfig struct {
 	Window              time.Duration
@@ -17,6 +29,11 @@ type RateConfig struct {
 	MaxPacketsPerSecond int // sustained packet rate per source
 	Severity            model.Severity
 	Block               bool
+	// IsInternal reports whether an address is inside the private ranges. A
+	// LAN source is held to a proportionally higher bar and is never proposed
+	// for an automatic block: the cost of being wrong about your own network
+	// is an outage you caused yourself.
+	IsInternal func(netip.Addr) bool
 }
 
 // Rate detects connection floods and abnormal packet rates from a single
@@ -149,25 +166,34 @@ func (d *Rate) Observe(p flow.Packet) {
 		return
 	}
 
-	if d.cfg.MaxNewConnections > 0 && conns >= d.cfg.MaxNewConnections {
+	internal := d.cfg.IsInternal != nil && d.cfg.IsInternal(p.SrcIP)
+	factor := 1
+	if internal {
+		factor = internalFactor
+	}
+
+	if limit := d.cfg.MaxNewConnections * factor; limit > 0 && conns >= limit {
 		st.firedAt = now
-		d.sink.Raise(d.finding(p.SrcIP, "Connection-rate spike",
+		d.sink.Raise(d.finding(p.SrcIP, internal, "Connection-rate spike",
 			fmt.Sprintf("%d new connections within %s", conns, d.cfg.Window)))
 		return
 	}
-	if d.cfg.MaxPacketsPerSecond > 0 {
+	if limit := d.cfg.MaxPacketsPerSecond * factor; limit > 0 {
 		pps := float64(packets) / d.cfg.Window.Seconds()
-		if int(pps) >= d.cfg.MaxPacketsPerSecond {
+		if int(pps) >= limit {
 			st.firedAt = now
-			d.sink.Raise(d.finding(p.SrcIP, "Packet-rate spike",
+			d.sink.Raise(d.finding(p.SrcIP, internal, "Packet-rate spike",
 				fmt.Sprintf("~%d packets/s sustained over %s", int(pps), d.cfg.Window)))
 		}
 	}
 }
 
-func (d *Rate) finding(src netip.Addr, title, detail string) Finding {
+func (d *Rate) finding(src netip.Addr, internal bool, title, detail string) Finding {
 	return Finding{
 		Detector: "rate", Source: src, Severity: d.cfg.Severity,
-		Title: title, Detail: detail, SuggestBlock: d.cfg.Block,
+		Title: title, Detail: detail,
+		// Never auto-block a device on your own network for talking too much.
+		// The alert still fires, and the operator can block by hand from it.
+		SuggestBlock: d.cfg.Block && !internal,
 	}
 }

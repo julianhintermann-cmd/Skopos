@@ -4,6 +4,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
 // The window slides: events older than the window stop counting, so a source
@@ -113,5 +115,86 @@ func TestSourceMapKeepsTheActiveOne(t *testing.T) {
 	}
 	if len(sources) != 1 {
 		t.Errorf("only the active source should remain, got %d", len(sources))
+	}
+}
+
+// The exact scenario the audit measured: fill the source map to its cap, wait
+// a day, then have a genuinely new source flood. It used to raise nothing at
+// all — permanently, for the life of the process — because the map was full of
+// addresses last heard from weeks earlier and there was no way out.
+func TestFloodIsStillDetectedAfterTheSourceMapFills(t *testing.T) {
+	base := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	now := base
+	c := &collector{}
+	d := NewRate(RateConfig{
+		Window: time.Minute, MaxNewConnections: 100,
+		Severity: model.SeverityWarning,
+	}, c, func() time.Time { return now })
+
+	// One packet each from enough distinct sources to reach the cap.
+	for i := range maxTrackedSources {
+		src := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}).String()
+		d.Observe(syn(now, src, "192.168.1.10", 443))
+	}
+	if c.count() != 0 {
+		t.Fatalf("setup should not have raised anything, got %d", c.count())
+	}
+
+	// A day later all of that is ancient history — and someone starts.
+	now = base.Add(24 * time.Hour)
+	for range 150 {
+		d.Observe(syn(now, "203.0.113.9", "192.168.1.10", 443))
+	}
+	if c.count() == 0 {
+		t.Fatal("a flood from a new source was ignored because the map was full of stale entries")
+	}
+}
+
+// A backup or an rsync opens hundreds of connections in seconds. That is
+// ordinary on a LAN and alarming from the internet, and one threshold for both
+// meant the number that catches a flood cut off the machine doing the backup —
+// mid-transfer, with the internal action set to reject.
+func TestLANSourcesAreHeldToAHigherBarAndNeverAutoBlocked(t *testing.T) {
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	lan := netip.MustParsePrefix("192.168.0.0/16")
+	c := &collector{}
+	d := NewRate(RateConfig{
+		Window: time.Minute, MaxNewConnections: 100,
+		Severity: model.SeverityWarning, Block: true,
+		IsInternal: lan.Contains,
+	}, c, func() time.Time { return now })
+
+	// 200 connections from the operator's own network: over the external
+	// limit, nowhere near the internal one.
+	for range 200 {
+		d.Observe(syn(now, "192.168.1.50", "9.9.9.9", 443))
+	}
+	if c.count() != 0 {
+		t.Errorf("an ordinary LAN transfer raised %d findings", c.count())
+	}
+
+	// Far past even the raised bar: it fires, but must not propose a block.
+	for range 1200 {
+		d.Observe(syn(now, "192.168.1.50", "9.9.9.9", 443))
+	}
+	c.mu.Lock()
+	lanFindings := append([]Finding(nil), c.findings...)
+	c.findings = nil
+	c.mu.Unlock()
+	if len(lanFindings) == 0 {
+		t.Fatal("a genuine LAN flood should still be reported")
+	}
+	if lanFindings[0].SuggestBlock {
+		t.Error("a device on your own network must not be auto-blocked for talking too much")
+	}
+
+	// An external source at the same rate is still proposed for a block.
+	for range 150 {
+		d.Observe(syn(now, "203.0.113.9", "9.9.9.9", 443))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.findings) == 0 || !c.findings[0].SuggestBlock {
+		t.Errorf("an external flood should still suggest a block, got %+v", c.findings)
 	}
 }

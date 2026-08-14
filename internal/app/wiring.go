@@ -84,6 +84,7 @@ func (a *App) buildObservers(cfg *config.Config, classifier *flow.Classifier, st
 			MaxPacketsPerSecond: cfg.Detection.Rate.MaxPacketsPerSecond,
 			Severity:            model.Severity(cfg.Detection.Rate.Severity),
 			Block:               cfg.Detection.Rate.Block,
+			IsInternal:          classifier.Internal,
 		}, pol, a.clock)
 		set.rateGate = newGate(set.rate, cfg.Detection.Rate.Enabled)
 		set.all = append(set.all, set.rateGate)

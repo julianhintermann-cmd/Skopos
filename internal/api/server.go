@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -91,6 +94,10 @@ type Server struct {
 	authOff bool
 	clock   func() time.Time
 	log     func(string, ...any)
+	// trustedProxies are the peers whose X-Forwarded-For is believed. Empty
+	// means nobody's, which is the default and the right answer for a NAS a
+	// browser reaches directly.
+	trustedProxies []netip.Prefix
 }
 
 const sessionCookie = "skopos_session"
@@ -102,6 +109,23 @@ func New(deps Deps) (*Server, error) {
 	if clock == nil {
 		clock = time.Now
 	}
+	// Configuration is checked before anything is opened: a bad value should
+	// cost nothing to find, and reporting it only after the database is touched
+	// buries it behind unrelated failures.
+	//
+	// A malformed entry is refused rather than skipped. Dropping it silently
+	// would leave an operator believing their proxy is trusted when it is not,
+	// and the symptom — every client looking alike to the rate limiter — is the
+	// sort of thing nobody notices until it locks out the household.
+	var proxies []netip.Prefix
+	for _, raw := range deps.Config.Server.TrustedProxies {
+		p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("server.trusted_proxies: %q is not a CIDR range: %w", raw, err)
+		}
+		proxies = append(proxies, p.Masked())
+	}
+
 	signer, err := newSessionSigner(deps.Store, deps.Config.Server.Auth.SessionTTL.Std())
 	if err != nil {
 		return nil, err
@@ -121,6 +145,8 @@ func New(deps Deps) (*Server, error) {
 		authOff: deps.Config.Server.Auth.Mode == "none",
 		clock:   clock,
 		log:     func(string, ...any) {},
+
+		trustedProxies: proxies,
 	}
 	s.routes()
 	return s, nil
@@ -210,18 +236,50 @@ func (s *Server) routes() {
 }
 
 // clientIP extracts a stable client identifier for rate limiting.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+//
+// X-Forwarded-For is only read when the connection itself came from a
+// configured proxy. It used to be read unconditionally, which quietly undid the
+// login rate limiter it feeds: the limiter counts failed attempts per client,
+// and a header anyone can set means an attacker is a new client on every
+// request, so the count never reaches the threshold. Whoever peers with us is
+// the one fact about a request that cannot be forged, and it is the fact that
+// decides here.
+func (s *Server) clientIP(r *http.Request) string {
+	peer := peerIP(r.RemoteAddr)
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" && s.trusted(peer) {
 		if i := strings.IndexByte(fwd, ','); i >= 0 {
 			return strings.TrimSpace(fwd[:i])
 		}
 		return strings.TrimSpace(fwd)
 	}
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i >= 0 {
-		host = host[:i]
+	return peer
+}
+
+// peerIP is the address the connection actually came from.
+func peerIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
 	}
 	return host
+}
+
+// trusted reports whether a peer may speak for someone else.
+func (s *Server) trusted(peer string) bool {
+	if len(s.trustedProxies) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(peer)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range s.trustedProxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // Snapshot is a nil-safe accessor for live stats.

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -221,5 +223,64 @@ func TestLoginBackoff(t *testing.T) {
 	}
 	if !got429 {
 		t.Error("expected backoff to produce a 429 after repeated failures")
+	}
+}
+
+// The limiter counts failures per client, so whoever gets to name the client
+// gets to decide whether it counts at all. X-Forwarded-For used to be read from
+// any source: a fresh value on each attempt made every request a first offence
+// and the threshold was never reached. Nothing about the header changed — it is
+// still trivially set — so the fix is to disbelieve it unless the connection
+// came from a proxy the operator configured, and this test spends ten forged
+// identities to prove the limiter still counts to one.
+func TestLoginLimiterIgnoresForwardedForFromUntrustedPeers(t *testing.T) {
+	srv, _ := newTestServer(t, "single_admin")
+
+	got429 := false
+	for i := 0; i < 10; i++ {
+		headers := map[string]string{"X-Forwarded-For": fmt.Sprintf("203.0.113.%d", i)}
+		resp := do(t, srv.Handler(), "POST", "/api/auth/login",
+			`{"username":"admin","password":"wrong"}`, nil, headers)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			got429 = true
+			break
+		}
+	}
+	if !got429 {
+		t.Error("a new X-Forwarded-For per attempt walked past the login limiter")
+	}
+}
+
+// Behind a real reverse proxy the header is the only way to tell two clients
+// apart, so a configured proxy is still believed — otherwise the whole
+// household would share one bucket and one attacker could lock everyone out.
+func TestLoginLimiterHonoursForwardedForFromAConfiguredProxy(t *testing.T) {
+	srv, _ := newTestServer(t, "single_admin")
+	// httptest gives every request the same RemoteAddr, so trusting it makes
+	// this server behave as if it sat behind a proxy at that address.
+	srv.trustedProxies = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+
+	// One client fails enough to be throttled.
+	victim := map[string]string{"X-Forwarded-For": "203.0.113.7"}
+	for i := 0; i < 10; i++ {
+		do(t, srv.Handler(), "POST", "/api/auth/login", `{"username":"admin","password":"wrong"}`, nil, victim)
+	}
+
+	// A different client behind the same proxy must not inherit that penalty.
+	other := map[string]string{"X-Forwarded-For": "203.0.113.8"}
+	resp := do(t, srv.Handler(), "POST", "/api/auth/login", `{"username":"admin","password":"wrong"}`, nil, other)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		t.Error("a trusted proxy's clients were lumped into one bucket")
+	}
+}
+
+// A CIDR that does not parse is a configuration the operator believes is
+// protecting them. Starting anyway with the entry quietly dropped would leave
+// them thinking their proxy is trusted while every client looks like the proxy.
+func TestTrustedProxiesRefusesAMalformedRange(t *testing.T) {
+	cfg := config.Default()
+	cfg.Server.TrustedProxies = []string{"192.0.2.0/24", "not-a-cidr"}
+	if _, err := New(Deps{Config: cfg}); err == nil {
+		t.Fatal("expected a malformed trusted_proxies entry to be refused")
 	}
 }

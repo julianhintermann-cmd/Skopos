@@ -38,6 +38,20 @@ func tcp(srcPort, dstPort uint16, flags byte) []byte {
 	return h
 }
 
+// ipv4Fragmented builds an IPv4 header with the flags-and-offset word set
+// verbatim, so a test can say "more fragments follow" (0x2000) and "this one
+// starts 1480 bytes in" (offset 185, counted in eight-byte units) the way the
+// wire does.
+func ipv4Fragmented(proto byte, flagsAndOffset uint16, payload []byte) []byte {
+	h := make([]byte, 20)
+	h[0] = 0x45 // version 4, IHL 5
+	h[9] = proto
+	binary.BigEndian.PutUint16(h[6:8], flagsAndOffset)
+	copy(h[12:16], []byte{192, 168, 1, 10})
+	copy(h[16:20], []byte{9, 9, 9, 9})
+	return append(h, payload...)
+}
+
 func udp(srcPort, dstPort uint16) []byte {
 	h := make([]byte, 8)
 	binary.BigEndian.PutUint16(h[0:2], srcPort)
@@ -67,6 +81,76 @@ func TestParseIPv4TCPSYN(t *testing.T) {
 	}
 	if p.SrcMAC != "aa:bb:cc:dd:ee:ff" {
 		t.Errorf("src MAC = %s", p.SrcMAC)
+	}
+}
+
+// A later fragment carries no transport header, and this one's payload is byte
+// for byte a SYN to 443. That is the whole point: until the offset was checked,
+// anyone able to send fragments to this host could manufacture connection
+// attempts, and choose the source address they appeared to come from by writing
+// it in the outer header. Those apparent SYNs reach the detectors, and a
+// detector finding carries SuggestBlock — so the payload of a stranger's
+// fragment decided who this firewall shut out.
+func TestParseLaterFragmentIsNotAConnectionAttempt(t *testing.T) {
+	looksExactlyLikeASYN := tcp(40000, 443, 0x02)
+	frame := ethFrame(etherIPv4, ipv4Fragmented(ipProtoTCP, 185, looksExactlyLikeASYN))
+
+	p, ok := ParseFrame(frame, time.Unix(1, 0))
+	if !ok {
+		t.Fatal("a later fragment is still traffic and its bytes must still count")
+	}
+	if p.SYN {
+		t.Error("payload read as a SYN — a stranger picks who gets blocked")
+	}
+	if p.SrcPort != 0 || p.DstPort != 0 {
+		t.Errorf("ports invented from payload bytes: %d → %d", p.SrcPort, p.DstPort)
+	}
+	if p.Proto != model.ProtoTCP {
+		t.Errorf("proto = %s, want tcp — that much the IP header does say", p.Proto)
+	}
+	if p.SrcIP.String() != "192.168.1.10" || p.DstIP.String() != "9.9.9.9" {
+		t.Errorf("addrs = %s → %s", p.SrcIP, p.DstIP)
+	}
+	if p.Size == 0 {
+		t.Error("the bytes are real and must reach the flow totals")
+	}
+}
+
+// The first fragment does carry the transport header, so it keeps parsing in
+// full. The test guards the distinction: the check is on the offset, not on
+// fragmentation, and getting that wrong would blind Skopos to every fragmented
+// connection attempt instead of just the forged ones.
+func TestParseFirstFragmentKeepsItsTransportHeader(t *testing.T) {
+	const moreFragmentsFollow = 0x2000
+	frame := ethFrame(etherIPv4, ipv4Fragmented(ipProtoTCP, moreFragmentsFollow, tcp(40000, 443, 0x02)))
+
+	p, ok := ParseFrame(frame, time.Unix(1, 0))
+	if !ok {
+		t.Fatal("expected parse ok")
+	}
+	if !p.SYN || p.SrcPort != 40000 || p.DstPort != 443 {
+		t.Errorf("first fragment lost its header: syn=%v ports=%d → %d", p.SYN, p.SrcPort, p.DstPort)
+	}
+}
+
+// UDP fragments take the same path, and a later one must not be mined for
+// names either: parseDNSNames would otherwise read arbitrary payload as a DNS
+// message whenever the invented port pair happened to land on 53 or 5353.
+func TestParseLaterUDPFragmentInventsNoPortsOrNames(t *testing.T) {
+	frame := ethFrame(etherIPv4, ipv4Fragmented(ipProtoUDP, 3, udp(53, 53)))
+
+	p, ok := ParseFrame(frame, time.Unix(1, 0))
+	if !ok {
+		t.Fatal("a later fragment is still traffic")
+	}
+	if p.SrcPort != 0 || p.DstPort != 0 {
+		t.Errorf("ports invented from payload bytes: %d → %d", p.SrcPort, p.DstPort)
+	}
+	if len(p.Names) != 0 {
+		t.Errorf("names parsed out of fragment payload: %v", p.Names)
+	}
+	if p.Proto != model.ProtoUDP {
+		t.Errorf("proto = %s, want udp", p.Proto)
 	}
 }
 

@@ -410,6 +410,18 @@ type Server struct {
 	// TLS serves HTTPS directly from Skopos. Usually you terminate TLS at
 	// a reverse proxy instead and leave this empty.
 	TLS TLS `yaml:"tls" json:"tls,omitzero"`
+
+	// TrustedProxies lists the networks — in CIDR form, e.g. "127.0.0.1/32"
+	// or "172.18.0.0/16" — whose X-Forwarded-For header Skopos will believe.
+	// Leave it empty, the default, unless Skopos really does sit behind a
+	// reverse proxy.
+	//
+	// The header costs nothing to forge. Honouring it from any source lets a
+	// single attacker present a fresh address on every request, and the login
+	// rate limiter — which counts failures per address — then never counts to
+	// two. Connections from outside these networks are identified by the
+	// address they actually came from.
+	TrustedProxies []string `yaml:"trusted_proxies" json:"trusted_proxies,omitempty"`
 }
 
 // Auth configures authentication.

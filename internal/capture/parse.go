@@ -99,7 +99,40 @@ func parseIPv4(b []byte, p flow.Packet) (flow.Packet, bool) {
 		return flow.Packet{}, false
 	}
 	p.SrcIP, p.DstIP = src, dst
+
+	// Only the first fragment of a datagram carries the transport header. Every
+	// later one is payload, and reading payload as if it were a TCP header is
+	// not merely inaccurate — it is steerable from outside. Bytes 0-3 of
+	// whatever is being transferred become "ports", and byte 13 becomes the TCP
+	// flags, so anyone who can send fragments to this host decides which of them
+	// Skopos reads as a fresh connection attempt, and the source address they
+	// appear to come from is the one they wrote in the outer header. Those
+	// apparent SYNs reach the rate, portscan and country detectors, and a
+	// detector finding carries SuggestBlock. A stranger would be choosing who
+	// this firewall shuts out.
+	//
+	// The bytes are real and stay counted. What is unknown is reported as
+	// unknown: addresses and protocol from the IP header, no ports, no flags —
+	// the same shape ICMP already has.
+	if binary.BigEndian.Uint16(b[6:8])&0x1fff != 0 {
+		return laterFragment(proto, p)
+	}
 	return parseL4(b[ihl:], proto, p)
+}
+
+// laterFragment records a fragment that arrived without a transport header.
+func laterFragment(proto byte, p flow.Packet) (flow.Packet, bool) {
+	switch proto {
+	case ipProtoTCP:
+		p.Proto = model.ProtoTCP
+	case ipProtoUDP:
+		p.Proto = model.ProtoUDP
+	case ipProtoICMP:
+		p.Proto = model.ProtoICMP
+	default:
+		return flow.Packet{}, false
+	}
+	return p, true
 }
 
 func parseIPv6(b []byte, p flow.Packet) (flow.Packet, bool) {

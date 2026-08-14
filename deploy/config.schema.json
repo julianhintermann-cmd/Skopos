@@ -498,6 +498,13 @@
           "additionalProperties": false,
           "type": "object",
           "description": "TLS serves HTTPS directly from Skopos. Usually you terminate TLS at\na reverse proxy instead and leave this empty."
+        },
+        "trusted_proxies": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "TrustedProxies lists the networks — in CIDR form, e.g. \"127.0.0.1/32\"\nor \"172.18.0.0/16\" — whose X-Forwarded-For header Skopos will believe.\nLeave it empty, the default, unless Skopos really does sit behind a\nreverse proxy.\n\nThe header costs nothing to forge. Honouring it from any source lets a\nsingle attacker present a fresh address on every request, and the login\nrate limiter — which counts failures per address — then never counts to\ntwo. Connections from outside these networks are identified by the\naddress they actually came from."
         }
       },
       "additionalProperties": false,

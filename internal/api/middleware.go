@@ -87,7 +87,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "authentication is disabled")
 		return
 	}
-	client := clientIP(r)
+	client := s.clientIP(r)
 	now := s.clock()
 	if !s.limiter.allowed(client, now) {
 		w.Header().Set("Retry-After", retrySeconds(s.limiter.retryAfter(client, now)))

@@ -100,6 +100,7 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | **`server.tls`** | object | | TLS serves HTTPS directly from Skopos. Usually you terminate TLS at a reverse proxy instead and leave this empty. |
 | `server.tls.cert` | string |  | Cert is the path to the PEM certificate chain. |
 | `server.tls.key` | string |  | Key is the path to the PEM private key. |
+| `server.trusted_proxies` | list of string |  | TrustedProxies lists the networks — in CIDR form, e.g. "127.0.0.1/32" or "172.18.0.0/16" — whose X-Forwarded-For header Skopos will believe. Leave it empty, the default, unless Skopos really does sit behind a reverse proxy. The header costs nothing to forge. Honouring it from any source lets a single attacker present a fresh address on every request, and the login rate limiter — which counts failures per address — then never counts to two. Connections from outside these networks are identified by the address they actually came from. |
 | **`logging`** | object | | Logging configures log verbosity and file logging to cold storage. |
 | `logging.level` | string | `info` | Level is one of debug, info, warn, error. |
 | `logging.file` | boolean | `true` | File enables structured JSON logs in rotated files under <storage.cold>/logs in addition to the readable stdout log. |

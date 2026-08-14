@@ -44,7 +44,7 @@ services:
       - /volume1/docker/skopos/config:/config
       # Hot storage (SSD): database and runtime state.
       - /volume1/docker/skopos/data:/data
-      # Cold storage (HDD / NAS share): Parquet archives, logs, backups.
+      # Cold storage (HDD / NAS share): logs and database backups.
       - /mnt/nas/skopos/archive:/archive
 
     # Resource ceiling so Skopos never crowds out your other services.

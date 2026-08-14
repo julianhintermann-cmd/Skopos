@@ -98,8 +98,12 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
           hint={`last ${range}${partial}`}
         />
         <StatTile label="Flows" value={formatCount(flows)} />
-        <StatTile label="Destinations" value={formatCount(destinations.length)} hint="distinct peers" />
-        <StatTile label="Ports" value={formatCount(ports.length)} hint="distinct services" />
+        {/* These count the rows returned, and both queries take the top 15 and
+            12 by volume — so "distinct peers" was a number that read as a
+            measurement of the device and was in fact a measurement of the
+            LIMIT. The label now says what it is. */}
+        <StatTile label="Destinations" value={formatCount(destinations.length)} hint="busiest, by volume" />
+        <StatTile label="Ports" value={formatCount(ports.length)} hint="busiest, by volume" />
       </div>
 
       <Card>

@@ -188,6 +188,35 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: Acknowledged }
+  /api/firewall/kernel:
+    get:
+      summary: What the kernel actually holds
+      description: >
+        Reads the nftables table back: the three chains with their rule counts
+        against what Skopos installed, and the fourteen sets with their element
+        counts and the ranges they contain.
+
+        An unknown count is `null` and never `0` — a set that could not be read
+        and a set that is genuinely empty are different facts, and the second is
+        the symptom a wiped ruleset produces. If the whole dump fails the
+        response is 503 with no `snapshot` key rather than an empty one.
+      responses:
+        "200": { description: Kernel snapshot, the enforcement verdict, and Skopos's intent }
+        "503": { description: The kernel could not be read; no snapshot is returned }
+  /api/config:
+    get:
+      summary: Which configuration file is in force
+      description: >
+        The path Skopos tried, whether the file was found, and which keys in it
+        are inert, each with the reason. A mistyped mount means Skopos runs on
+        defaults while every screen looks normal; this is how that becomes
+        visible.
+
+        Notification channels report configured-or-not and where they point. No
+        credential is included: the ntfy token lives in the environment and
+        never enters a response.
+      responses:
+        "200": { description: Configuration provenance and notifier status }
   /api/blocks:
     get:
       summary: Active firewall blocks
@@ -196,9 +225,19 @@ paths:
         the blocked prefix since start (capture taps before netfilter, so these
         are the drops in enforce mode, the would-be drops in observe mode).
         The response's `enforcement` ("observe"/"enforce") and `enforcing`
-        (backend actually armed) qualify whether blocks are applied at all.
+        (backend actually armed) qualify whether blocks are applied at all;
+        both report the configuration's intention and are kept for older
+        clients.
+
+        `kernel` is what the kernel was last actually found to hold, which is
+        the field a view should render. Its `verdict` is one of `observing`,
+        `enforcing`, `partial`, `degraded`, `unverified` or `unable`, with
+        `checked_at`, `failing_since`, `sets_checked` and
+        `stale_after_seconds`. A reading older than `stale_after_seconds`
+        stops counting as evidence: `unverified` means nobody has looked
+        lately, which is neither a fault nor an all-clear.
       responses:
-        "200": { description: Blocks with enforcement state }
+        "200": { description: Blocks, the configured intent, and the kernel verdict }
     post:
       summary: Block an IP or CIDR
       requestBody:

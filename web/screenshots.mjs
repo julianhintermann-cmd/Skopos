@@ -16,9 +16,10 @@ const outDir = process.argv[3] || '../docs/screenshots'
 const only = process.argv[4] || ''
 mkdirSync(outDir, { recursive: true })
 
+// Live and Domains folded into Traffic in 0.4.0, and the landing page is Now:
+// one question with two time horizons stopped being two pages.
 const views = [
-  { path: '/', name: 'overview' },
-  { path: '/live', name: 'live', wait: 4500 },
+  { path: '/', name: 'overview', wait: 4500 },
   { path: '/traffic', name: 'traffic' },
   { path: '/devices', name: 'devices' },
   { path: '/firewall', name: 'firewall' },

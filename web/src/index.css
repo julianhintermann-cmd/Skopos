@@ -7,123 +7,329 @@
 @import "@fontsource/ibm-plex-mono/400.css";
 @import "@fontsource/ibm-plex-mono/600.css";
 
-/*
-  Skopos design tokens. Sonar-teal accent on a deep green-black, motif σκοπός —
-  the watcher. Dark is the default (monitoring lives on a second screen); light
-  is a deliberate, separately-tuned set, not an inversion.
-*/
-@theme {
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
-}
+/* ===========================================================================
+   Skopos design tokens. Sonar-teal accent on a deep green-black, motif σκοπός
+   — the watcher.
 
-:root {
-  --bg: #f2f6f5;
-  --surface: #ffffff;
-  --surface-2: #e9efed;
-  --surface-3: #dde7e4;
-  --text: #182220;
-  --muted: #5c6d68;
-  --border: #d5e0dc;
-  --border-strong: #c2d1cc;
-  --accent: #0d7268;
-  --accent-strong: #095e55;
-  --accent-tint: #e0edea;
-  --good: #2f7d55;
-  --good-tint: #dcefe3;
-  --warn: #8a5a0a;
-  --warn-tint: #f7efdd;
-  --crit: #b23b3b;
-  --crit-tint: #f7e0de;
-  --chart-grid: #e2ebe8;
-  /* Soft elevation for cards in light mode; dark relies on borders. */
-  --shadow-sm: 0 1px 2px rgba(16, 40, 34, 0.04), 0 2px 6px rgba(16, 40, 34, 0.05);
-}
+   Two layers:
 
-:root[data-theme="dark"],
-:root:not([data-theme="light"]) {
-  color-scheme: dark;
-}
+   1. `--sk-*` on :root — semantic names, literal values, swapped per theme.
+      This is the only place in the codebase a hex is allowed to appear.
+   2. `@theme inline` — maps layer 1 into Tailwind's reserved namespaces so
+      every token becomes a real utility with full variant support:
+      `hover:bg-accent-hover`, `disabled:text-fg-muted`,
+      `focus-visible:ring-line-focus`. The app had five `hover:` rules in
+      6,346 lines and no `active:` at all, because colour was reachable only
+      through `style={{}}`, which cannot express a state.
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0c1211;
-    --surface: #121a18;
-    --surface-2: #1a2422;
-    --surface-3: #22302c;
-    --text: #dde8e4;
-    --muted: #8ba39b;
-    --border: #253530;
-    --border-strong: #33473f;
-    --accent: #4cbcae;
-    --accent-strong: #6fd2c5;
-    --accent-tint: #15302c;
-    --good: #57c08a;
-    --good-tint: #14261d;
-    --warn: #d9a94a;
-    --warn-tint: #241d10;
-    --crit: #e5766e;
-    --crit-tint: #2a1513;
-    --chart-grid: #1e2a27;
-    --shadow-sm: none;
-  }
+   Theme resolution is JS-only: ThemeProvider always writes an explicit
+   `data-theme`, resolving 'system' itself. The `@media (prefers-color-scheme)`
+   block that used to live here is gone — it duplicated 20 declarations and it
+   let `color-scheme: dark` apply to a light-token render (a light OS on theme
+   "System" got dark checkboxes, selects and scrollbars). Binding
+   `color-scheme` to the same selector as the palette makes that unrepresentable.
+   =========================================================================== */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* surfaces, back to front */
+  --sk-canvas:        #f1f5f4;
+  --sk-surface:       #ffffff;
+  --sk-raised:        #e9efed;   /* inputs, inactive chips, inline code */
+  --sk-sunken:        #dde7e4;   /* bar tracks, toggle-off, wells */
+
+  /* foregrounds — exactly two. A third ("subtle") was specified and then cut:
+     all 18 placeholders in this app carry format instructions rather than
+     decoration, so placeholder text needs 4.5:1, and at 4.5:1 the third token
+     converged with --sk-fg-muted. Disabled state is opacity, never a dimmer
+     colour. */
+  --sk-fg:            #141d1b;
+  --sk-fg-muted:      #55665f;
+
+  /* lines */
+  --sk-line:          #d5e0dc;   /* internal dividers — deliberately quiet */
+  --sk-line-strong:   #93a9a1;   /* input borders, structural edges */
+  --sk-line-focus:    #0b6b61;
+
+  /* accent */
+  --sk-accent:        #0b6b61;
+  --sk-accent-hover:  #095a52;
+  --sk-accent-quiet:  #e0edea;   /* selected chip, active nav */
+  --sk-on-accent:     #ffffff;
+
+  /* status */
+  --sk-ok:            #1d6743;   --sk-ok-quiet:      #dcefe3;
+  --sk-warn:          #7d5209;   --sk-warn-quiet:    #f7efdd;
+  --sk-crit:          #a5342f;   --sk-crit-quiet:    #f9e2e0;
+  --sk-unknown:       #55665f;   --sk-unknown-quiet: #e9efed;
+
+  /* interaction — did not exist before */
+  --sk-hover:         rgb(20 29 27 / 0.045);
+  --sk-active:        rgb(20 29 27 / 0.085);
+  --sk-selected:      var(--sk-accent-quiet);
+
+  /* data series — identity, capped at 3. Nothing in the app draws more than
+     two, and a 5-way set anchored on teal measured ΔE 12.9 under deuteranopia.
+     For >3 categories do not encode identity in colour at all. */
+  --sk-series-out:     #0b6b61;
+  --sk-series-in:      #6b3fa0;
+  --sk-series-3:       #8a5a0a;
+  --sk-series-unknown: #93a9a1;
+  --sk-nodata-stripe:  #c3d2cc;
+
+  /* chrome */
+  --sk-grid:          #e2ebe8;
+  --sk-scrim:         rgb(12 18 17 / 0.42);
+  --sk-qr-quiet:      #ffffff;   /* a QR code needs a white quiet zone in BOTH themes */
+  --sk-brand-cf:      #f6821f;
+
+  /* elevation */
+  --sk-elev-card:     0 1px 2px rgb(16 40 34 / 0.04), 0 2px 6px rgb(16 40 34 / 0.05);
+  --sk-elev-overlay:  0 10px 30px rgb(16 40 34 / 0.14), 0 2px 8px rgb(16 40 34 / 0.08);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0c1211;
-  --surface: #121a18;
-  --surface-2: #1a2422;
-  --surface-3: #22302c;
-  --text: #dde8e4;
-  --muted: #8ba39b;
-  --border: #253530;
-  --border-strong: #33473f;
-  --accent: #4cbcae;
-  --accent-strong: #6fd2c5;
-  --accent-tint: #15302c;
-  --good: #57c08a;
-  --good-tint: #14261d;
-  --warn: #d9a94a;
-  --warn-tint: #241d10;
-  --crit: #e5766e;
-  --crit-tint: #2a1513;
-  --chart-grid: #1e2a27;
-  --shadow-sm: none;
+
+  --sk-canvas:        #0b100f;
+  --sk-surface:       #111917;
+  --sk-raised:        #18211f;
+  --sk-sunken:        #202b28;
+
+  --sk-fg:            #dfe9e5;
+  --sk-fg-muted:      #93aba3;
+
+  --sk-line:          #26332f;
+  --sk-line-strong:   #4a5f57;
+  --sk-line-focus:    #4cbcae;
+
+  --sk-accent:        #3fb3a4;
+  --sk-accent-hover:  #5fc9bb;
+  --sk-accent-quiet:  #14302b;
+  /* The P0. Primary button labels were #fff on #4cbcae: 2.30:1, measured three
+     ways including in Chromium. AA wants 4.5. This is 7.55. */
+  --sk-on-accent:     #04100e;
+
+  --sk-ok:            #5cc48e;   --sk-ok-quiet:      #122619;
+  --sk-warn:          #dcae52;   --sk-warn-quiet:    #251d0f;
+  --sk-crit:          #ef8079;   --sk-crit-quiet:    #2c1614;
+  --sk-unknown:       #93aba3;   --sk-unknown-quiet: #18211f;
+
+  --sk-hover:         rgb(223 233 229 / 0.055);
+  --sk-active:        rgb(223 233 229 / 0.10);
+  --sk-selected:      var(--sk-accent-quiet);
+
+  --sk-series-out:     #3fb3a4;
+  --sk-series-in:      #a888f0;
+  --sk-series-3:       #dcae52;
+  --sk-series-unknown: #4a5f57;
+  --sk-nodata-stripe:  #33443e;
+
+  --sk-grid:          #1d2a26;
+  --sk-scrim:         rgb(0 0 0 / 0.62);
+  --sk-qr-quiet:      #ffffff;
+  --sk-brand-cf:      #f6821f;
+
+  --sk-elev-card:     none;      /* dark separates with borders, not shadow */
+  --sk-elev-overlay:  0 12px 34px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
 }
 
-* { box-sizing: border-box; }
+/* ---------------------------------------------------------------------------
+   Legacy aliases — a migration scaffold with an expiry date, not an API.
 
-html { -webkit-text-size-adjust: 100%; }
+   222 inline `style={{ background: 'var(--surface)' }}` sites exist today.
+   Aliasing lets every one of them keep working untouched and silently inherit
+   the retuned values, so both contrast fixes land before any view is edited.
+   Deleted at the end of 0.4.0.
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
+   Not aliasable: the literal `#fff` at ui.tsx and NotFound.tsx. A literal is
+   not a token, so the alias block cannot reach it — those are hand edits.
+   --------------------------------------------------------------------------- */
+:root {
+  --bg: var(--sk-canvas);            --surface: var(--sk-surface);
+  --surface-2: var(--sk-raised);     --surface-3: var(--sk-sunken);
+  --text: var(--sk-fg);              --muted: var(--sk-fg-muted);
+  --border: var(--sk-line);          --border-strong: var(--sk-line-strong);
+  --accent: var(--sk-accent);        --accent-strong: var(--sk-accent-hover);
+  --accent-tint: var(--sk-accent-quiet);
+  --good: var(--sk-ok);              --good-tint: var(--sk-ok-quiet);
+  --warn: var(--sk-warn);            --warn-tint: var(--sk-warn-quiet);
+  --crit: var(--sk-crit);            --crit-tint: var(--sk-crit-quiet);
+  --chart-grid: var(--sk-grid);      --shadow-sm: var(--sk-elev-card);
+}
+
+/* ===========================================================================
+   Layer 2 — Tailwind namespaces.
+
+   `inline` (not plain `@theme`) is required: it substitutes the variable
+   straight into the generated utility, so `bg-surface` compiles to
+   `background-color: var(--sk-surface)` and re-themes at runtime. Plain
+   `@theme` would add a second indirection and complicate the `bg-accent/20`
+   opacity modifiers.
+
+   The `--sk-` prefix on layer 1 exists to stay clear of the reserved
+   `--color-*` / `--text-*` / `--radius-*` / `--shadow-*` namespaces. The old
+   `--shadow-sm` would have collided the moment `@theme` was populated.
+   =========================================================================== */
+@theme inline {
+  /* ---------- families ---------- */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* ---------- type: 8 steps, replacing 15 ----------
+     Redefining --text-xs/sm/base retunes 166 existing call sites at once. */
+  --text-label:   0.6875rem;   /* 11px — the eyebrow. Replaces 0.55/0.58/0.62/0.65rem */
+  --text-label--line-height:    1rem;
+  --text-label--letter-spacing: 0.09em;
+  --text-label--font-weight:    600;
+
+  --text-xs:      0.75rem;     /* 12px — dense meta, secondary lines */
+  --text-xs--line-height:   1.0625rem;
+
+  --text-sm:      0.8125rem;   /* 13px — table body, the workhorse. WAS 14px */
+  --text-sm--line-height:   1.25rem;
+
+  --text-base:    0.875rem;    /* 14px — prose, hints; matches body */
+  --text-base--line-height: 1.5rem;
+
+  --text-lg:      1rem;        /* 16px — card titles. Replaces 0.95rem/15.2px */
+  --text-lg--line-height:    1.375rem;
+  --text-lg--letter-spacing: -0.01em;
+
+  --text-xl:      1.25rem;     /* 20px — secondary metric */
+  --text-xl--line-height:   1.5rem;
+
+  --text-2xl:     1.625rem;    /* 26px — primary metric */
+  --text-2xl--line-height:    1.75rem;
+  --text-2xl--letter-spacing: -0.02em;
+
+  --text-3xl:     2rem;        /* 32px — reserved */
+  --text-3xl--line-height: 2.25rem;
+
+  /* iOS zooms the viewport when focusing an input that renders below 16px.
+     Non-negotiable floor for control text; applied under (pointer: coarse)
+     only, so the desktop keeps its 13px density. */
+  --text-input:   1rem;        /* 16px */
+  --text-input--line-height: 1.25rem;
+
+  --tracking-label: 0.09em;
+  --tracking-brand: 0.3em;     /* the SKOPOS wordmark */
+
+  /* ---------- radii: 4 steps ---------- */
+  --radius-sm: 0.25rem;    /* inline code, micro-chips */
+  --radius-md: 0.375rem;   /* buttons, inputs, chips, icon buttons */
+  --radius-lg: 0.5rem;     /* cards, banners */
+  --radius-xl: 1rem;       /* bottom sheet */
+
+  /* ---------- elevation ---------- */
+  --shadow-card:    var(--sk-elev-card);
+  --shadow-overlay: var(--sk-elev-overlay);
+
+  /* ---------- surfaces ---------- */
+  --color-canvas:  var(--sk-canvas);
+  --color-surface: var(--sk-surface);
+  --color-raised:  var(--sk-raised);
+  --color-sunken:  var(--sk-sunken);
+
+  /* ---------- foregrounds ---------- */
+  --color-fg:       var(--sk-fg);
+  --color-fg-muted: var(--sk-fg-muted);
+
+  /* ---------- lines ---------- */
+  --color-line:        var(--sk-line);
+  --color-line-strong: var(--sk-line-strong);
+  --color-line-focus:  var(--sk-line-focus);
+
+  /* ---------- accent ---------- */
+  --color-accent:       var(--sk-accent);
+  --color-accent-hover: var(--sk-accent-hover);
+  --color-accent-quiet: var(--sk-accent-quiet);
+  --color-on-accent:    var(--sk-on-accent);
+
+  /* ---------- status ---------- */
+  --color-ok:            var(--sk-ok);
+  --color-ok-quiet:      var(--sk-ok-quiet);
+  --color-warn:          var(--sk-warn);
+  --color-warn-quiet:    var(--sk-warn-quiet);
+  --color-crit:          var(--sk-crit);
+  --color-crit-quiet:    var(--sk-crit-quiet);
+  --color-unknown:       var(--sk-unknown);
+  --color-unknown-quiet: var(--sk-unknown-quiet);
+
+  /* ---------- interaction ---------- */
+  --color-hover:    var(--sk-hover);
+  --color-active:   var(--sk-active);
+  --color-selected: var(--sk-selected);
+
+  /* ---------- data ---------- */
+  --color-series-out:     var(--sk-series-out);
+  --color-series-in:      var(--sk-series-in);
+  --color-series-3:       var(--sk-series-3);
+  --color-series-unknown: var(--sk-series-unknown);
+  --color-grid:           var(--sk-grid);
+
+  /* ---------- chrome ---------- */
+  --color-scrim:    var(--sk-scrim);
+  --color-brand-cf: var(--sk-brand-cf);
+}
+
+@layer base {
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--sk-canvas);
+    color: var(--sk-fg);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular numerals wherever a number can change in place. A monitoring tool
+     whose digits shift width on every poll reads as unstable. */
+  .tabnums, table, .font-mono { font-variant-numeric: tabular-nums; }
+
+  /* Coarse pointers only, so table density is untouched on the desktop. */
+  @media (pointer: coarse) {
+    input, select, textarea { font-size: var(--text-input); }
+  }
+
+  /* Focus ring. NOTE the absence of a border-radius declaration: `outline`
+     follows the element's own border-radius natively (Chrome 94+, Firefox 88+,
+     Safari 16.4+), so the old `border-radius: 3px` was squaring off every pill
+     and card it touched. `inherit` would have been just as wrong — it takes the
+     PARENT's radius. The fix is to say nothing. */
+  :focus-visible {
+    outline: 2px solid var(--sk-line-focus);
+    outline-offset: 2px;
+  }
+
+  ::selection { background: var(--sk-accent-quiet); color: var(--sk-fg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* Focus ring for keyboard users. */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 3px;
-}
-
 /* uPlot theming hooks. */
 .uplot { font-family: var(--font-mono); }
-.u-axis { color: var(--muted); }
+.u-axis { color: var(--sk-fg-muted); }
 .u-legend { display: none; }
 
-/* Utility layer for the tokens (Tailwind v4 reads these via arbitrary values). */
-.tabnums { font-variant-numeric: tabular-nums; }
+/* No data is not zero. A diagonal hatch reads as "no reading here" and cannot
+   be mistaken for a magnitude, because it has no baseline and no height —
+   which a zero-height bar does not manage. Deliberately static. */
+.sk-nodata {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--sk-nodata-stripe) 0 2px,
+    transparent 2px 6px
+  );
+}
 
 /* Slow pulse for the "live" indicator. Respects reduced-motion via the rule
    above, which flattens every animation-duration. */
@@ -140,4 +346,10 @@ body {
 @keyframes skopos-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* Skeleton sweep. */
+@keyframes skopos-shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
 }

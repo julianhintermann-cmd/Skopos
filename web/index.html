@@ -10,8 +10,29 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="theme-color" content="#0c1211" />
+    <!-- Two entries, not one. A single hardcoded dark canvas was wrong half the
+         time once 'system' became the default theme. ThemeProvider rewrites
+         both once it has resolved an explicit user choice. -->
+    <meta name="theme-color" content="#f1f5f4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b100f" media="(prefers-color-scheme: dark)" />
     <title>Skopos</title>
+    <!-- Resolve the theme before first paint. React mounts too late: with
+         'system' as the default, the document would paint #f1f5f4 and then
+         repaint #0b100f a frame later — a measured white flash on every load
+         for dark-OS users. Must stay ahead of the module script. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('skopos-theme') || 'system'
+          var r = t === 'system'
+            ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : t
+          document.documentElement.setAttribute('data-theme', r)
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark')
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

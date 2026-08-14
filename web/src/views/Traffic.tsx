@@ -6,7 +6,6 @@ import {
   bucketSecondsOf,
   coverageNote,
   hasMeasurement,
-  measuredPoints,
   type SearchResponse,
   type SeriesResponse,
 } from '../lib/contracts'
@@ -113,7 +112,10 @@ function WindowVolume({
   if (loading && !data) return <Spinner />
   if (!data) return <EmptyState>Could not load traffic: {error}</EmptyState>
 
-  const points = measuredPoints(data.series)
+  // The chart draws its own gaps now, so the series goes through whole: a
+  // down or nodata bucket is a break in the line rather than a row quietly
+  // removed before the chart ever saw it.
+  const points = data.series ?? []
   const bucket = bucketSecondsOf(data)
   const note = coverageNote(data.coverage, bucketLabel(bucket))
   const talkers = data.top_talkers ?? []

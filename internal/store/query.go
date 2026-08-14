@@ -222,6 +222,21 @@ func (s *Store) Throughput(ctx context.Context, from, to time.Time, res Resoluti
 	if err != nil {
 		return Series{}, err
 	}
+	return s.densify(ctx, totals, start, end, to, size, res, n)
+}
+
+// densify turns a sparse bucket→totals map into one point per bucket, each
+// carrying what its numbers mean.
+//
+// It is shared rather than copied because a second implementation is a second
+// chance to reintroduce the defect: the device chart used to return only the
+// buckets that had traffic, and uPlot joined what was left with a straight
+// line — a capture outage drawn as a smooth afternoon. Coverage is a fact
+// about the capture, not about one device, so the same records answer for
+// every series.
+func (s *Store) densify(ctx context.Context, totals map[int64]TimePoint,
+	start, end, to time.Time, size time.Duration, res Resolution, n int) (Series, error) {
+
 	cov, horizon, recorded, err := s.coverage(ctx, start, end, res)
 	if err != nil {
 		return Series{}, err

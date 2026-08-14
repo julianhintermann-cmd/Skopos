@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
-import type { TimePoint } from '../lib/api'
+import type { Point } from '../lib/contracts'
 import { formatBits } from '../lib/format'
 import { useTheme } from '../lib/theme'
 
@@ -19,7 +19,7 @@ export function ThroughputChart({
   bucketSeconds,
   height = 220,
 }: {
-  points: TimePoint[]
+  points: Point[]
   bucketSeconds: number | null
   height?: number
 }) {
@@ -27,18 +27,51 @@ export function ThroughputChart({
   const plot = useRef<uPlot | null>(null)
   const { resolved } = useTheme()
 
+  // Two series, and the second one is the point of this component.
+  //
+  // The floor is what was measured. Under sampling it is a fraction of the
+  // truth — the sampler drops packets before the aggregator ever sees them —
+  // so drawing it alone understates a flood at exactly the moment the flood is
+  // the thing worth seeing. Scaling it up instead would be worse: the result
+  // looks like a measurement and is an inference.
+  //
+  // So both are drawn. Solid is what was counted and is exact as a lower
+  // bound; dashed is measured/keep_rate, which under the sampler's 1-in-N
+  // stride is the estimate, not a ceiling; the space between them is the part
+  // nobody can resolve. Where nothing was captured the value is null and uPlot
+  // breaks the line, because a gap in the data has to look like a gap — the
+  // old chart joined the points either side with a straight line and invented
+  // a plausible three hours of traffic across an outage.
   const data = useMemo<uPlot.AlignedData>(() => {
     const xs: number[] = []
-    const ys: number[] = []
+    const floor: (number | null)[] = []
+    const estimate: (number | null)[] = []
     if (bucketSeconds && bucketSeconds > 0) {
       for (const p of points) {
         xs.push(new Date(p.time).getTime() / 1000)
+        if (p.bytes == null) {
+          // down or nodata: no measurement exists. Not a zero.
+          floor.push(null)
+          estimate.push(null)
+          continue
+        }
         // bytes over one bucket → average bits/s across that bucket.
-        ys.push((p.bytes * 8) / bucketSeconds)
+        const bps = (p.bytes * 8) / bucketSeconds
+        floor.push(bps)
+        estimate.push(
+          p.state === 'sampled' && p.keep_rate && p.keep_rate > 0 ? bps / p.keep_rate : null,
+        )
       }
     }
-    return [xs, ys]
+    return [xs, floor, estimate]
   }, [points, bucketSeconds])
+
+  // The tooltip has to name the state, because two buckets at the same height
+  // can mean different things: one counted every packet, the next counted a
+  // tenth of them, and a third kept its numbers from before Skopos recorded
+  // whether the capture was complete.
+  const states = useMemo(() => points.map((p) => p.state), [points])
+  const rates = useMemo(() => points.map((p) => p.keep_rate), [points])
 
   useEffect(() => {
     if (!el.current) return
@@ -75,14 +108,38 @@ export function ThroughputChart({
       series: [
         {},
         {
-          label: 'Throughput',
+          label: 'Measured',
           stroke: accent,
           width: 2,
           fill: fillGradient(accent, resolved),
           points: { show: false },
-          value: (_u, v) => (v == null ? '—' : formatBits(v)),
+          value: (u, v) => {
+            const i = u.cursor.idx
+            if (v == null) {
+              return i != null && states[i] === 'down' ? 'capture down' : 'not recorded'
+            }
+            if (i == null) return formatBits(v)
+            const rate = rates[i]
+            if (states[i] === 'sampled' && rate) {
+              return `${formatBits(v)} counted (1 in ${Math.round(1 / rate)} kept)`
+            }
+            if (states[i] === 'unverified') return `${formatBits(v)} · coverage not recorded`
+            return formatBits(v)
+          },
+        },
+        {
+          label: 'Estimated',
+          stroke: accent,
+          width: 1,
+          dash: [4, 3],
+          points: { show: false },
+          value: (_u, v) => (v == null ? '' : `≈ ${formatBits(v)} before sampling`),
         },
       ],
+      // The unresolved span between what was counted and what the keep rate
+      // implies. It appears only where sampling was active, because the
+      // estimate series is null everywhere else.
+      bands: [{ series: [2, 1], fill: hexA(accent, resolved === 'dark' ? 0.16 : 0.12) }],
       legend: { show: false },
     }
 
@@ -100,7 +157,7 @@ export function ThroughputChart({
     }
     // Recreate on theme change so colors update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved, height])
+  }, [resolved, height, states, rates])
 
   useEffect(() => {
     plot.current?.setData(data)

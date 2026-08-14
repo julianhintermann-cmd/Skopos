@@ -32,8 +32,14 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
   const ports = data.ports ?? []
   const domains = data.domains ?? []
   const fingerprints = data.fingerprints ?? []
-  const total = series.reduce((sum, p) => sum + p.bytes, 0)
-  const flows = series.reduce((sum, p) => sum + p.flows, 0)
+  // Only buckets that carry a number are summed. A down or nodata bucket has
+  // null, and treating that as zero would fold "we were not looking" into the
+  // total as if it were a quiet minute — the sum would read as a complete
+  // figure while silently missing whatever happened during the outage.
+  const total = series.reduce((sum, p) => sum + (p.bytes ?? 0), 0)
+  const flows = series.reduce((sum, p) => sum + (p.flows ?? 0), 0)
+  const unmeasured = series.filter((p) => p.bytes == null).length
+  const partial = unmeasured > 0 ? ` · ${unmeasured} buckets not captured` : ''
 
   return (
     <div className="flex flex-col gap-4">
@@ -83,7 +89,7 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
           value={formatBytes(total).split(' ')[0]}
           unit={formatBytes(total).split(' ')[1]}
           tone="accent"
-          hint={`last ${range}`}
+          hint={`last ${range}${partial}`}
         />
         <StatTile label="Flows" value={formatCount(flows)} />
         <StatTile label="Destinations" value={formatCount(destinations.length)} hint="distinct peers" />

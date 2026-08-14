@@ -40,34 +40,50 @@ func (s *Store) DeviceByMAC(ctx context.Context, mac string) (model.Device, erro
 
 // DeviceThroughput returns the device's traffic per bucket — everything it
 // sent or received — from the rollup at the given resolution.
-func (s *Store) DeviceThroughput(ctx context.Context, ip string, from, to time.Time, res Resolution) ([]TimePoint, error) {
-	table, _, err := res.table()
+// It returns a dense series for the same reason the network-wide one does:
+// handing a chart only the buckets that had traffic lets it join what is left
+// with a straight line, so an afternoon with the capture down looks like an
+// afternoon of steady traffic.
+func (s *Store) DeviceThroughput(ctx context.Context, ip string, from, to time.Time, res Resolution) (Series, error) {
+	table, size, err := res.table()
 	if err != nil {
-		return nil, err
+		return Series{}, err
 	}
+	start := bucket(from, size)
+	end := bucket(to.Add(size-time.Nanosecond), size)
+	if !end.After(start) {
+		return Series{Resolution: res, BucketSeconds: int(size / time.Second), Points: []Point{}}, nil
+	}
+	n := int(end.Sub(start) / size)
+	if n > maxSeriesPoints {
+		return Series{}, fmt.Errorf("store: %s buckets over that range would be %d points, more than the %d limit",
+			res, n, maxSeriesPoints)
+	}
+
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows)
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ? AND (src_ip = ? OR dst_ip = ?)
-		GROUP BY bucket_ms
-		ORDER BY bucket_ms`, table),
-		toMs(from), toMs(to), ip, ip)
+		GROUP BY bucket_ms`, table),
+		toMs(start), toMs(end), ip, ip)
 	if err != nil {
-		return nil, err
+		return Series{}, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []TimePoint
+	totals := map[int64]TimePoint{}
 	for rows.Next() {
 		var ms int64
 		var p TimePoint
 		if err := rows.Scan(&ms, &p.Bytes, &p.Packets, &p.Flows); err != nil {
-			return nil, err
+			return Series{}, err
 		}
-		p.Time = fromMs(ms)
-		out = append(out, p)
+		totals[ms] = p
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Series{}, err
+	}
+	return s.densify(ctx, totals, start, end, to, size, res, n)
 }
 
 // DeviceDestinations returns where the device talked to, busiest first. Names

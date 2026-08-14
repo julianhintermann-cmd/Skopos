@@ -43,23 +43,51 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	res := store.ChooseResolution(window)
 
 	ip := device.PrimaryAddr().String()
-	series, _ := s.deps.Store.DeviceThroughput(ctx, ip, from, to, res)
-	destinations, _ := s.deps.Store.DeviceDestinations(ctx, ip, from, to, res, 15)
-	ports, _ := s.deps.Store.DevicePorts(ctx, ip, from, to, res, 12)
+
+	// Five queries whose errors used to be dropped on the floor, so a database
+	// that could not answer produced a page of confident empties: no
+	// destinations, no ports, a flat chart. A key the server could not answer
+	// is left out and named, which a view can render as "not available" —
+	// nothing here may look like a finding of zero.
+	payload := map[string]any{
+		"device":     device,
+		"from":       from,
+		"to":         to,
+		"resolution": res,
+	}
+	var missing unavailable
+
+	if series, err := s.deps.Store.DeviceThroughput(ctx, ip, from, to, res); err == nil {
+		payload["series"] = series.Points
+		payload["bucket_seconds"] = series.BucketSeconds
+		payload["coverage"] = series.Coverage
+	} else {
+		missing.add("series")
+	}
+	if destinations, err := s.deps.Store.DeviceDestinations(ctx, ip, from, to, res, 15); err == nil {
+		payload["destinations"] = destinations
+	} else {
+		missing.add("destinations")
+	}
+	if ports, err := s.deps.Store.DevicePorts(ctx, ip, from, to, res, 12); err == nil {
+		payload["ports"] = ports
+	} else {
+		missing.add("ports")
+	}
 	// Passive DNS and TLS: what this device actually asked for, and which
 	// client software asked.
-	domains, _ := s.deps.Store.TopDomains(ctx, from, to, ip, 15)
-	fingerprints, _ := s.deps.Store.DeviceFingerprints(ctx, ip, 8)
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"device":       device,
-		"from":         from,
-		"to":           to,
-		"resolution":   res,
-		"series":       series,
-		"destinations": destinations,
-		"ports":        ports,
-		"domains":      domains,
-		"fingerprints": fingerprints,
-	})
+	if domains, err := s.deps.Store.TopDomains(ctx, from, to, ip, 15); err == nil {
+		payload["domains"] = domains
+	} else {
+		missing.add("domains")
+	}
+	if fingerprints, err := s.deps.Store.DeviceFingerprints(ctx, ip, 8); err == nil {
+		payload["fingerprints"] = fingerprints
+	} else {
+		missing.add("fingerprints")
+	}
+	if len(missing) > 0 {
+		payload["unavailable"] = []string(missing)
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

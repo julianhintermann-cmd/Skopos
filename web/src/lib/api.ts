@@ -1,6 +1,8 @@
 // Typed client for the Skopos API. Thin wrappers over fetch with JSON handling
 // and a shared error shape; every view calls through here.
 
+import type { Point, CoverageCounts } from './contracts'
+
 export class APIError extends Error {
   status: number
   // otpRequired is the login endpoint saying the password was right and it
@@ -266,11 +268,17 @@ export interface DeviceDetail {
   from: string
   to: string
   resolution: string
-  series: TimePoint[] | null
-  destinations: Talker[] | null
-  ports: PortUsage[] | null
-  domains: DomainStat[] | null
-  fingerprints: Fingerprint[] | null
+  // Every field below is optional because the server omits what it could not
+  // answer and names it in `unavailable`, rather than sending an empty array
+  // that reads as a finding of nothing. Absent and empty are different facts.
+  series?: Point[]
+  bucket_seconds?: number
+  coverage?: CoverageCounts
+  destinations?: Talker[]
+  ports?: PortUsage[]
+  domains?: DomainStat[]
+  fingerprints?: Fingerprint[]
+  unavailable?: string[]
 }
 
 export interface CountryStat {

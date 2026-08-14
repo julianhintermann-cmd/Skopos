@@ -57,6 +57,11 @@ var ErrWholeFamily = errors.New("blocking a whole address family is refused")
 // returned, so the block list never lists an address the kernel has not got.
 var ErrNotEnforced = errors.New("the firewall rejected the change; nothing was blocked")
 
+// ErrStillBlocked is the same thing on the way out: the block could not be
+// lifted from the kernel, so the stored row is put back rather than leaving a
+// list that omits an address the kernel is still dropping.
+var ErrStillBlocked = errors.New("the firewall rejected the change; the block is still in place")
+
 // Service ties the store, backend and config together. It implements
 // policy.Blocker and owns reconciliation, restore-on-start and TTL expiry.
 type Service struct {
@@ -559,19 +564,40 @@ func (s *Service) restoreBlock(ctx context.Context, prefix netip.Prefix, prior m
 
 // Unblock removes a block and reconciles.
 func (s *Service) Unblock(ctx context.Context, prefix netip.Prefix, actor string) (bool, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
+	prior, hadPrior, err := s.store.ActiveBlockFor(ctx, prefix)
+	if err != nil {
+		return false, fmt.Errorf("reading the existing block: %w", err)
+	}
 	removed, err := s.store.RemoveBlock(ctx, prefix)
 	if err != nil {
 		return false, err
 	}
-	if removed {
-		_ = s.store.Audit(ctx, model.AuditEntry{
-			Actor: actor, Action: "unblock", Target: prefix.String(),
-		})
-		if err := s.Reconcile(ctx); err != nil {
-			return true, err
-		}
+	if !removed {
+		return false, nil
 	}
-	return removed, nil
+	if err := s.Reconcile(ctx); err != nil {
+		// The kernel is still dropping this address, so a list that no longer
+		// shows it is the same untruth as the block path's — just pointing the
+		// other way. Put the row back and say plainly that nothing changed.
+		if hadPrior {
+			if _, rerr := s.store.AddBlock(ctx, prior); rerr != nil {
+				s.log("firewall: could not restore the stored block for %s after a failed unblock: %v",
+					prefix, rerr)
+			}
+		}
+		_ = s.store.Audit(ctx, model.AuditEntry{
+			Actor: actor, Action: "unblock-failed", Target: prefix.String(), Detail: err.Error(),
+		})
+		s.log("firewall: could not lift the block on %s: %v", prefix, err)
+		return false, fmt.Errorf("%w: %v", ErrStillBlocked, err)
+	}
+	_ = s.store.Audit(ctx, model.AuditEntry{
+		Actor: actor, Action: "unblock", Target: prefix.String(),
+	})
+	return true, nil
 }
 
 // Restore ensures the base ruleset exists and reconciles the kernel to the

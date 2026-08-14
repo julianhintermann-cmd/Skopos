@@ -257,3 +257,62 @@ func TestManualBlockAllowedWithoutProtectedSet(t *testing.T) {
 		t.Fatalf("ManualBlock: %v", err)
 	}
 }
+
+// failingBackend applies nothing and reports why, so the store-versus-kernel
+// rollback can be exercised without a kernel.
+type failingBackend struct {
+	*MemoryBackend
+	fail bool
+}
+
+func (f *failingBackend) Reconcile(ctx context.Context, desired []Rule) error {
+	if f.fail {
+		return errors.New("kernel said no")
+	}
+	return f.MemoryBackend.Reconcile(ctx, desired)
+}
+
+// A block whose kernel apply fails must leave nothing behind claiming the
+// address is blocked. The operator saw an error and a new entry at the same
+// time and could not tell which one was true.
+func TestBlockRollsBackWhenTheKernelRefuses(t *testing.T) {
+	backend := &failingBackend{MemoryBackend: NewMemoryBackend(true)}
+	svc, st := newTestService(t, baseConfig(true), backend)
+	ctx := context.Background()
+
+	backend.fail = true
+	err := svc.ManualBlock(ctx, netip.MustParsePrefix("203.0.113.7/32"), "admin", "test", 0)
+	if !errors.Is(err, ErrNotEnforced) {
+		t.Fatalf("want ErrNotEnforced, got %v", err)
+	}
+	active, _ := st.ActiveBlocks(ctx)
+	if len(active) != 0 {
+		t.Errorf("a failed block left %d rows behind: %+v", len(active), active)
+	}
+}
+
+// And the mirror: an unblock the kernel refuses must not remove the row, or
+// the list stops showing an address the kernel is still dropping.
+func TestUnblockRollsBackWhenTheKernelRefuses(t *testing.T) {
+	backend := &failingBackend{MemoryBackend: NewMemoryBackend(true)}
+	svc, st := newTestService(t, baseConfig(true), backend)
+	ctx := context.Background()
+	prefix := netip.MustParsePrefix("203.0.113.7/32")
+
+	if err := svc.ManualBlock(ctx, prefix, "admin", "test", 0); err != nil {
+		t.Fatalf("the initial block should succeed: %v", err)
+	}
+
+	backend.fail = true
+	removed, err := svc.Unblock(ctx, prefix, "admin")
+	if !errors.Is(err, ErrStillBlocked) {
+		t.Fatalf("want ErrStillBlocked, got %v", err)
+	}
+	if removed {
+		t.Error("a refused unblock must not report the block as removed")
+	}
+	active, _ := st.ActiveBlocks(ctx)
+	if len(active) != 1 {
+		t.Errorf("the block should still be listed, got %d rows", len(active))
+	}
+}

@@ -421,8 +421,19 @@ func (s *Server) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := identityFrom(r)
 	removed, err := s.deps.Firewall.Unblock(ctx, prefix, id.name)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	switch {
+	case errors.Is(err, firewall.ErrStillBlocked):
+		// The raw netlink wording never reaches the operator, and the sentence
+		// they do get has to be true: the block really is still in place.
+		s.log("unblocking %s failed: %v", prefix, err)
+		writeError(w, http.StatusConflict,
+			"could not unblock "+prefix.String()+": the firewall rejected the change, "+
+				"so the block is still in place. The details are in the Skopos log.")
+		return
+	case err != nil:
+		s.log("unblocking %s failed: %v", prefix, err)
+		writeError(w, http.StatusInternalServerError,
+			"could not unblock "+prefix.String()+". The details are in the Skopos log.")
 		return
 	}
 	if !removed {

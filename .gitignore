@@ -8,7 +8,12 @@ web/node_modules/
 # Go
 *.test
 *.out
-coverage.*
+# Anchored and named, not a glob. `coverage.*` was meant for the two artefacts
+# below and instead swallowed internal/store/coverage.go — a real source file
+# that built and tested green locally and simply never left the machine. CI was
+# the only thing that could notice, and did.
+/coverage.html
+/coverage.txt
 
 # Runtime data (local development)
 /data/

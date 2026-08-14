@@ -6,7 +6,7 @@ import { MobileShell } from './mobile'
 import { StatusStrip } from './StatusStrip'
 import { EntityPalette } from './EntityPalette'
 import { NAV, SECTIONS, SearchIcon } from './nav'
-import { useIsMobile } from '../lib/useIsMobile'
+import { useLayoutTier } from '../lib/useIsMobile'
 import { StatusContext, useStatusValue } from '../lib/status'
 import { CHORDS, useShortcuts } from '../lib/shortcuts'
 import { t } from '../lib/i18n'
@@ -23,7 +23,7 @@ export function Layout({
   onUnauthorized?: () => void
   banner?: ReactNode
 }) {
-  const isMobile = useIsMobile()
+  const tier = useLayoutTier()
   // The strip and Now's verdict read the same three answers, so the shell does
   // the polling once and publishes it.
   const status = useStatusValue(onUnauthorized)
@@ -35,12 +35,12 @@ export function Layout({
 
   return (
     <StatusContext.Provider value={status}>
-      {isMobile ? (
+      {tier === 'phone' ? (
         // Phones get their own shell: bottom tabs, sheets, card layouts — not
         // a squeezed sidebar.
         <MobileShell me={me} onLogout={onLogout} banner={banner} onSearch={openPalette} />
       ) : (
-        <DesktopShell me={me} onLogout={onLogout} banner={banner} onSearch={openPalette} />
+        <DesktopShell rail={tier === 'rail'} me={me} onLogout={onLogout} banner={banner} onSearch={openPalette} />
       )}
       <EntityPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUnauthorized={onUnauthorized} />
       {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
@@ -48,64 +48,95 @@ export function Layout({
   )
 }
 
+// The desktop shell in two widths.
+//
+// `rail` is the tier that was missing. Between 768 and 1023 this sidebar was
+// still 224px — 29% of an iPad portrait, 27% of a phone in landscape — while
+// every stat grid stayed two-up and every table stayed wider than the column
+// it was given. Collapsing to a 56px icon rail returns 168px of content, which
+// is what closes the gap between the phone design and the 1280px one.
 function DesktopShell({
+  rail,
   me,
   onLogout,
   banner,
   onSearch,
 }: {
+  rail: boolean
   me: Me | null
   onLogout: () => void
   banner?: ReactNode
   onSearch: () => void
 }) {
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-dvh">
+      {/* Eight nav links stand between the top of the document and the content
+          on every navigation. This is the way past them. */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded-md focus:px-3 focus:py-2 focus:text-sm focus:font-medium"
+        style={{ background: 'var(--surface)', color: 'var(--accent-strong)' }}
+      >
+        Skip to content
+      </a>
       <aside
-        className="flex w-56 shrink-0 flex-col border-r"
+        className={`flex shrink-0 flex-col border-r ${rail ? 'w-14' : 'w-56'}`}
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
       >
-        <div className="flex items-center gap-2.5 px-5 py-4">
+        <div className={`flex items-center gap-2.5 py-4 ${rail ? 'justify-center px-0' : 'px-5'}`}>
           <Logo size={26} />
-          <div className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">Skopos</div>
+          {!rail && <div className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">Skopos</div>}
         </div>
-        <nav className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-2">
+        <nav className={`flex flex-1 flex-col gap-3 overflow-y-auto py-2 ${rail ? 'px-1.5' : 'px-3'}`}>
           {SECTIONS.map((section) => (
             <div key={section.id} className="flex flex-col gap-0.5">
-              <div
-                className="px-2.5 pb-1 pt-1 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.18em]"
-                style={{ color: 'var(--muted)' }}
-              >
-                {section.title}
-              </div>
+              {rail ? (
+                // The section heading is text the rail has no room for, so it
+                // becomes a rule with the name still in the tree for a screen
+                // reader — dropping it entirely would drop the grouping too.
+                <div className="mx-2 my-1 h-px" style={{ background: 'var(--border)' }} role="separator" aria-label={section.title} />
+              ) : (
+                <div
+                  className="px-2.5 pb-1 pt-1 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: 'var(--muted)' }}
+                >
+                  {section.title}
+                </div>
+              )}
               {NAV.filter((i) => i.section === section.id).map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   end={item.end}
-                  className="group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors"
+                  title={rail ? item.label : undefined}
+                  aria-label={rail ? item.label : undefined}
+                  className={`group flex items-center rounded-md text-sm font-medium transition-colors ${
+                    rail ? 'h-11 justify-center' : 'gap-2.5 px-2.5 py-2'
+                  }`}
                   style={({ isActive }) =>
                     isActive
                       ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
                       : { color: 'var(--muted)' }
                   }
                 >
-                  <item.icon />
-                  {item.label}
+                  <item.icon size={rail ? 20 : 16} />
+                  {!rail && item.label}
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
-        <div className="px-4 py-3 text-xs" style={{ color: 'var(--muted)', borderTop: '1px solid var(--border)' }}>
-          <div className="font-mono">σκοπός</div>
-          <div>the watcher</div>
-        </div>
+        {!rail && (
+          <div className="px-4 py-3 text-xs" style={{ color: 'var(--muted)', borderTop: '1px solid var(--border)' }}>
+            <div className="font-mono">σκοπός</div>
+            <div>the watcher</div>
+          </div>
+        )}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="flex items-center justify-between gap-3 border-b px-6 py-2.5"
+          className={`flex items-center justify-between gap-3 border-b py-2.5 ${rail ? 'px-4' : 'px-6'}`}
           style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
         >
           <button
@@ -119,13 +150,13 @@ function DesktopShell({
             Search
             <kbd className="font-mono text-[0.62rem] opacity-70">⌘K</kbd>
           </button>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <StatusStrip />
             <ThemeToggle />
             {me?.auth && (
               <button
                 onClick={onLogout}
-                className="rounded-md px-2 py-1 text-xs font-medium"
+                className="shrink-0 rounded-md px-2 py-1 text-xs font-medium"
                 style={{ color: 'var(--muted)' }}
               >
                 {t('action.logout')}
@@ -136,7 +167,7 @@ function DesktopShell({
 
         {banner}
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-5">
+        <main id="main" className={`mx-auto w-full max-w-6xl flex-1 py-5 ${rail ? 'px-4' : 'px-6'}`}>
           <Outlet />
         </main>
       </div>

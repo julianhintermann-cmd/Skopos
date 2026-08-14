@@ -48,16 +48,25 @@ func (s *Store) WriteFlows(flows []model.Flow) error {
 
 	// Upsert-accumulate into each rollup: repeated tuples in the same bucket
 	// add up instead of colliding.
+	//
+	// out_bytes is added plainly rather than through COALESCE, so NULL wins.
+	// A bucket that already existed when migration 0011 ran holds bytes whose
+	// direction was never recorded; folding today's split into it would produce
+	// an out_bytes that covers part of the bucket and is presented as covering
+	// all of it. Once unrecorded, the bucket stays unrecorded — for a 1m bucket
+	// that is one minute of history, for the 1d rollup at most the day of the
+	// upgrade.
 	upsert := func(table string, b time.Time, f model.Flow) error {
 		_, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s
-			(bucket_ms, src_ip, dst_ip, dst_port, proto, direction, bytes, packets, flows)
-			VALUES (?,?,?,?,?,?,?,?,1)
+			(bucket_ms, src_ip, dst_ip, dst_port, proto, direction, bytes, packets, flows, out_bytes)
+			VALUES (?,?,?,?,?,?,?,?,1,?)
 			ON CONFLICT(bucket_ms, src_ip, dst_ip, dst_port, proto, direction)
 			DO UPDATE SET bytes = bytes + excluded.bytes,
 			              packets = packets + excluded.packets,
-			              flows = flows + 1`, table),
+			              flows = flows + 1,
+			              out_bytes = out_bytes + excluded.out_bytes`, table),
 			toMs(b), f.SrcIP.String(), f.DstIP.String(), f.DstPort, uint8(f.Proto),
-			string(f.Dir), f.Bytes(), f.Packets())
+			string(f.Dir), f.Bytes(), f.Packets(), f.OutBytes)
 		return err
 	}
 

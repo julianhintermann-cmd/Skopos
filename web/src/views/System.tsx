@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
 import { api, type Health, type AuditEntry, type SpeedtestResult, type UpdateStatus } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
+import { Card, CardHeader, Spinner, EmptyState, Button, Pill, ScrollArea, useToast } from '../components/ui'
 import { Sparkline } from '../components/Sparkline'
 import { EntityLink } from '../components/entity'
+import { PageTitle } from '../components/PageTitle'
 import { Th, Td } from './Devices'
 import { useDeviceIndex } from '../lib/links'
+import { useIsMobile } from '../lib/useIsMobile'
 import { formatTime, formatRelative } from '../lib/format'
 
 export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
@@ -13,15 +15,26 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
   const audit = useFetch<{ audit: AuditEntry[] | null }>('/api/audit?limit=50', { pollMs: 10000, onUnauthorized })
   const updates = useFetch<UpdateStatus>('/api/updates', { pollMs: 300000, onUnauthorized })
   const index = useDeviceIndex(onUnauthorized)
-  const [testResult, setTestResult] = useState<string>('')
+  const isMobile = useIsMobile()
+  const toast = useToast()
+  const [testing, setTesting] = useState(false)
 
+  // The outcome used to be written into a bare <span> beside the button: no
+  // live region, so a screen reader was told nothing at all about whether the
+  // notification went out. The toast host announces it.
   const sendTest = async () => {
-    setTestResult('sending…')
+    setTesting(true)
     try {
       const r = await api.post<{ ok: boolean; error?: string }>('/api/notify/test')
-      setTestResult(r.ok ? 'sent ✓' : `failed: ${r.error}`)
+      toast.show(
+        r.ok
+          ? { message: 'Test notification sent.', tone: 'ok' }
+          : { message: `Test notification failed: ${r.error}`, tone: 'crit', ttlMs: 9000 },
+      )
     } catch (e) {
-      setTestResult((e as Error).message)
+      toast.show({ message: `Test notification failed: ${(e as Error).message}`, tone: 'crit', ttlMs: 9000 })
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -32,6 +45,10 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
 
   return (
     <div className="flex flex-col gap-4">
+      {/* This view started at an h2, so a screen reader landing here from a
+          link had no page title in the heading tree. */}
+      <PageTitle title="System">how Skopos itself is doing, and what has been done to it</PageTitle>
+
       {up?.update_available && (
         <a
           href={up.url}
@@ -79,8 +96,9 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
         <Card className="px-4 py-3.5">
           <CardHeader title="Notifications" sub="verify your ntfy / webhook setup" />
           <div className="mt-2 flex items-center gap-3">
-            <Button onClick={sendTest}>Send test notification</Button>
-            {testResult && <span className="text-sm" style={{ color: 'var(--muted)' }}>{testResult}</span>}
+            <Button onClick={sendTest} loading={testing} className="pointer-coarse:min-h-11">
+              Send test notification
+            </Button>
           </div>
         </Card>
       )}
@@ -92,7 +110,40 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
         ) : entries.length === 0 ? (
           <EmptyState>No audit entries yet.</EmptyState>
         ) : (
-          <div className="overflow-x-auto">
+          isMobile ? (
+          // Cards on a phone, not a squeezed table. At 390px this table put
+          // roughly half of every row past the right edge — including the
+          // detail, which is the column that says what actually happened —
+          // and clipped it without a scrollbar or any other sign that there
+          // was more. An audit log that hides half of each entry is worse
+          // than no audit log, because it looks complete.
+          <ul className="flex flex-col">
+            {entries.map((e) => (
+              <li
+                key={e.ID}
+                className="flex flex-col gap-1 px-4 py-3"
+                style={{ borderTop: '1px solid var(--border)' }}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Pill tone={e.Action === 'block' || e.Action === 'login_failed' ? 'warn' : 'neutral'}>
+                    {e.Action}
+                  </Pill>
+                  <span className="font-mono text-xs" style={{ color: 'var(--muted)' }}>
+                    {formatTime(e.Time)}
+                  </span>
+                </div>
+                <div className="break-all font-mono text-sm">
+                  <EntityLink value={e.Target} index={index} />
+                </div>
+                <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                  <span className="font-mono">{e.Actor}</span>
+                  {e.Detail ? ` · ${e.Detail}` : ''}
+                </div>
+              </li>
+            ))}
+          </ul>
+          ) : (
+          <ScrollArea label="Audit log">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ color: 'var(--muted)' }}>
@@ -124,7 +175,8 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollArea>
+          )
         )}
       </Card>
     </div>

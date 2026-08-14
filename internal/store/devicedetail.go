@@ -61,11 +61,12 @@ func (s *Store) DeviceThroughput(ctx context.Context, ip string, from, to time.T
 	}
 
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows)
+		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows), %s, %s
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ? AND (src_ip = ? OR dst_ip = ?)
-		GROUP BY bucket_ms`, table),
-		toMs(start), toMs(end), ip, ip)
+		GROUP BY bucket_ms`,
+		directionSum(subjectSentExpr), directionSum(subjectRecvExpr), table),
+		ip, ip, toMs(start), toMs(end), ip, ip)
 	if err != nil {
 		return Series{}, err
 	}
@@ -75,9 +76,11 @@ func (s *Store) DeviceThroughput(ctx context.Context, ip string, from, to time.T
 	for rows.Next() {
 		var ms int64
 		var p TimePoint
-		if err := rows.Scan(&ms, &p.Bytes, &p.Packets, &p.Flows); err != nil {
+		var outB, inB sql.NullInt64
+		if err := rows.Scan(&ms, &p.Bytes, &p.Packets, &p.Flows, &outB, &inB); err != nil {
 			return Series{}, err
 		}
+		p.OutBytes, p.InBytes = nullInt(outB), nullInt(inB)
 		totals[ms] = p
 	}
 	if err := rows.Err(); err != nil {
@@ -94,21 +97,22 @@ func (s *Store) DeviceDestinations(ctx context.Context, ip string, from, to time
 	if err != nil {
 		return nil, err
 	}
+	sent, received := talkerDirection("dst_ip")
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT dst_ip, SUM(bytes), SUM(packets), SUM(flows)
+		SELECT dst_ip, SUM(bytes), SUM(packets), SUM(flows), %s, %s
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ? AND src_ip = ?
 		GROUP BY dst_ip
 		ORDER BY SUM(bytes) DESC
-		LIMIT ?`, table),
+		LIMIT ?`, sent, received, table),
 		toMs(from), toMs(to), ip, n)
 	if err != nil {
 		return nil, err
 	}
 	var out []Talker
 	for rows.Next() {
-		var t Talker
-		if err := rows.Scan(&t.Address, &t.Bytes, &t.Packets, &t.Flows); err != nil {
+		t, err := scanTalker(rows)
+		if err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -141,6 +145,73 @@ func (s *Store) DeviceDestinations(ctx context.Context, ip string, from, to time
 	}
 	for i := range out {
 		out[i].Name = byIP[out[i].Address]
+	}
+	return out, nil
+}
+
+// NamingSplit is how much of a device's traffic to the internet went somewhere
+// Skopos was ever able to put a name to. It is the closest honest measurement
+// of the blind spot a device creates by resolving its own names — a TV with a
+// hard-coded resolver or DoH leaves no DNS for the capture to read, so its
+// destinations stay bare addresses no matter how long it runs.
+type NamingSplit struct {
+	// NamedBytes and UnnamedBytes are bytes the device sent, not conversation
+	// totals: the question is what it uploaded and where, and a reply counts
+	// toward neither.
+	NamedBytes   int64 `json:"named_bytes"`
+	UnnamedBytes int64 `json:"unnamed_bytes"`
+	// WindowFrom is where the answer really begins and WindowDays how long that
+	// is, both derived from the oldest raw flow still on disk rather than from
+	// the retention setting. EnforceHotLimit deletes raw flows first when the
+	// hot cap is hit, so the configured seven days is a ceiling and routinely
+	// not what survived. A share printed without this is quietly claimed to be
+	// "all time".
+	WindowFrom time.Time `json:"window_from"`
+	WindowDays float64   `json:"window_days"`
+	// Truncated is set when the caller asked about a period that reaches back
+	// further than the surviving flows do.
+	Truncated bool `json:"truncated"`
+}
+
+// DeviceNaming measures the named/unnamed split of one device's egress over
+// the raw-flow window, which is the only place a per-flow name exists — the
+// rollups never carried dst_name.
+//
+// It reports a measurement, not a verdict. A flow whose name arrived after it
+// started, or that began before the resolver map was warm, counts as unnamed,
+// which biases the number upward: the honest reading is "could not name",
+// never "the device hid it".
+func (s *Store) DeviceNaming(ctx context.Context, ip string, from, to time.Time) (NamingSplit, error) {
+	var out NamingSplit
+
+	// Only traffic that left the network. Local chatter has mDNS names the
+	// device never asked a resolver for, and counting it would dilute exactly
+	// the signal this is here to show.
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(CASE WHEN dst_name != '' THEN out_bytes ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN dst_name  = '' THEN out_bytes ELSE 0 END), 0)
+		FROM flows
+		WHERE src_ip = ? AND start_ms >= ? AND start_ms < ? AND direction = ?`,
+		ip, toMs(from), toMs(to), string(model.DirLANtoWAN)).
+		Scan(&out.NamedBytes, &out.UnnamedBytes)
+	if err != nil {
+		return NamingSplit{}, err
+	}
+
+	var oldest sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(start_ms) FROM flows`).Scan(&oldest); err != nil {
+		return NamingSplit{}, err
+	}
+	out.WindowFrom = from
+	if !oldest.Valid {
+		// No raw flows at all: the window this can answer over is empty, and
+		// saying so is different from answering "0 % unnamed" over seven days.
+		out.WindowFrom, out.Truncated = to, true
+	} else if o := fromMs(oldest.Int64); o.After(from) {
+		out.WindowFrom, out.Truncated = o, true
+	}
+	if d := to.Sub(out.WindowFrom); d > 0 {
+		out.WindowDays = d.Hours() / 24
 	}
 	return out, nil
 }

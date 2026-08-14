@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, countryFlag, countryName, type BlocksResponse, type GeoIPSummary } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput , useToast } from '../components/ui'
+import { api, countryFlag, countryName, type Block, type BlocksResponse, type GeoIPSummary } from '../lib/api'
+import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput, ScrollArea, useToast } from '../components/ui'
 import { SegmentedControl } from '../components/RangeControl'
 import { EntityLink } from '../components/entity'
 import { PageTitle } from '../components/PageTitle'
 import { Th, Td } from './Devices'
 import { useDeviceIndex, type DeviceIndex } from '../lib/links'
+import { useIsMobile } from '../lib/useIsMobile'
 import { useUrlState } from '../lib/useUrlState'
 import { formatCount, formatRelative, formatTime } from '../lib/format'
 import { humanError } from '../components/humanError'
@@ -34,6 +35,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
   const index = useDeviceIndex(onUnauthorized)
+  const isMobile = useIsMobile()
 
   const blocks = data?.blocks ?? []
 
@@ -133,8 +135,21 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
           <EmptyState>Could not load blocks: {error}</EmptyState>
         ) : blocks.length === 0 ? (
           <EmptyState>Nothing is blocked.</EmptyState>
+        ) : isMobile ? (
+          <div>
+            {blocks.map((b) => (
+              <BlockCard
+                key={b.ID}
+                block={b}
+                index={index}
+                enforcing={!!data?.enforcing}
+                canWrite={canWrite}
+                onUnblock={() => unblock(b.Prefix)}
+              />
+            ))}
+          </div>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollArea label="Active blocks">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ color: 'var(--muted)' }}>
@@ -182,7 +197,8 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                       <Td>
                         <button
                           onClick={() => unblock(b.Prefix)}
-                          className="text-xs font-medium"
+                          aria-label={`Unblock ${b.Prefix}`}
+                          className="rounded-md px-2 py-1 text-xs font-medium"
                           style={{ color: 'var(--crit)' }}
                         >
                           Unblock
@@ -193,9 +209,71 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollArea>
         )}
       </Card>
+      )}
+    </div>
+  )
+}
+
+// BlockCard is the phone rendering of one active block.
+//
+// The table needs 628px and had 364. 42% of every row was past the right edge
+// with no scrollbar, no fade and no cue of any kind — and inside that 42% sat
+// the Unblock button, the only undo there is for a block. All seven columns
+// are here, and Unblock is full width.
+function BlockCard({
+  block,
+  index,
+  enforcing,
+  canWrite,
+  onUnblock,
+}: {
+  block: Block
+  index: DeviceIndex
+  enforcing: boolean
+  canWrite: boolean
+  onUnblock: () => void
+}) {
+  const name = blockName(index, block.Prefix)
+  return (
+    <div className="px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 break-all font-mono text-sm">
+          <EntityLink value={block.Prefix} index={index} />
+        </span>
+        <Pill tone={block.Origin === 'manual' ? 'accent' : 'neutral'}>{block.Origin}</Pill>
+      </div>
+      {name && (
+        <div className="text-xs" style={{ color: 'var(--muted)' }}>
+          {name}
+        </div>
+      )}
+      <div className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+        {block.Reason || 'no reason recorded'}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[0.7rem]" style={{ color: 'var(--muted)' }}>
+        <span>
+          {block.attempts > 0
+            ? `${formatCount(block.attempts)} pkts ${enforcing ? 'dropped' : 'would have been dropped'}`
+            : enforcing
+              ? 'nothing dropped yet'
+              : 'nothing seen yet'}
+        </span>
+        {block.last_attempt && <span>last {formatRelative(block.last_attempt)}</span>}
+        <span>added {formatTime(block.Created)}</span>
+        <span>{block.Expires ? `expires ${formatRelative(block.Expires)}` : 'permanent'}</span>
+      </div>
+      {canWrite && (
+        <Button
+          variant="danger"
+          onClick={onUnblock}
+          aria-label={`Unblock ${block.Prefix}`}
+          className="mt-2.5 min-h-11 w-full"
+        >
+          Unblock
+        </Button>
       )}
     </div>
   )
@@ -281,7 +359,7 @@ function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUn
           {blocked.map((c) => (
             <span
               key={c}
-              className="inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-1 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-full py-0.5 pl-2 pr-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:pl-3"
               style={{ background: 'var(--crit-tint)', color: 'var(--crit)' }}
             >
               {countryFlag(c)} {countryName(c)}
@@ -294,7 +372,9 @@ function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUn
                 <button
                   onClick={() => save(blocked.filter((x) => x !== c))}
                   aria-label={`Unblock ${countryName(c)}`}
-                  className="rounded-full px-1 font-mono"
+                  // 15×16 was the smallest target in the app, and it removes a
+                  // country-wide firewall rule.
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-full font-mono pointer-coarse:h-10 pointer-coarse:w-10"
                 >
                   ×
                 </button>

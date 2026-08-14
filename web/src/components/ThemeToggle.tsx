@@ -1,6 +1,9 @@
 import { useTheme } from '../lib/theme'
 
 // Cycles system → light → dark. Shows the icon of the resolved appearance.
+//
+// 28px is a fine target for a mouse and half of one for a thumb, so the
+// coarse-pointer floor is 44 and the desktop keeps its density.
 export function ThemeToggle() {
   const { theme, setTheme, resolved } = useTheme()
   const next = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
@@ -10,7 +13,7 @@ export function ThemeToggle() {
       onClick={() => setTheme(next)}
       title={label}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-md"
+      className="flex h-7 w-7 items-center justify-center rounded-md pointer-coarse:h-11 pointer-coarse:w-11"
       style={{ color: 'var(--muted)', background: 'var(--surface-2)' }}
     >
       {resolved === 'dark' ? <MoonIcon /> : <SunIcon />}

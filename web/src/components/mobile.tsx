@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Logo } from './Logo'
 import { ThemeToggle } from './ThemeToggle'
 import { MORE, TABS, DotsIcon, SearchIcon } from './nav'
+import { useDialogFocus } from './ui/dialog'
 import { useStatus, toneColor } from '../lib/status'
 import { t } from '../lib/i18n'
 import type { Me } from '../lib/api'
@@ -16,6 +17,11 @@ import type { Me } from '../lib/api'
 // BottomSheet slides a panel up from the bottom edge — the phone-native
 // pattern for menus and pickers. Backdrop tap closes; body scroll is locked
 // while open; content scrolls internally above the home-indicator safe area.
+//
+// It says aria-modal="true", so it now behaves like one: focus is trapped,
+// Escape closes it, focus returns to whatever opened it, and there is a
+// visible Close button. None of that was true before, on the component that
+// holds six of the ten navigation destinations plus Log out.
 export function BottomSheet({
   open,
   onClose,
@@ -27,6 +33,9 @@ export function BottomSheet({
   title?: string
   children: ReactNode
 }) {
+  const panel = useRef<HTMLDivElement>(null)
+  useDialogFocus(panel, open, onClose)
+
   useEffect(() => {
     if (!open) return
     const prev = document.body.style.overflow
@@ -46,10 +55,12 @@ export function BottomSheet({
         aria-hidden
       />
       <div
+        ref={panel}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t"
+        className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t outline-none"
         style={{
           background: 'var(--surface)',
           borderColor: 'var(--border)',
@@ -58,10 +69,23 @@ export function BottomSheet({
         }}
       >
         <div className="mx-auto mt-2 h-1 w-9 rounded-full" style={{ background: 'var(--border-strong)' }} aria-hidden />
-        {title && (
-          <div className="px-5 pb-1 pt-3 text-sm font-semibold tracking-tight">{title}</div>
-        )}
-        <div className="max-h-[70vh] overflow-y-auto pb-2">{children}</div>
+        <div className="flex items-center justify-between gap-3 px-5 pb-1 pt-2">
+          {title ? <div className="text-sm font-semibold tracking-tight">{title}</div> : <span />}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-md"
+            style={{ color: 'var(--muted)' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        {/* dvh, not vh: on iOS Safari 70vh is 70% of the URL-bar-collapsed
+            viewport, so the sheet was taller than the screen it sat in. */}
+        <div className="max-h-[70dvh] overflow-y-auto pb-2">{children}</div>
       </div>
     </div>
   )
@@ -163,7 +187,9 @@ export function MobileShell({
   const inMore = MORE.some((i) => location.pathname.startsWith(i.to))
 
   return (
-    <div className="flex min-h-screen flex-col">
+    // dvh: 100vh on iOS Safari is the URL-bar-collapsed viewport, so every
+    // short page carried ~90px of phantom scroll at the bottom.
+    <div className="flex min-h-dvh flex-col">
       <header
         className="sticky top-0 z-40 flex items-center justify-between gap-2 border-b px-4 py-2.5"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)', paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
@@ -178,7 +204,7 @@ export function MobileShell({
             type="button"
             onClick={onSearch}
             aria-label="Search Skopos"
-            className="rounded-md p-1"
+            className="flex h-11 w-11 items-center justify-center rounded-md"
             style={{ color: 'var(--muted)' }}
           >
             <SearchIcon size={20} />
@@ -273,15 +299,23 @@ function StatusDots() {
   const [open, setOpen] = useState(false)
   const worst =
     chips.find((c) => c.tone === 'crit') ?? chips.find((c) => c.tone === 'unknown') ?? chips.find((c) => c.tone === 'warn')
+  // The dots poll; the label has to move with them or the phone header claims
+  // a state that stopped being true four seconds ago. Named in words either
+  // way — three coloured dots are not a status for anyone reading them.
+  const label = worst
+    ? worst.detail
+    : chips.length === 0 || chips.some((c) => c.tone === 'loading')
+      ? 'Skopos status — still checking'
+      : `Skopos status — ${chips.map((c) => c.label).join(', ')}`
 
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label={worst ? worst.detail : 'Skopos status'}
+        aria-label={label}
         aria-haspopup="dialog"
-        className="flex items-center gap-1 rounded-full px-1.5 py-1"
+        className="flex h-11 items-center gap-1 rounded-full px-2"
         style={{ background: 'var(--surface-2)' }}
       >
         {chips.map((c) => (

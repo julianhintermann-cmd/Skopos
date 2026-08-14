@@ -8,7 +8,8 @@ import { MuteDialog } from '../components/MuteDialog'
 import { SegmentedControl } from '../components/RangeControl'
 import { EntityLink } from '../components/entity'
 import { PageTitle } from '../components/PageTitle'
-import { useDeviceIndex } from '../lib/links'
+import { useDeviceIndex, type DeviceIndex } from '../lib/links'
+import { useIsMobile } from '../lib/useIsMobile'
 import { useUrlState } from '../lib/useUrlState'
 import { formatTime } from '../lib/format'
 import { humanError } from '../components/humanError'
@@ -52,7 +53,7 @@ export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
         <a
           href="/api/export/alerts.csv"
           download
-          className="ml-auto rounded-md px-2.5 py-1 text-xs font-medium"
+          className="ml-auto inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
           style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
         >
           Export CSV
@@ -86,6 +87,7 @@ function Incidents({
   })
   const toast = useToast()
   const index = useDeviceIndex(onUnauthorized)
+  const isMobile = useIsMobile()
   const [muteFor, setMuteFor] = useState<Incident | null>(null)
   const [blockFor, setBlockFor] = useState<Incident | null>(null)
 
@@ -94,6 +96,10 @@ function Incidents({
   const ack = async (id: number) => {
     try {
       await api.post(`/api/incidents/${id}/ack`)
+      // The Ack button is removed by the refresh that follows, so the outcome
+      // has to be said somewhere that outlives it. The toast is a live region;
+      // a row quietly dropping to opacity 0.55 is not.
+      toast.show({ message: 'Episode acknowledged.', tone: 'ok' })
     } catch (e) {
       toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
     } finally {
@@ -131,7 +137,13 @@ function Incidents({
       <Card>
         <CardHeader
           title="Episodes"
-          sub={`${incidents.length} shown · alerts grouped by source and episode`}
+          sub={
+            <>
+              {/* The list re-polls every five seconds. A count that changes on
+                  its own has to be announced or it changes in silence. */}
+              <span role="status">{incidents.length} shown</span> · alerts grouped by source and episode
+            </>
+          }
           right={stale ? <Pill tone="warn">last refresh failed</Pill> : undefined}
         />
         {loading && !data ? (
@@ -142,66 +154,157 @@ function Incidents({
           <EmptyState>{onlyUnacked ? 'Nothing is waiting for you.' : 'No incidents recorded.'}</EmptyState>
         ) : (
           <ul>
-            {incidents.map((inc) => (
-              <li
-                key={inc.id}
-                className="px-4 py-3"
-                style={{ borderTop: '1px solid var(--border)', opacity: inc.ack ? 0.55 : 1 }}
-              >
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="pt-0.5">
-                    <SeverityBadge severity={inc.severity as Alert['Severity']} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline">
-                        {inc.title}
-                      </Link>
-                      {inc.alert_count > 1 && <Pill>{inc.alert_count} events</Pill>}
-                      {inc.detectors?.map((d) => (
-                        <Pill key={d} tone="neutral">
-                          {d}
-                        </Pill>
-                      ))}
-                      {inc.ack && <Pill tone="good">acked</Pill>}
+            {incidents.map((inc) =>
+              isMobile ? (
+                <IncidentCard
+                  key={inc.id}
+                  inc={inc}
+                  index={index}
+                  canWrite={canWrite}
+                  onBlock={() => setBlockFor(inc)}
+                  onMute={() => setMuteFor(inc)}
+                  onAck={() => ack(inc.id)}
+                />
+              ) : (
+                <li
+                  key={inc.id}
+                  className="px-4 py-3"
+                  style={{ borderTop: '1px solid var(--border)', opacity: inc.ack ? 0.55 : 1 }}
+                >
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="pt-0.5">
+                      <SeverityBadge severity={inc.severity as Alert['Severity']} />
                     </div>
-                    <div className="mt-0.5 text-xs" style={{ color: 'var(--muted)' }}>
-                      <EntityLink value={inc.source} index={index} />
-                      {index.names.get(inc.source) && <span> ({index.names.get(inc.source)})</span>}
-                      {' · '}
-                      {formatTime(inc.first_seen)} → {formatTime(inc.last_seen)}
-                      {' · '}
-                      <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline" style={{ color: 'var(--accent-strong)' }}>
-                        open
-                      </Link>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline">
+                          {inc.title}
+                        </Link>
+                        {inc.alert_count > 1 && <Pill>{inc.alert_count} events</Pill>}
+                        {inc.detectors?.map((d) => (
+                          <Pill key={d} tone="neutral">
+                            {d}
+                          </Pill>
+                        ))}
+                        {inc.ack && <Pill tone="good">acked</Pill>}
+                      </div>
+                      <div className="mt-0.5 text-xs" style={{ color: 'var(--muted)' }}>
+                        <EntityLink value={inc.source} index={index} />
+                        {index.names.get(inc.source) && <span> ({index.names.get(inc.source)})</span>}
+                        {' · '}
+                        {formatTime(inc.first_seen)} → {formatTime(inc.last_seen)}
+                        {' · '}
+                        <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline" style={{ color: 'var(--accent-strong)' }}>
+                          open
+                        </Link>
+                      </div>
                     </div>
-                  </div>
-                  {canWrite && (
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      {inc.source && (
-                        <Button onClick={() => setBlockFor(inc)} className="!px-2 !py-1 !text-xs">
-                          Block
+                    {canWrite && (
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        {inc.source && (
+                          <Button onClick={() => setBlockFor(inc)} className="!px-2 !py-1 !text-xs">
+                            Block
+                          </Button>
+                        )}
+                        <Button onClick={() => setMuteFor(inc)} className="!px-2 !py-1 !text-xs">
+                          Mute
                         </Button>
-                      )}
-                      <Button onClick={() => setMuteFor(inc)} className="!px-2 !py-1 !text-xs">
-                        Mute
-                      </Button>
-                      {!inc.ack && (
-                        <Button onClick={() => ack(inc.id)} className="!px-2 !py-1 !text-xs">
-                          Ack
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
+                        {!inc.ack && (
+                          <Button onClick={() => ack(inc.id)} className="!px-2 !py-1 !text-xs">
+                            Ack
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              ),
+            )}
           </ul>
         )}
       </Card>
 
       <MuteRules onUnauthorized={onUnauthorized} canWrite={canWrite} />
     </div>
+  )
+}
+
+// IncidentCard is the phone rendering of one episode.
+//
+// The desktop row is a flex line with a `shrink-0` action group at the end.
+// At 390px that group and the severity badge took 240 of the 334px available
+// and the body — the thing the operator opened the push notification to read —
+// was left with 93px, wrapping into a 211px column of shredded text. A card
+// gives the words the full width and puts the three actions on their own row
+// underneath at a thumb's size.
+//
+// Nothing is dropped relative to the desktop row: title, event count,
+// detectors, ack state, source, name, both timestamps, all three actions.
+function IncidentCard({
+  inc,
+  index,
+  canWrite,
+  onBlock,
+  onMute,
+  onAck,
+}: {
+  inc: Incident
+  index: DeviceIndex
+  canWrite: boolean
+  onBlock: () => void
+  onMute: () => void
+  onAck: () => void
+}) {
+  const name = index.names.get(inc.source)
+  return (
+    <li className="px-4 py-3" style={{ borderTop: '1px solid var(--border)', opacity: inc.ack ? 0.55 : 1 }}>
+      <div className="flex items-start gap-2">
+        <span className="shrink-0 pt-0.5">
+          <SeverityBadge severity={inc.severity as Alert['Severity']} />
+        </span>
+        <Link to={`/incidents/${inc.id}`} className="min-w-0 flex-1 font-medium hover:underline">
+          {inc.title}
+        </Link>
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {inc.alert_count > 1 && <Pill>{inc.alert_count} events</Pill>}
+        {inc.detectors?.map((d) => (
+          <Pill key={d} tone="neutral">
+            {d}
+          </Pill>
+        ))}
+        {inc.ack && <Pill tone="good">acked</Pill>}
+      </div>
+
+      {/* break-all because a source is as likely to be an IPv6 address as an
+          IPv4 one, and neither `:` nor `.` is a break opportunity in CSS. */}
+      <div className="mt-1 break-all text-xs" style={{ color: 'var(--muted)' }}>
+        <EntityLink value={inc.source} index={index} />
+        {name && <span> ({name})</span>}
+      </div>
+      <div className="text-xs" style={{ color: 'var(--muted)' }}>
+        {formatTime(inc.first_seen)} → {formatTime(inc.last_seen)}
+      </div>
+
+      {canWrite && (
+        <div className="mt-2.5 flex gap-2">
+          {inc.source && (
+            <Button onClick={onBlock} className="min-h-11 flex-1">
+              Block
+            </Button>
+          )}
+          <Button onClick={onMute} className="min-h-11 flex-1">
+            Mute
+          </Button>
+          {!inc.ack && (
+            <Button variant="primary" onClick={onAck} className="min-h-11 flex-1">
+              Ack
+            </Button>
+          )}
+        </div>
+      )}
+    </li>
   )
 }
 
@@ -223,6 +326,7 @@ function Events({
   })
   const toast = useToast()
   const index = useDeviceIndex(onUnauthorized)
+  const isMobile = useIsMobile()
   const [blockFor, setBlockFor] = useState<Alert | null>(null)
 
   const alerts = data?.alerts ?? []
@@ -230,6 +334,7 @@ function Events({
   const ack = async (id: number) => {
     try {
       await api.post(`/api/alerts/${id}/ack`)
+      toast.show({ message: 'Alert acknowledged.', tone: 'ok' })
     } catch (e) {
       toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
     } finally {
@@ -258,7 +363,11 @@ function Events({
       <Card>
         <CardHeader
           title="Every alert"
-          sub={`${alerts.length} shown · one row per event`}
+          sub={
+            <>
+              <span role="status">{alerts.length} shown</span> · one row per event
+            </>
+          }
           right={stale ? <Pill tone="warn">last refresh failed</Pill> : undefined}
         />
         {loading && !data ? (
@@ -267,6 +376,19 @@ function Events({
           <EmptyState>Could not load alerts{error ? `: ${error}` : ''}.</EmptyState>
         ) : alerts.length === 0 ? (
           <EmptyState>{onlyUnacked ? 'Nothing is waiting for you.' : 'No alerts recorded.'}</EmptyState>
+        ) : isMobile ? (
+          <ul>
+            {alerts.map((a) => (
+              <AlertCard
+                key={a.ID}
+                alert={a}
+                index={index}
+                canWrite={canWrite}
+                onBlock={() => setBlockFor(a)}
+                onAck={() => ack(a.ID)}
+              />
+            ))}
+          </ul>
         ) : (
           <ul>
             {alerts.map((a) => (
@@ -321,6 +443,73 @@ function Events({
   )
 }
 
+// AlertCard is the phone rendering of one alert. Same defect as the episode
+// row, worse: the timestamp joined the action group inside the `shrink-0`, so
+// the body column measured 45px of the 334 available.
+function AlertCard({
+  alert,
+  index,
+  canWrite,
+  onBlock,
+  onAck,
+}: {
+  alert: Alert
+  index: DeviceIndex
+  canWrite: boolean
+  onBlock: () => void
+  onAck: () => void
+}) {
+  const name = alert.Source ? index.names.get(alert.Source) : undefined
+  return (
+    <li className="px-4 py-3" style={{ borderTop: '1px solid var(--border)', opacity: alert.Ack ? 0.55 : 1 }}>
+      <div className="flex items-start gap-2">
+        <span className="shrink-0 pt-0.5">
+          <SeverityBadge severity={alert.Severity} />
+        </span>
+        <Link to={`/alerts/${alert.ID}`} className="min-w-0 flex-1 font-medium hover:underline">
+          {alert.Title}
+        </Link>
+      </div>
+
+      {(alert.Count > 1 || alert.Ack) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {alert.Count > 1 && <Pill>{alert.Count}×</Pill>}
+          {alert.Ack && <Pill tone="good">acked</Pill>}
+        </div>
+      )}
+
+      <div className="mt-1 break-all text-xs" style={{ color: 'var(--muted)' }}>
+        {alert.Detail}
+      </div>
+      <div className="break-all text-xs" style={{ color: 'var(--muted)' }}>
+        {alert.Source && (
+          <>
+            <EntityLink value={alert.Source} index={index} />
+            {name && <span> ({name})</span>}
+            {' · '}
+          </>
+        )}
+        {formatTime(alert.Time)}
+      </div>
+
+      {canWrite && (alert.Source || !alert.Ack) && (
+        <div className="mt-2.5 flex gap-2">
+          {alert.Source && (
+            <Button onClick={onBlock} className="min-h-11 flex-1">
+              Block
+            </Button>
+          )}
+          {!alert.Ack && (
+            <Button variant="primary" onClick={onAck} className="min-h-11 flex-1">
+              Ack
+            </Button>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
 // MuteRules lists and removes the active suppression rules.
 function MuteRules({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, refresh } = useFetch<{ rules: MuteRule[] | null }>('/api/mutes', { pollMs: 30000, onUnauthorized })
@@ -342,32 +531,37 @@ function MuteRules({ onUnauthorized, canWrite }: { onUnauthorized: () => void; c
     <Card>
       <CardHeader title="Muted" sub="these alerts are suppressed — blocking still applies as configured" />
       <ul className="flex flex-col gap-1.5 px-4 pb-4">
-        {rules.map((r) => (
-          <li key={r.id} className="flex items-center gap-2 text-sm">
-            <span className="font-mono text-xs">
-              {[r.detector, r.prefix, r.port ? `port ${r.port}` : ''].filter(Boolean).join(' · ') || 'everything'}
-            </span>
-            {r.reason && (
-              <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                {r.reason}
-              </span>
-            )}
-            {r.expires && (
-              <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                until {formatTime(r.expires)}
-              </span>
-            )}
-            {canWrite && (
-              <button
-                onClick={() => remove(r.id)}
-                className="ml-auto text-xs font-medium"
-                style={{ color: 'var(--crit)' }}
-              >
-                Unmute
-              </button>
-            )}
-          </li>
-        ))}
+        {rules.map((r) => {
+          const scope = [r.detector, r.prefix, r.port ? `port ${r.port}` : ''].filter(Boolean).join(' · ') || 'everything'
+          return (
+            <li key={r.id} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="min-w-0 break-all font-mono text-xs">{scope}</span>
+              {r.reason && (
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                  {r.reason}
+                </span>
+              )}
+              {r.expires && (
+                <span className="text-xs" style={{ color: 'var(--muted)' }}>
+                  until {formatTime(r.expires)}
+                </span>
+              )}
+              {canWrite && (
+                <button
+                  onClick={() => remove(r.id)}
+                  // The label alone measured 45×16. `Unmute` next to five other
+                  // `Unmute`s also named nothing in particular; the rule it
+                  // removes is now in the accessible name.
+                  aria-label={`Unmute ${scope}`}
+                  className="ml-auto inline-flex items-center rounded-md px-2 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
+                  style={{ color: 'var(--crit)' }}
+                >
+                  Unmute
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
     </Card>
   )

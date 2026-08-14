@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useFetch } from '../lib/useFetch'
 import { api, coveredByProtected, networkPrefix, type BlocksResponse } from '../lib/api'
 import { Card, CardHeader, Button } from './ui'
@@ -28,6 +28,7 @@ export function BlockDialog({
   onUnauthorized: () => void
 }) {
   const { data } = useFetch<BlocksResponse>('/api/blocks', { pollMs: 0, onUnauthorized })
+  const card = useRef<HTMLDivElement>(null)
   const [scope, setScope] = useState<'address' | 'network'>('address')
   const [ttl, setTtl] = useState('24h')
   const [note, setNote] = useState(detector ? `${detector} alert` : '')
@@ -38,6 +39,13 @@ export function BlockDialog({
   const enforcing = data?.enforcing ?? false
   const existing = (data?.blocks ?? []).find((b) => b.Prefix === prefix || b.Prefix === `${source}/32` || b.Prefix === `${source}/128`)
   const clash = coveredByProtected(source, scope, data?.protected ?? [])
+
+  // This dialog renders above the list that opened it. Tap Block on the fifth
+  // incident on a phone and it appears at the top of the document, off-screen,
+  // with nothing to say it happened.
+  useEffect(() => {
+    card.current?.scrollIntoView({ block: 'nearest' })
+  }, [])
 
   const save = async () => {
     setBusy(true)
@@ -54,9 +62,19 @@ export function BlockDialog({
   }
 
   return (
+    <div ref={card}>
     <Card className="px-4 py-3.5">
       <CardHeader
-        title={`Block ${source}`}
+        // One of the three things that pushed document.scrollWidth to 586px at
+        // a 390px viewport: an IPv6 address in a heading has no break
+        // opportunity — `:` is not one — so `Block 2001:db8::…` ran straight
+        // off the card and took the page with it. The address breaks; the word
+        // does not.
+        title={
+          <>
+            Block <span className="break-all font-mono">{source}</span>
+          </>
+        }
         sub={
           enforcing
             ? 'dropped in the kernel on the machine running Skopos — traffic that does not pass this machine is unaffected'
@@ -83,10 +101,14 @@ export function BlockDialog({
         </p>
       )}
 
+      {/* The outer row already wrapped. The overflow came from its children:
+          two rows of `flex items-center` with no wrap of their own, holding an
+          IPv6 address and a five-control TTL group. Measured min-content 557px
+          and 358px inside a 332px card. */}
       <div className="mt-2 flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-1">
           <FieldLabel>Scope</FieldLabel>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {([
               ['address', source],
               ['network', networkPrefix(source)],
@@ -94,7 +116,8 @@ export function BlockDialog({
               <button
                 key={v}
                 onClick={() => setScope(v)}
-                className="rounded-md px-2.5 py-1 font-mono text-xs font-medium"
+                aria-pressed={scope === v}
+                className="max-w-full break-all rounded-md px-2.5 py-1 text-left font-mono text-xs font-medium pointer-coarse:min-h-11"
                 style={
                   scope === v
                     ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
@@ -107,14 +130,15 @@ export function BlockDialog({
           </div>
         </div>
 
-        <div className="flex flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-1">
           <FieldLabel>For</FieldLabel>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {['1h', '24h', '7d', ''].map((v) => (
               <button
                 key={v || 'forever'}
                 onClick={() => setTtl(v)}
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
+                aria-pressed={ttl === v}
+                className="rounded-md px-2.5 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
                 style={
                   ttl === v
                     ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
@@ -127,8 +151,9 @@ export function BlockDialog({
             <input
               value={ttl}
               onChange={(e) => setTtl(e.target.value)}
+              aria-label="Block duration"
               placeholder="blank = permanent"
-              className="w-36 rounded-md border px-2.5 py-1.5 font-mono text-sm"
+              className="w-36 max-w-full rounded-md border px-2.5 py-1.5 font-mono text-sm"
               style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
             />
           </div>
@@ -151,14 +176,17 @@ export function BlockDialog({
         />
       </label>
 
-      <div className="mt-3 flex items-center gap-2">
-        <Button variant="primary" onClick={save} disabled={busy}>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button variant="primary" onClick={save} disabled={busy} className="pointer-coarse:min-h-11">
           {busy ? 'Blocking…' : ttl.trim() ? `Block for ${ttl.trim()}` : 'Block permanently'}
         </Button>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} className="pointer-coarse:min-h-11">
+          Cancel
+        </Button>
       </div>
       {err && <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
     </Card>
+    </div>
   )
 }
 

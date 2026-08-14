@@ -86,6 +86,16 @@ func (s *Server) handleDeviceDetail(w http.ResponseWriter, r *http.Request) {
 	} else {
 		missing.add("fingerprints")
 	}
+	// How much of what this device sent went somewhere Skopos could name. It
+	// comes off the raw flows, the only table that ever held a name, so it
+	// answers over a shorter and less predictable window than everything above
+	// it — the payload carries that window rather than letting the share read
+	// as all time.
+	if naming, err := s.deps.Store.DeviceNaming(ctx, ip, from, to); err == nil {
+		payload["naming"] = naming
+	} else {
+		missing.add("naming")
+	}
 	if len(missing) > 0 {
 		payload["unavailable"] = []string(missing)
 	}

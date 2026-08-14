@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -90,7 +91,49 @@ type TimePoint struct {
 	Bytes   int64     `json:"bytes"`
 	Packets int64     `json:"packets"`
 	Flows   int64     `json:"flows"`
+	// OutBytes and InBytes are nil when any rollup row folded into this bucket
+	// predates migration 0011 and so recorded no direction.
+	OutBytes *int64 `json:"out_bytes,omitempty"`
+	InBytes  *int64 `json:"in_bytes,omitempty"`
 }
+
+// directionSum wraps a direction aggregate in the guard that keeps a partial
+// answer from passing as a whole one.
+//
+// SUM ignores NULLs, so a bare SUM(out_bytes) over a group that mixes rows
+// written before migration 0011 with rows written since reports the new rows'
+// upload as though it were the group's entire upload: a real number, in the
+// right units, wrong about what it covers, and impossible to spot downstream.
+// COUNT counts only non-NULL values, so COUNT(out_bytes) = COUNT(*) is the
+// cheap test for "every row here knows its direction", and the CASE yields SQL
+// NULL — "not recorded" — when one does not.
+func directionSum(expr string) string {
+	return "CASE WHEN COUNT(out_bytes) = COUNT(*) THEN SUM(" + expr + ") END"
+}
+
+// The boundary-crossing halves of a rollup row, for the network-wide series.
+//
+// out_bytes is always source→destination, so which half of a row is leaving
+// the network depends on which side of the boundary its source sits — that is
+// what the direction column records. Traffic that never crossed the boundary,
+// internal to internal and external to external, belongs to neither half; it
+// stays in bytes and is left out of both. Assigning it a side would be the
+// same invention as filling in a missing split.
+const (
+	egressExpr  = `CASE direction WHEN 'lan_wan' THEN out_bytes WHEN 'wan_lan' THEN bytes - out_bytes ELSE 0 END`
+	ingressExpr = `CASE direction WHEN 'lan_wan' THEN bytes - out_bytes WHEN 'wan_lan' THEN out_bytes ELSE 0 END`
+)
+
+// The halves of a rollup row as one address sees them, for a query that
+// matches rows at either end of the flow. Each takes that address as a bound
+// parameter, ahead of the WHERE clause's own: which half the address sent
+// turns on whether it is the row's source, and summing the column as stored
+// would credit a device's downloads to its uploads — the exact number this
+// change exists to get right.
+const (
+	subjectSentExpr = `CASE WHEN src_ip = ? THEN out_bytes ELSE bytes - out_bytes END`
+	subjectRecvExpr = `CASE WHEN src_ip = ? THEN bytes - out_bytes ELSE out_bytes END`
+)
 
 // PointState says what a bucket's numbers mean. It is the discriminator that
 // makes a chart honest: only down and nodata carry nulls, and only they may be
@@ -157,6 +200,31 @@ type Point struct {
 	// express, and the one the "1 of 2 interfaces" label needs.
 	SourcesUp    *int `json:"sources_up,omitempty"`
 	SourcesTotal *int `json:"sources_total,omitempty"`
+	// OutBytes and InBytes split Bytes by which way it travelled, seen from
+	// whatever the series is about: the device on a device series, the internal
+	// network on the network-wide one.
+	//
+	// They are nil together, and nil means the split was not recorded — never
+	// that it was zero. Every rollup row written before migration 0011 stored a
+	// total and nothing else, so a bucket holding one of those cannot be told
+	// apart from a bucket that really was all inbound. Drawing nil as a
+	// zero-height band would manufacture exactly the distinction the column was
+	// added to preserve, and the claim would outlive the raw flows that could
+	// disprove it by 83 weeks.
+	//
+	// On the network-wide series the two can sum to less than Bytes. Traffic
+	// that never crossed the boundary — internal to internal, external to
+	// external — is counted in the total and belongs to neither side; the
+	// remainder, Bytes - OutBytes - InBytes, is that local and transit traffic
+	// and not a rounding error. On a device series every byte has the device on
+	// one end, so the two always sum to Bytes.
+	//
+	// Under sampling both halves are floors of the same undercount: KeepRate
+	// applies to the whole bucket, so the ratio between them survives and the
+	// absolute numbers do not. CoverageCounts.DirectionSampled counts the
+	// buckets where that caveat is live.
+	OutBytes *int64 `json:"out_bytes,omitempty"`
+	InBytes  *int64 `json:"in_bytes,omitempty"`
 }
 
 // CoverageCounts summarises a series so a caller can say "27 of 877 minutes
@@ -171,6 +239,20 @@ type CoverageCounts struct {
 	// Unverified is history from before coverage was recorded: numbers exist,
 	// their completeness does not. It shrinks to zero as that history ages out.
 	Unverified int `json:"unverified"`
+	// DirectionRecorded and DirectionUnrecorded split the buckets that carry
+	// numbers by whether those numbers also carry an upload/download split.
+	// Unrecorded is history from before migration 0011 and shrinks to zero as
+	// that history ages out of the rollup; it is the count behind "direction
+	// not recorded before <date>", which a chart has to say in words because
+	// the missing band cannot say it for itself.
+	DirectionRecorded   int `json:"direction_recorded"`
+	DirectionUnrecorded int `json:"direction_unrecorded"`
+	// DirectionSampled is how many of the recorded ones came out of a sampled
+	// bucket, where the two halves are floors of one undercount: their ratio is
+	// honest and their absolute values are not. Stated here rather than left
+	// for the client to rederive from state and keep_rate, because a caller
+	// that forgets presents floors as totals.
+	DirectionSampled int `json:"direction_sampled"`
 }
 
 // Series is a dense throughput series: exactly one point per bucket in the
@@ -262,6 +344,18 @@ func (s *Store) densify(ctx context.Context, totals map[int64]TimePoint,
 		case StateUnverified:
 			out.Coverage.Unverified++
 		}
+		// Direction is a second, independent fact about a bucket: measured
+		// history from before migration 0011 has exact byte totals and no split
+		// at all, so it cannot ride on PointState.
+		switch {
+		case p.OutBytes != nil:
+			out.Coverage.DirectionRecorded++
+			if p.State == StateSampled {
+				out.Coverage.DirectionSampled++
+			}
+		case p.Bytes != nil:
+			out.Coverage.DirectionUnrecorded++
+		}
 		out.Points = append(out.Points, p)
 	}
 	return out, nil
@@ -284,6 +378,7 @@ func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]c
 		}
 		p.State = StateMeasured
 		p.Bytes, p.Packets, p.Flows = &total.Bytes, &total.Packets, &total.Flows
+		p.OutBytes, p.InBytes = total.OutBytes, total.InBytes
 		return p
 	}
 	if ms < horizon {
@@ -300,6 +395,7 @@ func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]c
 		if measured {
 			p.State = StateUnverified
 			p.Bytes, p.Packets, p.Flows = &total.Bytes, &total.Packets, &total.Flows
+			p.OutBytes, p.InBytes = total.OutBytes, total.InBytes
 		}
 		return p
 	}
@@ -317,6 +413,15 @@ func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]c
 	// the reason a quiet 3am and a dead capture used to look identical.
 	vals := total
 	p.Bytes, p.Packets, p.Flows = &vals.Bytes, &vals.Packets, &vals.Flows
+	p.OutBytes, p.InBytes = vals.OutBytes, vals.InBytes
+	if !measured {
+		// A bucket with no rollup rows at all has no row whose direction could
+		// be missing: zero bytes split as zero and zero. Leaving it nil would
+		// punch "direction not recorded" holes through every quiet night, which
+		// reads as a defect in the recording rather than as a quiet night.
+		zeroOut, zeroIn := int64(0), int64(0)
+		p.OutBytes, p.InBytes = &zeroOut, &zeroIn
+	}
 
 	rate := c.keepRate()
 	partial := c.sourcesUp < c.sourcesTotal || (!open && c.secondsCovered < bucketSeconds)
@@ -338,10 +443,10 @@ func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]c
 // bucketTotals sums a rollup table into one row per bucket.
 func (s *Store) bucketTotals(ctx context.Context, table string, from, to time.Time) (map[int64]TimePoint, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows)
+		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows), %s, %s
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ?
-		GROUP BY bucket_ms`, table),
+		GROUP BY bucket_ms`, directionSum(egressExpr), directionSum(ingressExpr), table),
 		toMs(from), toMs(to))
 	if err != nil {
 		return nil, err
@@ -352,13 +457,27 @@ func (s *Store) bucketTotals(ctx context.Context, table string, from, to time.Ti
 	for rows.Next() {
 		var ms int64
 		var p TimePoint
-		if err := rows.Scan(&ms, &p.Bytes, &p.Packets, &p.Flows); err != nil {
+		var outB, inB sql.NullInt64
+		if err := rows.Scan(&ms, &p.Bytes, &p.Packets, &p.Flows, &outB, &inB); err != nil {
 			return nil, err
 		}
 		p.Time = fromMs(ms)
+		p.OutBytes, p.InBytes = nullInt(outB), nullInt(inB)
 		out[ms] = p
 	}
 	return out, rows.Err()
+}
+
+// nullInt turns SQL NULL into a nil pointer, which is how "not recorded"
+// travels the whole way to the JSON: a *int64 that is nil is omitted, and a
+// client cannot mistake an absent key for a zero the way it can mistake a
+// zero-valued one.
+func nullInt(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	n := v.Int64
+	return &n
 }
 
 // Talker is a source or destination ranked by traffic volume.
@@ -368,6 +487,26 @@ type Talker struct {
 	Bytes   int64  `json:"bytes"`
 	Packets int64  `json:"packets"`
 	Flows   int64  `json:"flows"`
+	// OutBytes is what Address sent and InBytes what it received — always from
+	// the perspective of Address itself, whichever end of the flow it sat on,
+	// so one reading serves every query that returns a Talker. They sum to
+	// Bytes, and are nil together when any row behind the total predates
+	// migration 0011 and recorded no direction. Nil is "not recorded"; it is
+	// never a zero.
+	OutBytes *int64 `json:"out_bytes,omitempty"`
+	InBytes  *int64 `json:"in_bytes,omitempty"`
+}
+
+// talkerDirection builds the sent/received expressions for a query grouped by
+// addrCol. Which half of a rollup row belongs to the address turns on whether
+// the address is that row's source, so the two swap with the grouping column —
+// getting it backwards would label a host being scanned as the one doing the
+// talking.
+func talkerDirection(addrCol string) (sent, received string) {
+	if addrCol == "src_ip" {
+		return directionSum("out_bytes"), directionSum("bytes - out_bytes")
+	}
+	return directionSum("bytes - out_bytes"), directionSum("out_bytes")
 }
 
 // TopTalkers returns the busiest sources between from and to, most bytes
@@ -377,13 +516,14 @@ func (s *Store) TopTalkers(ctx context.Context, from, to time.Time, res Resoluti
 	if err != nil {
 		return nil, err
 	}
+	sent, received := talkerDirection("src_ip")
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT src_ip, SUM(bytes), SUM(packets), SUM(flows)
+		SELECT src_ip, SUM(bytes), SUM(packets), SUM(flows), %s, %s
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ?
 		GROUP BY src_ip
 		ORDER BY SUM(bytes) DESC
-		LIMIT ?`, table),
+		LIMIT ?`, sent, received, table),
 		toMs(from), toMs(to), n)
 	if err != nil {
 		return nil, err
@@ -392,13 +532,27 @@ func (s *Store) TopTalkers(ctx context.Context, from, to time.Time, res Resoluti
 
 	var out []Talker
 	for rows.Next() {
-		var t Talker
-		if err := rows.Scan(&t.Address, &t.Bytes, &t.Packets, &t.Flows); err != nil {
+		t, err := scanTalker(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// scanTalker reads one ranked row in the column order every Talker query above
+// uses. Shared so the direction columns cannot be scanned in one order here
+// and the opposite order there — a swap that produces plausible numbers and no
+// error.
+func scanTalker(rows *sql.Rows) (Talker, error) {
+	var t Talker
+	var outB, inB sql.NullInt64
+	if err := rows.Scan(&t.Address, &t.Bytes, &t.Packets, &t.Flows, &outB, &inB); err != nil {
+		return Talker{}, err
+	}
+	t.OutBytes, t.InBytes = nullInt(outB), nullInt(inB)
+	return t, nil
 }
 
 // TopExternal returns the busiest external peers for one traffic direction:
@@ -414,13 +568,14 @@ func (s *Store) TopExternal(ctx context.Context, from, to time.Time, res Resolut
 	if dir == "wan_lan" {
 		col = "src_ip"
 	}
+	sent, received := talkerDirection(col)
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT %s, SUM(bytes), SUM(packets), SUM(flows)
+		SELECT %s, SUM(bytes), SUM(packets), SUM(flows), %s, %s
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ? AND direction = ?
 		GROUP BY %s
 		ORDER BY SUM(bytes) DESC
-		LIMIT ?`, col, table, col),
+		LIMIT ?`, col, sent, received, table, col),
 		toMs(from), toMs(to), dir, n)
 	if err != nil {
 		return nil, err
@@ -429,8 +584,8 @@ func (s *Store) TopExternal(ctx context.Context, from, to time.Time, res Resolut
 
 	var out []Talker
 	for rows.Next() {
-		var t Talker
-		if err := rows.Scan(&t.Address, &t.Bytes, &t.Packets, &t.Flows); err != nil {
+		t, err := scanTalker(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, t)

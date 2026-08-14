@@ -161,6 +161,20 @@ func (d *DeviceTracker) record(ctx context.Context, mac string, addr netip.Addr)
 	if d.hostname != nil {
 		host = d.hostname(addr)
 	}
+	// The empty vendor is deliberate, and this is the whole of the reason.
+	// Turning a MAC into a manufacturer takes the IEEE OUI registry, and Skopos
+	// ships no copy of one; there is nothing here to pass. Deriving a name from
+	// the prefix by any other means would put an invented manufacturer into the
+	// inventory of the exact device an operator is trying to identify, which is
+	// worse than the blank it replaces.
+	//
+	// devices.vendor has therefore been empty since 0001 while the Devices
+	// table rendered a Vendor column above it — a promise the data could never
+	// keep. The fix is in what that column says when it is empty ("not looked
+	// up", or "randomised MAC" where no manufacturer exists to find), not here.
+	// UpsertDevice leaves a stored vendor alone when handed an empty one, so if
+	// a registry is ever embedded it fills the column in from the next flush
+	// with no backfill.
 	return d.store.UpsertDevice(ctx, mac, addr.String(), host, "")
 }
 

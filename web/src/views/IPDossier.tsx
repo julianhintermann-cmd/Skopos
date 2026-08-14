@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
-import { coveredByProtected, type Alert, type BlocksResponse } from '../lib/api'
-import type { SearchResponse } from '../lib/contracts'
+import { api, coveredByProtected, type Alert, type Block } from '../lib/api'
+import type { BlocksPayload, SearchResponse } from '../lib/contracts'
 import { Card, CardHeader, Spinner, EmptyState, StatTile, Pill, Button, SeverityBadge } from '../components/ui'
 import { FlowTable } from '../components/FlowTable'
 import { RangeControl } from '../components/RangeControl'
 import { BlockDialog } from '../components/BlockDialog'
 import { Reputation } from '../components/Reputation'
 import { PageTitle } from '../components/PageTitle'
+import { KernelStatusLine } from '../components/KernelVerdict'
+import { useOutcomes, OutcomeStrip, type OutcomeSpec } from '../components/Outcomes'
+import { humanError } from '../components/humanError'
 import { useDeviceIndex, isPrivateAddress } from '../lib/links'
 import { apiWindow, useUrlRange, WINDOWS } from '../lib/useUrlState'
 import { formatBytes, formatCount, formatTime, formatRelative } from '../lib/format'
@@ -28,12 +31,13 @@ export function IPDossier({ onUnauthorized, canWrite }: { onUnauthorized: () => 
   const index = useDeviceIndex(onUnauthorized)
   const [blocking, setBlocking] = useState(false)
   const [copied, setCopied] = useState(false)
+  const outcomes = useOutcomes()
 
   const search = useFetch<SearchResponse>(
     `/api/search?address=${encodeURIComponent(addr)}&window=${apiWindow(range)}&limit=300`,
     { pollMs: 30000, onUnauthorized },
   )
-  const blocks = useFetch<BlocksResponse>('/api/blocks', { pollMs: 15000, onUnauthorized })
+  const blocks = useFetch<BlocksPayload>('/api/blocks', { pollMs: 15000, onUnauthorized })
   const alerts = useFetch<{ alerts: Alert[] | null }>(`/api/alerts?limit=${ALERT_LOOKBACK}`, { pollMs: 30000, onUnauthorized })
 
   const name = index.names.get(addr)
@@ -47,6 +51,60 @@ export function IPDossier({ onUnauthorized, canWrite }: { onUnauthorized: () => 
   )
   const protectedBy = coveredByProtected(addr, 'address', blocks.data?.protected ?? [])
   const mine = (alerts.data?.alerts ?? []).filter((a) => a.Source === addr)
+  const kernel = blocks.data?.kernel
+  const observing = blocks.data?.enforcement !== 'enforce'
+
+  // Block and unblock are two-outcome actions and the UI may say so: the
+  // service rolls the stored row back and answers 409 when the kernel refuses,
+  // so there is no third state here where the database took it and the kernel
+  // did not. Whether the rule is *still* there minutes later is a different
+  // question, and that one only the kernel verdict below can answer.
+  const unblock = async (b: Block) => {
+    try {
+      await api.del(`/api/blocks?prefix=${encodeURIComponent(b.Prefix)}`)
+      outcomes.report({
+        tone: 'ok',
+        message: observing
+          ? `Unblocked ${b.Prefix}. Nothing was being dropped anyway — enforcement is off.`
+          : `Unblocked ${b.Prefix}. The firewall removed the rule.`,
+        undo: { label: 'Undo', run: () => reblock(b) },
+      })
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) return onUnauthorized()
+      outcomes.report({ tone: 'crit', message: humanError(e, 'unblock') })
+    } finally {
+      blocks.refresh()
+    }
+  }
+
+  const liftBlock = async (target: string): Promise<OutcomeSpec> => {
+    try {
+      await api.del(`/api/blocks?prefix=${encodeURIComponent(target)}`)
+      return { tone: 'ok', message: `${target} is not blocked — the block was lifted again.` }
+    } catch (e) {
+      return { tone: 'crit', message: `Could not lift ${target} again: ${humanError(e, 'unblock')}` }
+    } finally {
+      blocks.refresh()
+    }
+  }
+
+  const reblock = async (b: Block): Promise<OutcomeSpec> => {
+    // The soft-deleted row still carries its reason and expiry, so the undo
+    // restores the block that was there rather than a fresh permanent one.
+    const secs = b.Expires ? Math.round((new Date(b.Expires).getTime() - Date.now()) / 1000) : 0
+    try {
+      await api.post('/api/blocks', {
+        prefix: b.Prefix,
+        reason: b.Reason,
+        ttl: b.Expires && secs > 0 ? `${secs}s` : '',
+      })
+      return { tone: 'ok', message: `${b.Prefix} is blocked again.` }
+    } catch (e) {
+      return { tone: 'crit', message: `Could not block ${b.Prefix} again: ${humanError(e, 'block')}` }
+    } finally {
+      blocks.refresh()
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -60,25 +118,17 @@ export function IPDossier({ onUnauthorized, canWrite }: { onUnauthorized: () => 
         </span>
       </div>
 
-      {blocking && (
-        <BlockDialog
-          source={addr}
-          detector=""
-          onClose={() => setBlocking(false)}
-          onDone={() => {
-            setBlocking(false)
-            blocks.refresh()
-          }}
-          onUnauthorized={onUnauthorized}
-        />
-      )}
-
       <Card className="px-4 py-3.5">
         <PageTitle title={name || addr}>
           {name ? `${addr} · known to Skopos as a device` : private_ ? 'a private address on your own network' : 'an address outside your network'}
         </PageTitle>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canWrite && !protectedBy && <Button onClick={() => setBlocking(true)}>Block</Button>}
+          {canWrite && !protectedBy && !blocked && <Button onClick={() => setBlocking(true)}>Block</Button>}
+          {canWrite && blocked && (
+            <Button variant="danger" onClick={() => unblock(blocked)}>
+              Unblock
+            </Button>
+          )}
           {canWrite && protectedBy && (
             <Button disabled>Block — {protectedBy} is on the never-block list</Button>
           )}
@@ -103,7 +153,36 @@ export function IPDossier({ onUnauthorized, canWrite }: { onUnauthorized: () => 
             Open in Traffic
           </Link>
         </div>
+
+        {/* The form opens inside the card whose button opened it. Mounted as a
+            sibling above the page it was the page's first flex child, so on a
+            long dossier the control that opened it was a viewport away — the
+            panel appeared somewhere the operator was not looking. */}
+        {blocking && (
+          <div className="mt-3">
+            <BlockDialog
+              variant="row"
+              source={addr}
+              detector=""
+              onClose={() => setBlocking(false)}
+              onDone={(applied) => {
+                setBlocking(false)
+                blocks.refresh()
+                outcomes.report({
+                  tone: observing ? 'accent' : 'ok',
+                  message: observing
+                    ? `Recorded ${applied.prefix}. Enforcement is off, so nothing is being dropped.`
+                    : `Blocked ${applied.prefix} ${applied.ttl ? `for ${applied.ttl}` : 'permanently'}. The firewall accepted the rule.`,
+                  undo: { label: 'Undo', run: () => liftBlock(applied.prefix) },
+                })
+              }}
+              onUnauthorized={onUnauthorized}
+            />
+          </div>
+        )}
       </Card>
+
+      <OutcomeStrip items={outcomes.items} dismiss={outcomes.dismiss} replace={outcomes.replace} />
 
       <Card>
         <CardHeader title="Block status" sub="what the firewall has been told about this address" />
@@ -115,19 +194,25 @@ export function IPDossier({ onUnauthorized, canWrite }: { onUnauthorized: () => 
               Could not read the block list{blocks.error ? `: ${blocks.error}` : ''} — this is not a confirmed "not blocked".
             </span>
           ) : blocked ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Pill tone="crit">blocked</Pill>
-              <span>{blocked.Prefix}</span>
-              {blocked.Reason && <span style={{ color: 'var(--muted)' }}>{blocked.Reason}</span>}
-              <span style={{ color: 'var(--muted)' }}>
-                {blocked.Expires ? `expires ${formatRelative(blocked.Expires)}` : 'permanent'}
-              </span>
-              {blocked.attempts > 0 && (
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* The pill is the record: Skopos was told to block this. What
+                    the kernel is doing about it is a separate claim, and it is
+                    the one with a timestamp on it. */}
+                <Pill tone="crit">block recorded</Pill>
+                <span>{blocked.Prefix}</span>
+                {blocked.Reason && <span style={{ color: 'var(--muted)' }}>{blocked.Reason}</span>}
                 <span style={{ color: 'var(--muted)' }}>
-                  {formatCount(blocked.attempts)} packets seen since start
-                  {blocked.last_attempt ? `, last ${formatRelative(blocked.last_attempt)}` : ''}
+                  {blocked.Expires ? `expires ${formatRelative(blocked.Expires)}` : 'permanent'}
                 </span>
-              )}
+                {blocked.attempts > 0 && (
+                  <span style={{ color: 'var(--muted)' }}>
+                    {formatCount(blocked.attempts)} packets seen since start
+                    {blocked.last_attempt ? `, last ${formatRelative(blocked.last_attempt)}` : ''}
+                  </span>
+                )}
+              </div>
+              <KernelStatusLine state={kernel} prefix="Kernel:" />
             </div>
           ) : protectedBy ? (
             <div className="flex flex-wrap items-center gap-2">

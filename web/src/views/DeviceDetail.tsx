@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, deviceName, type DeviceDetail as Detail } from '../lib/api'
 import { bucketSecondsOf } from '../lib/contracts'
-import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../components/ui'
+import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill, ScrollArea, useToast } from '../components/ui'
+import { humanError } from '../components/humanError'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { RangeControl } from '../components/RangeControl'
 import { TalkerRows } from '../components/entity'
@@ -44,7 +45,9 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-        <Link to="/devices" className="hover:underline">Devices</Link>
+        <Link to="/devices" className="inline-flex items-center hover:underline pointer-coarse:min-h-11 pointer-coarse:pr-1">
+          Devices
+        </Link>
         <span>/</span>
         <span style={{ color: 'var(--text)' }}>{name || d.MAC}</span>
       </div>
@@ -67,7 +70,10 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
               {d.Hostname && d.Label && <span>{d.Hostname}</span>}
             </div>
           </div>
-          <div className="text-right text-xs" style={{ color: 'var(--muted)' }}>
+          {/* Left-aligned until there is room to sit beside the identity block.
+              At 390px this wrapped underneath and stayed right-aligned, leaving
+              two lines pinned to the opposite edge from everything above them. */}
+          <div className="text-xs sm:text-right" style={{ color: 'var(--muted)' }}>
             <div>first seen {formatRelative(d.FirstSeen)}</div>
             <div>last seen {formatRelative(d.LastSeen)}</div>
           </div>
@@ -122,7 +128,11 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
         <Card>
           <CardHeader title="Ports & protocols" sub="services this device used" />
           {ports.length > 0 ? (
-            <div className="overflow-x-auto pb-2">
+            // Measured at 0px hidden at both 390 and 768, so ScrollArea says
+            // nothing here today. That is the point of using it: it measures
+            // instead of assuming, so a sixth column added later announces
+            // itself rather than clipping in silence.
+            <ScrollArea label="Ports and protocols" className="pb-2">
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ color: 'var(--muted)' }}>
@@ -145,7 +155,7 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ScrollArea>
           ) : (
             <EmptyState>No port data recorded.</EmptyState>
           )}
@@ -166,10 +176,13 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
             ) : (
               <ul className="flex flex-col gap-1.5">
                 {domains.map((dom) => (
-                  <li key={dom.name} className="flex items-baseline justify-between gap-3 text-sm">
+                  <li className="flex items-baseline justify-between gap-3 text-sm pointer-coarse:min-h-11" key={dom.name}>
+                    {/* break-all rather than truncate: the domain is the whole
+                        point of the row, and a clipped one is only recoverable
+                        by opening the page behind it. */}
                     <Link
                       to={`/domain/${encodeURIComponent(dom.name)}`}
-                      className="min-w-0 truncate hover:underline"
+                      className="min-w-0 break-all hover:underline"
                       style={{ color: 'var(--accent-strong)' }}
                     >
                       {dom.name}
@@ -196,7 +209,10 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
               <ul className="flex flex-col gap-1.5">
                 {fingerprints.map((f) => (
                   <li key={f.ja4} className="flex items-baseline justify-between gap-3 text-sm">
-                    <span className="min-w-0 truncate font-mono text-xs">{f.ja4}</span>
+                    {/* break-all, not truncate. A JA4 is 36 characters with no
+                        detail page behind it, so a clipped one is simply gone
+                        — there is nothing to tap to get the rest back. */}
+                    <span className="min-w-0 break-all font-mono text-xs">{f.ja4}</span>
                     <span className="shrink-0 text-xs" style={{ color: 'var(--muted)' }}>
                       {formatCount(f.hits)} × · last {formatTime(f.last_seen)}
                     </span>
@@ -240,15 +256,22 @@ function DevicePolicyCard({
 }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const toast = useToast()
 
   const set = async (next: string) => {
     setBusy(true)
     setErr('')
     try {
       await api.post(`/api/devices/${encodeURIComponent(mac)}/policy`, { policy: next })
+      // Confining a device is the most consequential control on this page and
+      // it confirmed nothing: the chip restyled itself and that was all.
+      toast.show({
+        message: next === '' ? 'Restriction lifted — this device is unrestricted again.' : `Policy applied: ${next === 'lan_only' ? 'LAN only' : 'quarantined'}.`,
+        tone: 'ok',
+      })
       onChange()
     } catch (e) {
-      setErr((e as Error).message)
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -267,14 +290,19 @@ function DevicePolicyCard({
         sub="what this device is allowed to reach — applied in the kernel, enforced only where traffic passes this machine"
       />
       <div className="flex flex-col gap-2 px-4 pb-4">
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* aria-pressed, because which policy is in force was carried by a
+            background colour and nothing else — unavailable to a screen
+            reader, and between "Unrestricted" and the two restricted chips it
+            is the difference between a device being on the network and not. */}
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Device policy">
           {options.map((o) => (
             <button
               key={o.value}
               onClick={() => canWrite && set(o.value)}
               disabled={!canWrite || busy}
+              aria-pressed={policy === o.value}
               title={o.hint}
-              className="rounded-md px-3 py-1.5 text-xs font-medium"
+              className="rounded-md px-3 py-1.5 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-4"
               style={
                 policy === o.value
                   ? {
@@ -293,7 +321,7 @@ function DevicePolicyCard({
           {policy !== '' &&
             'Traffic that never reaches this machine — a device going straight out through your router — cannot be stopped from here.'}
         </p>
-        {err && <p className="text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+        {err && <p role="alert" className="text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
       </div>
     </Card>
   )

@@ -25,6 +25,13 @@ import { humanError } from '../components/humanError'
 const VIEWS = ['incidents', 'events'] as const
 type View = (typeof VIEWS)[number]
 
+// The compact action used in the desktop row. That row is also what a tablet
+// gets between 768 and 1023 — the icon-rail shell, on a touch screen — where
+// Block, Mute and Ack measured 27px tall. useIsMobile is deliberately false at
+// that width because a card layout is a phone answer, so the target grows on
+// the pointer rather than on the viewport.
+const ROW_ACTION = '!px-2 !py-1 !text-xs pointer-coarse:min-h-11 pointer-coarse:!px-3'
+
 export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const [view, setView] = useUrlState<View>('view', 'incidents', { valid: VIEWS, history: 'push' })
   const [unacked, setUnacked] = useUrlState('unacked', '', { valid: ['', '1'] as const, history: 'push' })
@@ -46,8 +53,19 @@ export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
             { value: 'events', label: 'Every alert', hint: 'One row per alert' },
           ]}
         />
-        <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--muted)' }}>
-          <input type="checkbox" checked={onlyUnacked} onChange={(e) => setUnacked(e.target.checked ? '1' : '')} />
+        {/* The box itself measured 13×13. The label is the target: wrapping it
+            makes the whole phrase tappable and gives the pair a thumb's height
+            on a touch screen. */}
+        <label
+          className="flex items-center gap-2 rounded-md text-xs pointer-coarse:min-h-11 pointer-coarse:pr-2"
+          style={{ color: 'var(--muted)' }}
+        >
+          <input
+            type="checkbox"
+            checked={onlyUnacked}
+            onChange={(e) => setUnacked(e.target.checked ? '1' : '')}
+            className="h-4 w-4 shrink-0 pointer-coarse:h-5 pointer-coarse:w-5"
+          />
           Unacknowledged only
         </label>
         <a
@@ -202,15 +220,15 @@ function Incidents({
                     {canWrite && (
                       <div className="flex shrink-0 flex-wrap items-center gap-2">
                         {inc.source && (
-                          <Button onClick={() => setBlockFor(inc)} className="!px-2 !py-1 !text-xs">
+                          <Button onClick={() => setBlockFor(inc)} className={ROW_ACTION}>
                             Block
                           </Button>
                         )}
-                        <Button onClick={() => setMuteFor(inc)} className="!px-2 !py-1 !text-xs">
+                        <Button onClick={() => setMuteFor(inc)} className={ROW_ACTION}>
                           Mute
                         </Button>
                         {!inc.ack && (
-                          <Button onClick={() => ack(inc.id)} className="!px-2 !py-1 !text-xs">
+                          <Button onClick={() => ack(inc.id)} className={ROW_ACTION}>
                             Ack
                           </Button>
                         )}
@@ -424,12 +442,12 @@ function Events({
                     {formatTime(a.Time)}
                   </span>
                   {canWrite && a.Source && (
-                    <Button onClick={() => setBlockFor(a)} className="!px-2 !py-1 !text-xs">
+                    <Button onClick={() => setBlockFor(a)} className={ROW_ACTION}>
                       Block
                     </Button>
                   )}
                   {canWrite && !a.Ack && (
-                    <Button onClick={() => ack(a.ID)} className="!px-2 !py-1 !text-xs">
+                    <Button onClick={() => ack(a.ID)} className={ROW_ACTION}>
                       Ack
                     </Button>
                   )}

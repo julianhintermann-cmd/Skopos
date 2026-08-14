@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type Health, type AuditEntry, type SpeedtestResult, type UpdateStatus } from '../lib/api'
+import { api, type AuditEntry, type SpeedtestResult, type UpdateStatus } from '../lib/api'
+import type { HealthPayload } from '../lib/contracts'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill, ScrollArea, useToast } from '../components/ui'
+import { toneFill, toneText, type Tone } from '../components/ui/tone'
+import { KernelVerdictPanel, kernelWords } from '../components/KernelVerdict'
 import { Sparkline } from '../components/Sparkline'
 import { EntityLink } from '../components/entity'
 import { PageTitle } from '../components/PageTitle'
@@ -11,7 +14,7 @@ import { useIsMobile } from '../lib/useIsMobile'
 import { formatTime, formatRelative } from '../lib/format'
 
 export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
-  const health = useFetch<Health>('/api/health', { pollMs: 5000, onUnauthorized })
+  const health = useFetch<HealthPayload>('/api/health', { pollMs: 5000, onUnauthorized })
   const audit = useFetch<{ audit: AuditEntry[] | null }>('/api/audit?limit=50', { pollMs: 10000, onUnauthorized })
   const updates = useFetch<UpdateStatus>('/api/updates', { pollMs: 300000, onUnauthorized })
   const index = useDeviceIndex(onUnauthorized)
@@ -39,6 +42,7 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
   }
 
   const h = health.data
+  const enforcement = kernelWords(h?.enforcement, Date.now())
   const entries = audit.data?.audit ?? []
 
   const up = updates.data
@@ -74,19 +78,30 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
         ) : !h ? (
           <EmptyState>Could not load health.</EmptyState>
         ) : (
-          <div className="grid grid-cols-2 gap-px px-4 pb-4 sm:grid-cols-3" style={{ color: 'var(--text)' }}>
-            <HealthItem label="Overall" ok={h.ok} value={h.ok ? 'Healthy' : 'Degraded'} />
-            <HealthItem label="Capture" value={h.capture} neutral />
-            <HealthItem label="Firewall" value={h.firewall} neutral />
-            <HealthItem label="Enforcement" value={h.enforcing ? 'Enforcing' : 'Observe'} ok={h.enforcing} neutral={!h.enforcing} />
-            <HealthItem label="Cold storage" ok={h.cold_storage_ok} value={h.cold_storage_ok ? 'Writable' : 'Unreachable'} />
-            <HealthItem
-              label="Visibility"
-              value={h.mirror ? 'Mirror port' : 'This machine'}
-              neutral
-            />
-            <HealthItem label="Version" value={h.version || 'dev'} neutral />
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-px px-4 pb-3 sm:grid-cols-3" style={{ color: 'var(--text)' }}>
+              <HealthItem label="Overall" tone={h.ok ? 'ok' : 'crit'} value={h.ok ? 'Healthy' : 'Degraded'} />
+              <HealthItem label="Capture" value={h.capture} />
+              <HealthItem label="Firewall" value={h.firewall} />
+              {/* h.enforcing is the configuration ANDed with "netlink opens",
+                  and it used to be drawn green as "Enforcing" over a kernel
+                  that had been failing its read-back for hours. The verdict is
+                  the finding; the line under it says when it was found. */}
+              <HealthItem
+                label="Enforcement"
+                tone={enforcement.tone}
+                value={enforcement.label}
+                hint={enforcement.whenShort}
+                title={enforcement.sentence}
+              />
+              <HealthItem label="Cold storage" tone={h.cold_storage_ok ? 'ok' : 'crit'} value={h.cold_storage_ok ? 'Writable' : 'Unreachable'} />
+              <HealthItem label="Visibility" value={h.mirror ? 'Mirror port' : 'This machine'} />
+              <HealthItem label="Version" value={h.version || 'dev'} />
+            </div>
+            <div className="px-4 pb-4">
+              <KernelVerdictPanel state={h.enforcement} />
+            </div>
+          </>
         )}
       </Card>
 
@@ -262,19 +277,32 @@ function SpeedStat({ label, value, unit, accent }: { label: string; value: numbe
   )
 }
 
-function HealthItem({ label, value, ok, neutral }: { label: string; value: string; ok?: boolean; neutral?: boolean }) {
-  const color = neutral ? 'var(--text)' : ok ? 'var(--good)' : 'var(--crit)'
+// HealthItem takes a tone rather than an ok/neutral pair of booleans: the
+// enforcement row has six states and two of them — "not verified" and "observe
+// mode" — are neither good nor bad, which the boolean shape could not express.
+function HealthItem({
+  label,
+  value,
+  tone,
+  hint,
+  title,
+}: {
+  label: string
+  value: string
+  tone?: Tone
+  hint?: string
+  title?: string
+}) {
   return (
-    <div className="py-2">
+    <div className="py-2" title={title}>
       <div className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
         {label}
       </div>
-      <div className="mt-0.5 flex items-center gap-1.5 text-sm font-medium" style={{ color }}>
-        {!neutral && (
-          <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-        )}
+      <div className={`mt-0.5 flex items-center gap-1.5 text-sm font-medium ${tone ? toneText[tone] : 'text-fg'}`}>
+        {tone && <span className={`inline-block h-1.5 w-1.5 rounded-full ${toneFill[tone]}`} aria-hidden />}
         {value}
       </div>
+      {hint && <div className="text-xs text-fg-muted">{hint}</div>}
     </div>
   )
 }

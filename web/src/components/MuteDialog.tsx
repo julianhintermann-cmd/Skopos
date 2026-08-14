@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type Incident } from '../lib/api'
+import { api, type Incident, type MuteRule } from '../lib/api'
 import { Card, CardHeader, Button } from './ui'
 import { FieldLabel } from './BlockDialog'
 
@@ -10,15 +10,26 @@ export function MuteDialog({
   incident,
   onClose,
   onDone,
+  variant = 'card',
 }: {
   incident: Incident
   onClose: () => void
-  onDone: () => void
+  // The created rule comes back with its id, which is the whole inverse:
+  // DELETE /api/mutes/{id}. Handing it to the caller is what makes an undo
+  // possible at all — reconstructing the rule from the form would only find it
+  // by guessing.
+  onDone: (created: MuteRule | null) => void
+  // 'row' drops the card chrome so the panel can sit inside the <li> of the
+  // row it belongs to. See BlockDialog: the form's justification is the
+  // surrounding row.
+  variant?: 'card' | 'row'
 }) {
   const card = useRef<HTMLDivElement>(null)
   const [scope, setScope] = useState<'source' | 'detector' | 'both'>('both')
   const [ttl, setTtl] = useState('')
   const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [asking, setAsking] = useState(false)
   const [err, setErr] = useState('')
   const detector = incident.detectors?.[0] ?? ''
 
@@ -30,24 +41,34 @@ export function MuteDialog({
     card.current?.scrollIntoView({ block: 'nearest' })
   }, [])
 
+  // A typed reason is not thrown away by a keystroke. Same rule as the block
+  // panel, for the same reason: the reason field is the only record of why
+  // these alerts stopped arriving.
+  const close = () => {
+    if (reason.trim()) setAsking(true)
+    else onClose()
+  }
+
   const save = async () => {
+    setBusy(true)
     setErr('')
     try {
-      await api.post('/api/mutes', {
+      const created = await api.post<MuteRule>('/api/mutes', {
         prefix: scope === 'detector' ? '' : incident.source,
         detector: scope === 'source' ? '' : detector,
         ttl,
         reason,
       })
-      onDone()
+      onDone(created && typeof created.id === 'number' ? created : null)
     } catch (e) {
       setErr((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
-  return (
-    <div ref={card}>
-    <Card className="px-4 py-3.5">
+  const body = (
+    <>
       <CardHeader
         title="Mute these alerts"
         sub="stops the alert and the notification — blocking is unaffected, so protection stays exactly as it is"
@@ -94,20 +115,57 @@ export function MuteDialog({
           <input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !busy) save()
+              if (e.key === 'Escape') close()
+            }}
             placeholder="optional note"
             className="rounded-md border px-2.5 py-1.5 text-sm"
             style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
           />
         </label>
-        <Button variant="primary" onClick={save} className="pointer-coarse:min-h-11">
-          Mute
-        </Button>
-        <Button onClick={onClose} className="pointer-coarse:min-h-11">
-          Cancel
-        </Button>
+        {asking ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md px-3 py-2" style={{ background: 'var(--warn-tint)' }}>
+            <span className="text-xs" style={{ color: 'var(--text)' }}>
+              Discard the reason you have typed?
+            </span>
+            <Button onClick={onClose} className="pointer-coarse:min-h-11">
+              Discard
+            </Button>
+            <Button variant="primary" onClick={() => setAsking(false)} className="pointer-coarse:min-h-11">
+              Keep editing
+            </Button>
+          </div>
+        ) : (
+          <>
+            <Button variant="primary" onClick={save} loading={busy} className="pointer-coarse:min-h-11">
+              Mute
+            </Button>
+            <Button onClick={close} className="pointer-coarse:min-h-11">
+              Cancel
+            </Button>
+          </>
+        )}
       </div>
       {err && <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
-    </Card>
+    </>
+  )
+
+  if (variant === 'row') {
+    return (
+      <div
+        ref={card}
+        className="rounded-md border-l-2 pl-3 pr-1 pb-1"
+        style={{ borderColor: 'var(--accent)', background: 'var(--surface-2)' }}
+      >
+        {body}
+      </div>
+    )
+  }
+
+  return (
+    <div ref={card}>
+      <Card className="px-4 py-3.5">{body}</Card>
     </div>
   )
 }

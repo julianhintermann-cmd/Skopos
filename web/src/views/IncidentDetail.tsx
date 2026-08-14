@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, type Alert, type Incident } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill } from '../components/ui'
+import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill, useToast } from '../components/ui'
 import { BlockDialog } from '../components/BlockDialog'
 import { MuteDialog } from '../components/MuteDialog'
 import { Reputation } from '../components/Reputation'
 import { EntityLink } from '../components/entity'
+import { humanError } from '../components/humanError'
 import { useDeviceIndex, isPrivateAddress } from '../lib/links'
 import { formatTime } from '../lib/format'
 
@@ -25,6 +26,7 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
     pollMs: 15000,
     onUnauthorized,
   })
+  const toast = useToast()
   const [muting, setMuting] = useState(false)
   const [blocking, setBlocking] = useState(false)
 
@@ -57,9 +59,19 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
   const inc = data
   const alerts = inc.alerts ?? []
   const name = index.names.get(inc.source)
+  // Unguarded before: a refused ack threw into nothing and the page looked
+  // exactly as it does after a successful one. The toast is also this page's
+  // only live region — the Acknowledge button disappears on the next refresh
+  // whatever happened, so the outcome has to be said somewhere that outlives it.
   const ack = async () => {
-    await api.post(`/api/incidents/${inc.id}/ack`)
-    refresh()
+    try {
+      await api.post(`/api/incidents/${inc.id}/ack`)
+      toast.show({ message: 'Episode acknowledged.', tone: 'ok' })
+    } catch (e) {
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   return (
@@ -105,7 +117,7 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
               ))}
               {inc.ack ? <Pill tone="good">acknowledged</Pill> : <Pill tone="warn">outstanding</Pill>}
             </div>
-            <div className="mt-1.5 text-sm" style={{ color: 'var(--muted)' }}>
+            <div className="mt-1.5 break-all text-sm" style={{ color: 'var(--muted)' }}>
               <EntityLink value={inc.source} index={index} />
               {name && <span> ({name})</span>}
               {' · '}
@@ -120,11 +132,19 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
         </div>
 
         {canWrite && (
+          // break-all on the Block label: an IPv6 source is 39 unbreakable
+          // characters, and neither ':' nor '.' is a break opportunity in CSS.
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {inc.source && <Button onClick={() => setBlocking(true)}>Block {inc.source}</Button>}
-            <Button onClick={() => setMuting(true)}>Mute</Button>
+            {inc.source && (
+              <Button onClick={() => setBlocking(true)} className="break-all pointer-coarse:min-h-11">
+                Block {inc.source}
+              </Button>
+            )}
+            <Button onClick={() => setMuting(true)} className="pointer-coarse:min-h-11">
+              Mute
+            </Button>
             {!inc.ack && (
-              <Button variant="primary" onClick={ack}>
+              <Button variant="primary" onClick={ack} className="pointer-coarse:min-h-11">
                 Acknowledge
               </Button>
             )}
@@ -183,7 +203,9 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
 function Breadcrumb({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-      <Link to="/alerts" className="hover:underline">
+      {/* 35×20 before. This is the way back out of the page a push notification
+          drops you on, so it is a target and not just a word. */}
+      <Link to="/alerts" className="inline-flex items-center hover:underline pointer-coarse:min-h-11 pointer-coarse:pr-1">
         Alerts
       </Link>
       <span>/</span>

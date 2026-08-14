@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, type Alert } from '../lib/api'
-import { Card, CardHeader, Spinner, SeverityBadge, Button, Pill } from '../components/ui'
+import { Card, CardHeader, Spinner, SeverityBadge, Button, Pill, useToast } from '../components/ui'
 import { BlockDialog } from '../components/BlockDialog'
 import { Reputation } from '../components/Reputation'
 import { EntityLink } from '../components/entity'
+import { humanError } from '../components/humanError'
 import { useDeviceIndex, entityHref, isPrivateAddress } from '../lib/links'
 import { formatTime } from '../lib/format'
 
@@ -25,6 +26,7 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
   const { data, loading, error, refresh } = useFetch<{ alerts: Alert[] | null }>(`/api/alerts?limit=${LOOKBACK}`, {
     onUnauthorized,
   })
+  const toast = useToast()
   const [blocking, setBlocking] = useState(false)
 
   if (loading && !data) return <Spinner />
@@ -63,9 +65,20 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
 
   const name = index.names.get(alert.Source)
   const sourceHref = alert.Source ? entityHref(alert.Source, index) : null
+  // Acknowledging used to be an unguarded await: a refusal threw into nothing,
+  // the button vanished on the next refresh either way, and the operator was
+  // left unable to tell a handled alert from a failed request. The toast is
+  // also the only live region on this page — the state it reports changes
+  // without anything on screen saying so.
   const ack = async () => {
-    await api.post(`/api/alerts/${alert.ID}/ack`)
-    refresh()
+    try {
+      await api.post(`/api/alerts/${alert.ID}/ack`)
+      toast.show({ message: 'Alert acknowledged.', tone: 'ok' })
+    } catch (e) {
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   return (
@@ -98,7 +111,7 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
               {alert.Ack ? <Pill tone="good">acknowledged</Pill> : <Pill tone="warn">outstanding</Pill>}
             </div>
             <p className="mt-1.5 text-sm">{alert.Detail}</p>
-            <div className="mt-1 text-sm" style={{ color: 'var(--muted)' }}>
+            <div className="mt-1 break-all text-sm" style={{ color: 'var(--muted)' }}>
               {alert.Source && (
                 <>
                   <EntityLink value={alert.Source} index={index} />
@@ -112,17 +125,26 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
           </div>
         </div>
 
+        {/* This is where a phone lands from a push, so these are the targets
+            that matter most in the product. break-all because a source is as
+            likely to be IPv6 as IPv4 and neither ':' nor '.' is a break
+            opportunity — an unbreakable 39-character label in a 334px column
+            is how a button ends up wider than the screen. */}
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canWrite && alert.Source && <Button onClick={() => setBlocking(true)}>Block {alert.Source}</Button>}
+          {canWrite && alert.Source && (
+            <Button onClick={() => setBlocking(true)} className="break-all pointer-coarse:min-h-11">
+              Block {alert.Source}
+            </Button>
+          )}
           {canWrite && !alert.Ack && (
-            <Button variant="primary" onClick={ack}>
+            <Button variant="primary" onClick={ack} className="pointer-coarse:min-h-11">
               Acknowledge
             </Button>
           )}
           {sourceHref && (
             <Link
               to={sourceHref}
-              className="rounded-md border px-3 py-1.5 text-sm font-medium"
+              className="inline-flex items-center break-all rounded-md border px-3 py-1.5 text-sm font-medium pointer-coarse:min-h-11"
               style={{ background: 'var(--surface-2)', color: 'var(--text)', borderColor: 'var(--border)' }}
             >
               Everything about {alert.Source}
@@ -150,7 +172,9 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
 function Breadcrumb({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-      <Link to="/alerts" className="hover:underline">
+      {/* 35×20 before. This is the way back out of the page a push notification
+          drops you on, so it is a target and not just a word. */}
+      <Link to="/alerts" className="inline-flex items-center hover:underline pointer-coarse:min-h-11 pointer-coarse:pr-1">
         Alerts
       </Link>
       <span>/</span>

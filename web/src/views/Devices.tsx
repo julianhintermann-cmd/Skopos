@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, deviceName, randomizedMAC, type Device } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, Button } from '../components/ui'
-import { useIsMobile } from '../lib/useIsMobile'
+import { Card, Spinner, EmptyState, Button, IconButton, Modal, ScrollArea, useToast } from '../components/ui'
+import { PageTitle } from '../components/PageTitle'
+import { humanError } from '../components/humanError'
+import { useIsMobile, useIsNarrow } from '../lib/useIsMobile'
 import { useUrlState, useUrlText } from '../lib/useUrlState'
 import { formatRelative } from '../lib/format'
 
@@ -44,6 +46,13 @@ function matches(d: Device, q: string): boolean {
   return hay.includes(q.toLowerCase())
 }
 
+// A device's display name for a sentence or an accessible name, never blank.
+// "Forget this entry" next to two other identical labels named nothing in
+// particular; "Forget kitchen-pi" names the thing that is about to be deleted.
+function label(d: Device): string {
+  return deviceName(d) || d.IP || d.MAC
+}
+
 export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, loading, error, refresh } = useFetch<{ devices: Device[] | null }>('/api/devices', {
     pollMs: 10000,
@@ -59,137 +68,171 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
   const devices = useMemo(() => data?.devices ?? [], [data])
   const noise = useMemo(() => noiseMACs(devices), [devices])
   const named = devices.filter((d) => d.Label).length
+  // isMobile picks the shape of the confirmation; narrow picks the shape of
+  // the list. They are different questions: a sheet is a phone answer, and a
+  // table not fitting is an arithmetic one that an iPad shares with a small
+  // laptop window.
   const isMobile = useIsMobile()
+  const narrow = useIsNarrow()
+  // Forget is hoisted to the view so its confirmation is not rendered inside a
+  // table cell, where an inline panel would open hundreds of pixels away from
+  // the row that was clicked.
+  const [forgetting, setForgetting] = useState<Device | null>(null)
 
   const shown = devices.filter((d) => (onlyNoise ? noise.has(d.MAC) : true) && matches(d, query))
 
   return (
-    <Card>
-      <CardHeader
-        title="Devices"
-        sub={`${devices.length} seen on the network${named ? ` · ${named} named` : ''}`}
-        right={
-          <a
-            href="/api/export/devices.csv"
-            download
-            className="rounded-md px-2.5 py-1 text-xs font-medium"
-            style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
-          >
-            Export CSV
-          </a>
-        }
-      />
+    <div className="flex flex-col gap-4">
+      {/* The page had no h1 at any width: a screen reader arriving here found
+          the list before it found out what the page was. The count re-polls
+          every ten seconds, so it is announced rather than changed in silence. */}
+      <PageTitle title="Devices">
+        <span role="status">
+          {devices.length} seen on the network
+          {named ? ` · ${named} named` : ''}
+        </span>
+      </PageTitle>
 
-      {devices.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
-          <input
-            value={queryDraft}
-            onChange={(e) => setQueryDraft(e.target.value)}
-            placeholder="Search name, address, MAC…"
-            className="min-w-0 flex-1 rounded-md border px-2.5 py-1.5 text-sm outline-none sm:max-w-xs"
-            style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          />
-          {(query || onlyNoise) && (
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>
-              {shown.length} of {devices.length}
-            </span>
-          )}
-        </div>
-      )}
-
-      {noise.size > 0 && canWrite && (
-        <NoiseBanner
-          macs={[...noise]}
-          reviewing={onlyNoise}
-          onReview={() => setOnly(onlyNoise ? '' : 'noise')}
+      {forgetting && (
+        <ForgetConfirm
+          device={forgetting}
+          isMobile={isMobile}
+          onCancel={() => setForgetting(null)}
           onDone={() => {
-            setOnly('')
+            setForgetting(null)
             refresh()
           }}
           onUnauthorized={onUnauthorized}
         />
       )}
 
-      {loading && !data ? (
-        <Spinner />
-      ) : error ? (
-        <EmptyState>Could not load devices: {error}</EmptyState>
-      ) : devices.length === 0 ? (
-        <EmptyState>No devices inventoried yet.</EmptyState>
-      ) : shown.length === 0 ? (
-        <EmptyState>Nothing matches “{query}”.</EmptyState>
-      ) : isMobile ? (
-        <div>
-          {shown.map((d) => (
-            <DeviceCard
-              key={d.ID}
-              device={d}
-              noise={noise.has(d.MAC)}
-              canWrite={canWrite}
-              onChanged={refresh}
-              onUnauthorized={onUnauthorized}
-            />
-          ))}
+      <Card>
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-3 pt-3.5">
+          {devices.length > 0 && (
+            <>
+              <input
+                value={queryDraft}
+                onChange={(e) => setQueryDraft(e.target.value)}
+                placeholder="Search name, address, MAC…"
+                aria-label="Search devices"
+                className="min-w-0 flex-1 rounded-md border px-2.5 py-1.5 text-sm outline-none pointer-coarse:min-h-11 sm:max-w-xs"
+                style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+              />
+              {(query || onlyNoise) && (
+                <span role="status" className="text-xs" style={{ color: 'var(--muted)' }}>
+                  {shown.length} of {devices.length}
+                </span>
+              )}
+            </>
+          )}
+          <a
+            href="/api/export/devices.csv"
+            download
+            className="ml-auto inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
+            style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
+          >
+            Export CSV
+          </a>
         </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ color: 'var(--muted)' }}>
-                <Th>Name</Th>
-                <Th>Address</Th>
-                <Th>MAC</Th>
-                <Th>Vendor</Th>
-                <Th>First seen</Th>
-                <Th>Last seen</Th>
-                <Th> </Th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((d) => (
-                <tr key={d.ID} style={{ borderTop: '1px solid var(--border)' }}>
-                  <Td>
-                    <NameCell device={d} onSaved={refresh} onUnauthorized={onUnauthorized} />
-                  </Td>
-                  <Td mono>
-                    <AddressCell device={d} />
-                  </Td>
-                  <Td mono>
-                    <div>{d.MAC}</div>
-                    {randomizedMAC(d.MAC) && (
-                      <div className="text-[0.62rem]" style={{ color: 'var(--muted)' }}>
-                        randomized
-                      </div>
-                    )}
-                  </Td>
-                  <Td muted>{d.Vendor || '—'}</Td>
-                  <Td muted>{formatRelative(d.FirstSeen)}</Td>
-                  <Td muted>{formatRelative(d.LastSeen)}</Td>
-                  <Td>
-                    <div className="flex items-center justify-end gap-1">
-                      {canWrite && <PresenceToggle device={d} onChanged={refresh} onUnauthorized={onUnauthorized} />}
-                      {canWrite && <WakeButton mac={d.MAC} onUnauthorized={onUnauthorized} />}
-                      {canWrite && <ForgetButton mac={d.MAC} onChanged={refresh} onUnauthorized={onUnauthorized} />}
-                      <Link
-                        to={`/devices/${encodeURIComponent(d.MAC)}`}
-                        title="Device details"
-                        aria-label="Device details"
-                        className="rounded p-1"
-                        style={{ color: 'var(--muted)' }}
-                      >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                          <path d="M9 18l6-6-6-6" />
-                        </svg>
-                      </Link>
-                    </div>
-                  </Td>
+
+        {noise.size > 0 && canWrite && (
+          <NoiseBanner
+            macs={[...noise]}
+            reviewing={onlyNoise}
+            onReview={() => setOnly(onlyNoise ? '' : 'noise')}
+            onDone={() => {
+              setOnly('')
+              refresh()
+            }}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+
+        {loading && !data ? (
+          <Spinner />
+        ) : error ? (
+          <EmptyState>Could not load devices: {error}</EmptyState>
+        ) : devices.length === 0 ? (
+          <EmptyState>No devices inventoried yet.</EmptyState>
+        ) : shown.length === 0 ? (
+          <EmptyState>Nothing matches “{query}”.</EmptyState>
+        ) : narrow ? (
+          // A real list, not a stack of divs. The desktop renders a <table>, so
+          // a screen reader there is told how many devices exist and can move
+          // between them; the phone rendering gave up both.
+          <ul>
+            {shown.map((d) => (
+              <DeviceCard
+                key={d.ID}
+                device={d}
+                noise={noise.has(d.MAC)}
+                canWrite={canWrite}
+                onChanged={refresh}
+                onForget={() => setForgetting(d)}
+                onUnauthorized={onUnauthorized}
+              />
+            ))}
+          </ul>
+        ) : (
+          // Only rendered at 1280 and up, where the 994px table has 1006px to
+          // sit in. ScrollArea is still the wrapper rather than a bare
+          // overflow-x-auto: it measures, so a long vendor string or a browser
+          // window dragged narrow gets named instead of clipped in silence.
+          <ScrollArea label="Device list">
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ color: 'var(--muted)' }}>
+                  <Th>Name</Th>
+                  <Th>Address</Th>
+                  <Th>MAC</Th>
+                  <Th>Vendor</Th>
+                  <Th>First seen</Th>
+                  <Th>Last seen</Th>
+                  <Th>Actions</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Card>
+              </thead>
+              <tbody>
+                {shown.map((d) => (
+                  <tr key={d.ID} style={{ borderTop: '1px solid var(--border)' }}>
+                    <Td>
+                      <NameCell device={d} onSaved={refresh} onUnauthorized={onUnauthorized} />
+                    </Td>
+                    <Td mono>
+                      <AddressCell device={d} />
+                    </Td>
+                    <Td mono>
+                      <div>{d.MAC}</div>
+                      {randomizedMAC(d.MAC) && (
+                        <div className="text-[0.62rem]" style={{ color: 'var(--muted)' }}>
+                          randomized
+                        </div>
+                      )}
+                    </Td>
+                    <Td muted>{d.Vendor || '—'}</Td>
+                    <Td muted>{formatRelative(d.FirstSeen)}</Td>
+                    <Td muted>{formatRelative(d.LastSeen)}</Td>
+                    <Td>
+                      <div className="flex items-center justify-end gap-2">
+                        {canWrite && <PresenceToggle device={d} onChanged={refresh} onUnauthorized={onUnauthorized} />}
+                        {canWrite && <WakeButton device={d} onUnauthorized={onUnauthorized} />}
+                        {canWrite && <ForgetButton device={d} onForget={() => setForgetting(d)} />}
+                        <RowAction
+                          as="link"
+                          to={`/devices/${encodeURIComponent(d.MAC)}`}
+                          label={`Details for ${label(d)}`}
+                        >
+                          <path d="M9 18l6-6-6-6" />
+                        </RowAction>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollArea>
+        )}
+      </Card>
+    </div>
   )
 }
 
@@ -255,10 +298,10 @@ function NoiseBanner({
         devices that randomise their MAC — each sighting became its own entry. Removing them is safe:
         discovery is passive, so anything still on the network reappears within seconds.
       </p>
-      {err && <p className="mt-1 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
-      <div className="mt-2 flex items-center gap-2">
-        <Button onClick={onReview}>{reviewing ? 'Show all' : 'Review them'}</Button>
-        <Button onClick={forget} disabled={busy}>
+      {err && <p role="alert" className="mt-1 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button onClick={onReview} className="pointer-coarse:min-h-11">{reviewing ? 'Show all' : 'Review them'}</Button>
+        <Button onClick={forget} disabled={busy} loading={busy} variant="danger" className="pointer-coarse:min-h-11">
           {busy ? 'Removing…' : `Remove ${macs.length}`}
         </Button>
       </div>
@@ -266,34 +309,85 @@ function NoiseBanner({
   )
 }
 
-// ForgetButton drops a single inventory entry.
-function ForgetButton({
-  mac,
-  onChanged,
+// ForgetButton opens the confirmation. It does not delete anything itself.
+function ForgetButton({ device, onForget }: { device: Device; onForget: () => void }) {
+  return (
+    <RowAction label={`Forget ${label(device)}`} onClick={onForget} tone="crit">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+    </RowAction>
+  )
+}
+
+// ForgetConfirm stands between a tap and a permanent deletion.
+//
+// Forget was the third of three identically sized grey icons, 23×23px and 4px
+// apart, and it removed an inventory entry outright — no confirmation, and no
+// message when the server refused. The reassuring half of the wording is
+// NoiseBanner's because it is just as true here: discovery is passive.
+function ForgetConfirm({
+  device,
+  isMobile,
+  onCancel,
+  onDone,
   onUnauthorized,
 }: {
-  mac: string
-  onChanged: () => void
+  device: Device
+  isMobile: boolean
+  onCancel: () => void
+  onDone: () => void
   onUnauthorized: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const name = label(device)
+
   const forget = async () => {
     setBusy(true)
     try {
-      await api.post('/api/devices/forget', { macs: [mac] })
-      onChanged()
+      await api.post('/api/devices/forget', { macs: [device.MAC] })
+      toast.show({ message: `Forgot ${name}. It reappears if it is still on the network.`, tone: 'ok' })
+      onDone()
     } catch (e) {
       if ((e as { status?: number }).status === 401) return onUnauthorized()
+      // The old code swallowed this entirely, so a refused delete and a
+      // successful one looked exactly alike.
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+      onCancel()
     } finally {
       setBusy(false)
     }
   }
+
   return (
-    <IconButton label="Forget this entry" onClick={forget} disabled={busy}>
-      <path d="M3 6h18" />
-      <path d="M8 6V4h8v2" />
-      <path d="M19 6l-1 14H6L5 6" />
-    </IconButton>
+    <Modal
+      open
+      onClose={onCancel}
+      title={`Forget ${name}?`}
+      presentation={isMobile ? 'sheet' : 'overlay'}
+      width="sm"
+      footer={
+        <>
+          <Button onClick={onCancel} disabled={busy} className="pointer-coarse:min-h-11">
+            Cancel
+          </Button>
+          <Button onClick={forget} variant="danger" disabled={busy} loading={busy} className="pointer-coarse:min-h-11">
+            Forget it
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm">
+        This drops the inventory entry for <span className="font-mono">{device.MAC}</span>
+        {device.IP ? <> at <span className="font-mono">{device.IP}</span></> : null}, along with its name, its
+        presence watch and any per-device policy.
+      </p>
+      <p className="mt-2 text-sm" style={{ color: 'var(--muted)' }}>
+        Discovery is passive, so if this device is still on the network it comes back as a new, unnamed entry
+        within seconds. Traffic history already recorded against it is not deleted.
+      </p>
+    </Modal>
   )
 }
 
@@ -304,21 +398,24 @@ function DeviceCard({
   noise,
   canWrite,
   onChanged,
+  onForget,
   onUnauthorized,
 }: {
   device: Device
   noise: boolean
   canWrite: boolean
   onChanged: () => void
+  onForget: () => void
   onUnauthorized: () => void
 }) {
   return (
-    <div className="px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+    <li className="px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
       <div className="flex items-start justify-between gap-2">
         <NameCell device={device} onSaved={onChanged} onUnauthorized={onUnauthorized} />
         <Link
           to={`/devices/${encodeURIComponent(device.MAC)}`}
-          className="flex items-center gap-0.5 rounded-md px-2 py-1 text-xs font-medium"
+          aria-label={`Details for ${label(device)}`}
+          className="flex shrink-0 items-center gap-0.5 rounded-md px-2 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
           style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
         >
           Details
@@ -337,13 +434,15 @@ function DeviceCard({
         {noise && <span style={{ color: 'var(--warn)' }}>shares its address</span>}
       </div>
       {canWrite && (
-        <div className="mt-2 flex items-center gap-1">
+        // gap-2, not gap-1. Three 23px targets 4px apart, the third of which
+        // deleted the entry, is a mis-tap waiting to happen.
+        <div className="mt-2 flex items-center gap-2">
           <PresenceToggle device={device} onChanged={onChanged} onUnauthorized={onUnauthorized} />
-          <WakeButton mac={device.MAC} onUnauthorized={onUnauthorized} />
-          <ForgetButton mac={device.MAC} onChanged={onChanged} onUnauthorized={onUnauthorized} />
+          <WakeButton device={device} onUnauthorized={onUnauthorized} />
+          <ForgetButton device={device} onForget={onForget} />
         </div>
       )}
-    </div>
+    </li>
   )
 }
 
@@ -358,6 +457,7 @@ function PresenceToggle({
   onUnauthorized: () => void
 }) {
   const [busy, setBusy] = useState(false)
+  const toast = useToast()
   const toggle = async () => {
     setBusy(true)
     try {
@@ -365,13 +465,19 @@ function PresenceToggle({
       onChanged()
     } catch (e) {
       if ((e as { status?: number }).status === 401) return onUnauthorized()
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
     } finally {
       setBusy(false)
     }
   }
   return (
-    <IconButton
-      label={device.WatchPresence ? 'Presence alerts on — click to disable' : 'Notify when this device arrives or leaves'}
+    <RowAction
+      // The state is in the name, not only in the icon's colour and slash.
+      label={
+        device.WatchPresence
+          ? `Presence alerts are on for ${label(device)} — turn them off`
+          : `Notify me when ${label(device)} arrives or leaves`
+      }
       onClick={toggle}
       disabled={busy}
       tone={device.WatchPresence ? 'accent' : 'neutral'}
@@ -379,39 +485,41 @@ function PresenceToggle({
       <path d="M12 3a6 6 0 0 1 6 6c0 4 2 5.5 2 5.5H4S6 13 6 9a6 6 0 0 1 6-6z" />
       <path d="M10.3 20a2 2 0 0 0 3.4 0" />
       {!device.WatchPresence && <path d="M4 4l16 16" />}
-    </IconButton>
+    </RowAction>
   )
 }
 
-// WakeButton sends a Wake-on-LAN magic packet for the device and briefly
-// confirms it. Fire-and-forget by nature: whether the machine actually wakes
-// depends on its NIC and BIOS settings.
-function WakeButton({ mac, onUnauthorized }: { mac: string; onUnauthorized: () => void }) {
-  const [state, setState] = useState<'idle' | 'busy' | 'sent' | 'failed'>('idle')
+// WakeButton sends a Wake-on-LAN magic packet for the device. Fire-and-forget
+// by nature: whether the machine actually wakes depends on its NIC and BIOS.
+//
+// The outcome used to replace this button with a <span> for 2.5 seconds. That
+// unmounted the focused element in the middle of a row whose next control is
+// Forget, dropping keyboard focus to <body>, and announced nothing at all. The
+// button stays put; the toast is the live region that says what happened.
+function WakeButton({ device, onUnauthorized }: { device: Device; onUnauthorized: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
 
   const wake = async () => {
-    setState('busy')
+    setBusy(true)
     try {
-      await api.post(`/api/devices/${encodeURIComponent(mac)}/wake`)
-      setState('sent')
+      await api.post(`/api/devices/${encodeURIComponent(device.MAC)}/wake`)
+      // Says what was observed — a packet left this machine — and not that the
+      // device woke, which Skopos has no way to know.
+      toast.show({ message: `Wake-on-LAN packet sent to ${label(device)}.`, tone: 'ok' })
     } catch (e) {
       if ((e as { status?: number }).status === 401) return onUnauthorized()
-      setState('failed')
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      setBusy(false)
     }
-    setTimeout(() => setState('idle'), 2500)
   }
 
-  if (state === 'sent') {
-    return <span className="text-xs font-medium" style={{ color: 'var(--good)' }}>packet sent</span>
-  }
-  if (state === 'failed') {
-    return <span className="text-xs font-medium" style={{ color: 'var(--crit)' }}>failed</span>
-  }
   return (
-    <IconButton label="Wake (Wake-on-LAN)" onClick={wake} disabled={state === 'busy'}>
+    <RowAction label={`Wake ${label(device)} (Wake-on-LAN)`} onClick={wake} disabled={busy}>
       <path d="M12 2v10" />
       <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />
-    </IconButton>
+    </RowAction>
   )
 }
 
@@ -444,7 +552,7 @@ function NameCell({
     } catch (e) {
       const status = (e as { status?: number }).status
       if (status === 401) return onUnauthorized()
-      setErr((e as Error).message)
+      setErr(humanError(e))
     } finally {
       setBusy(false)
     }
@@ -466,22 +574,23 @@ function NameCell({
             disabled={busy}
             maxLength={64}
             placeholder={device.Hostname || 'device name'}
+            aria-label={`Name for ${label(device)}`}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') save()
               if (e.key === 'Escape') cancel()
             }}
-            className="w-44 rounded-md border px-2 py-1 text-sm outline-none"
+            className="w-44 rounded-md border px-2 py-1 text-sm outline-none pointer-coarse:min-h-11"
             style={{ background: 'var(--surface-2)', borderColor: 'var(--border-strong)', color: 'var(--text)' }}
           />
-          <IconButton label="Save" onClick={save} disabled={busy} tone="accent">
+          <RowAction label="Save name" onClick={save} disabled={busy} tone="accent">
             <path d="M20 6L9 17l-5-5" />
-          </IconButton>
-          <IconButton label="Cancel" onClick={cancel} disabled={busy}>
+          </RowAction>
+          <RowAction label="Cancel rename" onClick={cancel} disabled={busy}>
             <path d="M18 6L6 18M6 6l12 12" />
-          </IconButton>
+          </RowAction>
         </div>
-        {err && <span className="text-xs" style={{ color: 'var(--crit)' }}>{err}</span>}
+        {err && <span role="alert" className="text-xs" style={{ color: 'var(--crit)' }}>{err}</span>}
       </div>
     )
   }
@@ -524,53 +633,89 @@ function NameCell({
           </div>
         )}
       </div>
-      <IconButton
-        label="Rename"
+      <RowAction
+        label={`Rename ${label(device)}`}
         onClick={() => {
           setValue(device.Label)
           setEditing(true)
         }}
-        className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+        // Hover-to-reveal is a mouse idiom. A coarse pointer has no hover, so
+        // the control was permanently invisible and permanently tappable.
+        className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 pointer-coarse:opacity-100"
       >
         <path d="M12 20h9" />
         <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
-      </IconButton>
+      </RowAction>
     </div>
   )
 }
 
-function IconButton({
+// RowAction is the shared IconButton sized for a thumb.
+//
+// The row's four controls measured 23×23px with 4px between them — below even
+// WCAG 2.5.8's 24px floor, let alone the 44px both Apple's HIG and 2.5.5 ask
+// for — and the third of them permanently deleted an inventory entry.
+//
+// 44px on a touch screen, where the mis-tap actually happens, and 24 — WCAG
+// 2.5.8's floor, which 23 missed by a pixel — on a mouse. The mouse size is
+// held down because these four cells set the width of the widest table in the
+// app: at 44 throughout it grew from 990px to 1107 and began clipping even on
+// a 1280px laptop, which would have traded a touch defect for a desktop one.
+function RowAction({
   children,
-  label,
+  label: name,
   onClick,
+  to,
+  as = 'button',
   disabled,
   tone = 'neutral',
   className = '',
 }: {
-  children: React.ReactNode
+  children: ReactNode
   label: string
-  onClick: () => void
+  onClick?: () => void
+  to?: string
+  as?: 'button' | 'link'
   disabled?: boolean
-  tone?: 'neutral' | 'accent'
+  tone?: 'neutral' | 'accent' | 'crit'
   className?: string
 }) {
+  const glyph = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {children}
+    </svg>
+  )
+
+  if (as === 'link' && to) {
+    return (
+      <Link
+        to={to}
+        aria-label={name}
+        title={name}
+        className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors pointer-coarse:h-11 pointer-coarse:w-11 ${className}`}
+        style={{ color: 'var(--muted)' }}
+      >
+        {glyph}
+      </Link>
+    )
+  }
+
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
+    <IconButton
+      label={name}
+      onClick={onClick ?? (() => {})}
       disabled={disabled}
-      className={`rounded p-1 transition-colors disabled:opacity-40 ${className}`}
-      style={{ color: tone === 'accent' ? 'var(--accent-strong)' : 'var(--muted)' }}
+      tone={tone}
+      size={14}
+      className={`pointer-coarse:h-11 pointer-coarse:w-11 ${className}`}
     >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {children}
-      </svg>
-    </button>
+      {glyph}
+    </IconButton>
   )
 }
 
+// Th and Td are imported by Firewall and System as well as by DeviceDetail, so
+// they stay here and stay exported.
 export function Th({ children }: { children: React.ReactNode }) {
   return (
     <th className="px-4 py-2 text-left font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]">

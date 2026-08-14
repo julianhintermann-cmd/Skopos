@@ -24,6 +24,11 @@ type nftBackend struct {
 	// lan holds the configured private ranges, so per-device rules can ask
 	// "is the other end outside our network?".
 	lan []netip.Prefix
+	// ruleCounts is how many rules each chain held right after EnsureBase
+	// built it. Blocks and policies live in sets, so these numbers never move
+	// during normal operation — which makes them an exact check that the
+	// chains have not been flushed or had a rule deleted out from under us.
+	ruleCounts map[string]int
 }
 
 // NewNFTablesBackend creates the nftables backend. lanRanges are the private
@@ -94,6 +99,26 @@ func (b *nftBackend) Verify(context.Context) error {
 	for _, name := range allSets {
 		if _, err := c.GetSetByName(table, name); err != nil {
 			return fmt.Errorf("the %s set is missing from the %s table: %w", name, tableName, err)
+		}
+	}
+	// A chain can survive while its rules do not. Flushing one leaves every
+	// set intact and correct — and with it every block, device policy and
+	// country drop switched off — so checking the chain exists is not the same
+	// as checking it does anything.
+	b.mu.Lock()
+	want := b.ruleCounts
+	b.mu.Unlock()
+	if len(want) == 0 {
+		return nil
+	}
+	have, err := chainRuleCounts(c, table)
+	if err != nil {
+		return err
+	}
+	for name, n := range want {
+		if have[name] != n {
+			return fmt.Errorf("the %s chain holds %d rules, not the %d Skopos installed",
+				name, have[name], n)
 		}
 	}
 	return nil
@@ -277,8 +302,30 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	if err := c.Flush(); err != nil {
 		return err
 	}
+	// Record how many rules each chain ended up with, by reading them back
+	// rather than by counting the AddRule calls above. The number is static —
+	// it does not vary with how many blocks, countries or devices exist, since
+	// all of those live in sets — so a later count is an exact O(1) check that
+	// the chains still hold their rules. Reading it back means the check
+	// cannot drift out of step when the rules here change.
+	if counts, err := chainRuleCounts(c, table); err == nil {
+		b.ruleCounts = counts
+	}
 	// The LAN ranges are static configuration; load them once here.
 	return b.loadLANRanges()
+}
+
+// chainRuleCounts returns the number of rules in each of Skopos's chains.
+func chainRuleCounts(c *nftables.Conn, table *nftables.Table) (map[string]int, error) {
+	out := make(map[string]int, 3)
+	for _, name := range []string{chainIn, chainFwd, chainOut} {
+		rules, err := c.GetRules(table, &nftables.Chain{Name: name, Table: table})
+		if err != nil {
+			return nil, fmt.Errorf("reading the rules of chain %s: %w", name, err)
+		}
+		out[name] = len(rules)
+	}
+	return out, nil
 }
 
 // loadLANRanges fills the lan4/lan6 sets from the configured private ranges.

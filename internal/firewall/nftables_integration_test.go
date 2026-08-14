@@ -669,3 +669,79 @@ func TestIntegrationVerifyNoticesEmptiedSetsAndRepairsEverything(t *testing.T) {
 		t.Errorf("health should be OK after a successful repair: %+v", h)
 	}
 }
+
+// A chain can survive while its rules do not. Flushing one leaves every set
+// intact and correct — and every block, device policy and country drop
+// switched off with it — so a check that the chain exists proves nothing about
+// whether it does anything.
+func TestIntegrationVerifyNoticesAFlushedChain(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+	b := NewNFTablesBackend([]netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")})
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+	if err := b.Reconcile(ctx, []Rule{
+		{Prefix: netip.MustParsePrefix("203.0.113.7/32"), Action: Drop},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := b.Verify(ctx); err != nil {
+		t.Fatalf("a healthy ruleset should verify: %v", err)
+	}
+
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table *nftables.Table
+	for _, tb := range tables {
+		if tb.Name == tableName && tb.Family == nftables.TableFamilyINet {
+			table = tb
+		}
+	}
+	if table == nil {
+		t.Fatal("skopos table not found")
+	}
+
+	// Case one: the whole chain emptied.
+	c.FlushChain(&nftables.Chain{Name: chainIn, Table: table})
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(setElements(t, setDrop4)) == 0 {
+		t.Fatal("the sets should still be intact — that is the point of this test")
+	}
+	if err := b.Verify(ctx); err == nil {
+		t.Error("Verify reported healthy with the input chain flushed")
+	} else {
+		t.Logf("flushed chain correctly reported: %v", err)
+	}
+
+	// Case two: one rule removed, everything else untouched.
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("rebuilding: %v", err)
+	}
+	if err := b.Verify(ctx); err != nil {
+		t.Fatalf("the rebuilt ruleset should verify: %v", err)
+	}
+	rules, err := c.GetRules(table, &nftables.Chain{Name: chainFwd, Table: table})
+	if err != nil || len(rules) == 0 {
+		t.Fatalf("reading the forward chain: %v (%d rules)", err, len(rules))
+	}
+	if err := c.DelRule(rules[len(rules)-1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Verify(ctx); err == nil {
+		t.Error("Verify reported healthy with one rule deleted")
+	} else {
+		t.Logf("deleted rule correctly reported: %v", err)
+	}
+}

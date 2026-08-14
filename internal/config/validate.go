@@ -41,7 +41,7 @@ func (c *Config) Validate() error {
 		bad("storage.hot_max_size: must be at least 256MiB (got %s)", c.Storage.HotMaxSize)
 	}
 	if c.Storage.Retention.RawFlows <= 0 {
-		bad("storage.retention.raw_flows: must be positive (raw flows are archived, not kept forever)")
+		bad("storage.retention.raw_flows: must be positive (0 would delete every raw flow immediately)")
 	}
 	if c.Storage.Backup.Enabled && c.Storage.Backup.Keep < 1 {
 		bad("storage.backup.keep: must be at least 1 when backups are enabled")

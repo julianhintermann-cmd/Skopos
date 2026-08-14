@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -97,8 +98,12 @@ func TestEnforceHotLimitReducesSizeAndTerminates(t *testing.T) {
 	}
 	cap := before / 2
 
+	// The rollups this fixture builds outlast the raw flows, so draining
+	// every flow still leaves the file over a half-size cap. That is the
+	// documented behaviour — rollups are kept on purpose — and it now reports
+	// itself instead of returning as if the cap had been met.
 	deleted, err := s.EnforceHotLimit(ctx, cap)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrHotLimitUnreachable) {
 		t.Fatalf("EnforceHotLimit: %v", err)
 	}
 	if deleted == 0 {

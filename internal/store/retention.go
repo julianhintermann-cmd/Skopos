@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -15,9 +16,9 @@ type RetentionPolicy struct {
 	Rollup1d time.Duration
 }
 
-// ApplyRetention deletes rows older than the policy for each table. Raw flows
-// are expected to have been archived to cold storage beforehand; this only
-// reclaims hot-storage space. It returns the number of rows deleted.
+// ApplyRetention deletes rows older than the policy for each table. The
+// deletion is final: nothing is archived first. It returns the number of rows
+// deleted.
 func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (int64, error) {
 	now := s.now()
 	var total int64
@@ -55,6 +56,13 @@ func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (int64, e
 //
 // The SSD does not belong to Skopos: this is the backstop that guarantees the
 // database can never grow without bound, independent of the time-based policy.
+// ErrHotLimitUnreachable reports that the cap could not be met: every raw
+// flow is gone and the rollups alone still exceed it. It is not a failure of
+// this function — the rollups are kept on purpose — but the operator is
+// entitled to know that "hot_max_size" has stopped being a bound, and that
+// raw-flow retention has collapsed to whatever fits between two hourly runs.
+var ErrHotLimitUnreachable = errors.New("hot-storage cap cannot be met by dropping raw flows alone")
+
 func (s *Store) EnforceHotLimit(ctx context.Context, maxBytes int64) (int64, error) {
 	if maxBytes <= 0 {
 		return 0, nil
@@ -76,8 +84,11 @@ func (s *Store) EnforceHotLimit(ctx context.Context, maxBytes int64) (int64, err
 		deleted += n
 		if n == 0 {
 			// No raw flows left to drop; rollups stay by design even if that
-			// leaves us above the cap.
-			break
+			// leaves us above the cap. Say so rather than returning quietly:
+			// from here on every run empties the raw flows entirely and the
+			// documented retention window is gone.
+			return deleted, fmt.Errorf("%w: %d bytes over after deleting %d flows",
+				ErrHotLimitUnreachable, size-maxBytes, deleted)
 		}
 		// Return freed pages to the filesystem so the next size check sees
 		// the reduction (WAL checkpoint + incremental vacuum).

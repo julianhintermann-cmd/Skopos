@@ -79,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repeated their own tables' primary keys — measured at roughly half the file
   on a year of traffic. Dropped, which gives that space back to the retention
   cap.
+- **A full disk no longer ends flow recording permanently.** One failed write
+  used to end the loop that writes history for good — nothing was recorded
+  again until someone restarted the container, even after the space came
+  back. It retries on the next tick and reports the failure instead.
+- **The hot-storage cap says when it cannot hold.** It only ever deletes raw
+  flows, never the rollups, so once the rollups alone exceed the limit the cap
+  silently stops being a cap and every run empties the raw flows — collapsing
+  the documented seven days of history to about an hour, permanently and with
+  no sign of it. That case now reports itself and pushes a notification.
+- **Incidents were never pruned.** The pruner existed and nothing called it,
+  so the table only ever grew. It follows the same retention window as the
+  names it sits beside.
 - **A stalled connection can no longer take the dashboard down.** The HTTP
   server had no header or idle timeout, so a connection that opened and then
   said nothing held a goroutine indefinitely — enough, on a port forwarded to

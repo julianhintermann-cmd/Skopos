@@ -39,11 +39,12 @@ type entry struct {
 // Aggregator batches packets into flow records and forwards each packet to an
 // optional observer. It is safe for concurrent Add/Flush.
 type Aggregator struct {
-	classifier *Classifier
-	sink       FlowSink
-	observer   Observer
-	flush      time.Duration
-	nameLookup func(netip.Addr) string
+	classifier   *Classifier
+	sink         FlowSink
+	observer     Observer
+	flush        time.Duration
+	nameLookup   func(netip.Addr) string
+	onFlushError func(error)
 
 	mu    sync.Mutex
 	flows map[key]*entry
@@ -58,6 +59,11 @@ type Config struct {
 	// NameLookup resolves an address to a hostname learned from passive DNS,
 	// filling in flows whose own packets carried no name. Optional.
 	NameLookup func(netip.Addr) string
+	// OnFlushError is called when a flush fails. The loop keeps running: a
+	// full disk that later frees up should resume recording on its own, and
+	// silently ending the only thing that writes history is the worst
+	// available outcome. Optional.
+	OnFlushError func(error)
 }
 
 // New creates an Aggregator.
@@ -66,12 +72,13 @@ func New(cfg Config) *Aggregator {
 		cfg.Flush = 10 * time.Second
 	}
 	return &Aggregator{
-		classifier: cfg.Classifier,
-		sink:       cfg.Sink,
-		observer:   cfg.Observer,
-		flush:      cfg.Flush,
-		nameLookup: cfg.NameLookup,
-		flows:      make(map[key]*entry),
+		classifier:   cfg.Classifier,
+		sink:         cfg.Sink,
+		observer:     cfg.Observer,
+		flush:        cfg.Flush,
+		nameLookup:   cfg.NameLookup,
+		onFlushError: cfg.OnFlushError,
+		flows:        make(map[key]*entry),
 	}
 }
 
@@ -179,8 +186,15 @@ func (a *Aggregator) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return a.Flush()
 		case <-t.C:
+			// A failed flush used to end the loop for good, so one full disk
+			// meant nothing was recorded again until someone restarted the
+			// process — even after the space came back. Keep ticking and
+			// report, so recovery is automatic and the operator still hears
+			// about it.
 			if err := a.Flush(); err != nil {
-				return err
+				if a.onFlushError != nil {
+					a.onFlushError(err)
+				}
 			}
 		}
 	}

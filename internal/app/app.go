@@ -291,6 +291,9 @@ func (a *App) Run(ctx context.Context) error {
 		Observer:   observers,
 		Flush:      a.cfg.Capture.FlowFlush.Std(),
 		NameLookup: resolver.Lookup,
+		OnFlushError: func(err error) {
+			a.log.Error("writing flows failed", "err", err)
+		},
 	})
 
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
@@ -385,15 +388,11 @@ func (a *App) Run(ctx context.Context) error {
 	// that is supposed to be reading packets off the wire.
 	spawn("policy", func() { pol.Run(runCtx) })
 	spawn("aggregator", func() {
-		// The aggregator writing flows is what "monitoring" means here. If it
-		// stops, the detectors keep alerting from the pre-aggregation stream
-		// and everything looks alive while the history quietly stops being
-		// recorded — so a write failure is worth saying out loud.
-		if err := agg.Run(runCtx); err != nil && runCtx.Err() == nil {
-			a.log.Error("flow aggregator stopped", "err", err)
-			dispatcher.System(context.WithoutCancel(runCtx), model.SeverityCritical,
-				"Skopos stopped recording traffic",
-				"The flow aggregator stopped: "+err.Error()+". Alerts still work, but nothing is being written to history.")
+		// Writing flows is what "monitoring" means here, so a failure keeps
+		// retrying on the next tick rather than ending the loop. Only the
+		// final flush at shutdown can return an error now.
+		if err := agg.Run(runCtx); err != nil {
+			a.log.Error("final flow flush failed", "err", err)
 		}
 	})
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })

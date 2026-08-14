@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -104,7 +105,16 @@ func (a *App) spawnMaintenance(ctx context.Context, spawn func(string, func()), 
 				if _, err := st.ApplyRetention(ctx, retentionFromConfig(a.cfg)); err != nil {
 					a.log.Warn("retention", "err", err)
 				}
-				if _, err := st.EnforceHotLimit(ctx, a.cfg.Storage.HotMaxSize.Bytes()); err != nil {
+				switch _, err := st.EnforceHotLimit(ctx, a.cfg.Storage.HotMaxSize.Bytes()); {
+				case errors.Is(err, store.ErrHotLimitUnreachable):
+					// The cap has stopped being a cap. Every run from now on
+					// empties the raw flows and the documented retention
+					// window is gone, so this is worth waking someone for.
+					a.log.Error("hot-storage cap unreachable", "err", err)
+					disp.System(ctx, model.SeverityWarning, "Skopos is out of hot storage",
+						err.Error()+". Raise storage.hot_max_size, or shorten the rollup retention — "+
+							"raw-flow history is being deleted almost as fast as it is written.")
+				case err != nil:
 					a.log.Warn("hot-limit enforcement", "err", err)
 				}
 				// Passive DNS follows the raw-flow retention: names outlive
@@ -113,6 +123,11 @@ func (a *App) spawnMaintenance(ctx context.Context, spawn func(string, func()), 
 				cutoff := a.clock().Add(-a.cfg.Storage.Retention.Rollup1h.Std())
 				if err := st.PruneNames(ctx, cutoff); err != nil {
 					a.log.Warn("pruning names", "err", err)
+				}
+				// Incidents follow the same window. The pruner existed but
+				// nothing ever called it, so the table only ever grew.
+				if err := st.PruneIncidents(ctx, cutoff); err != nil {
+					a.log.Warn("pruning incidents", "err", err)
 				}
 			}
 		}

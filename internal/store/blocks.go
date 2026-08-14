@@ -10,8 +10,8 @@ import (
 )
 
 // AddBlock records an active block for a prefix. If an active block already
-// exists for the same prefix it is updated (origin, reason, expiry refreshed)
-// rather than duplicated. Returns the stored block.
+// exists for the same prefix it is updated (origin, reason, expiry and
+// provenance refreshed) rather than duplicated. Returns the stored block.
 func (s *Store) AddBlock(ctx context.Context, b model.Block) (model.Block, error) {
 	now := s.now()
 	if b.Created.IsZero() {

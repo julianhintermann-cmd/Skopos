@@ -20,6 +20,11 @@ type LoadInfo struct {
 	// Missing is true when the file does not exist and pure defaults are
 	// in effect.
 	Missing bool
+	// Inert names the keys present in the operator's file that Skopos accepts
+	// and does not act on. Reporting them from the running process beats
+	// documenting them, because the reader of a doc comment is rarely the
+	// person waiting for the setting to take effect.
+	Inert []string
 }
 
 // ResolvePath returns the config path from, in order: the explicit flag
@@ -53,6 +58,8 @@ func Load(path string) (*Config, LoadInfo, error) {
 	if err != nil {
 		return nil, info, fmt.Errorf("reading %s: %w", path, err)
 	}
+
+	info.Inert = InertKeysIn(raw)
 
 	cfg, err := Parse(raw)
 	if err != nil {

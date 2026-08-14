@@ -53,10 +53,14 @@ type LiveStats struct {
 
 // Deps are the server's dependencies.
 type Deps struct {
-	Store      *store.Store
-	Firewall   *firewall.Service
-	Notifier   *notify.Dispatcher
-	Config     *config.Config
+	Store    *store.Store
+	Firewall *firewall.Service
+	Notifier *notify.Dispatcher
+	Config   *config.Config
+	// ConfigInfo says where the configuration came from: the path tried,
+	// whether it was there, and which keys in it are inert. A mistyped mount
+	// is otherwise invisible from the dashboard.
+	ConfigInfo config.LoadInfo
 	Live       LiveProvider
 	LiveFlows  LiveFlowProvider
 	Cloudflare CloudflareService
@@ -206,6 +210,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/alerts", s.requireRead(http.HandlerFunc(s.handleAlerts)))
 	s.mux.Handle("GET /api/blocks", s.requireRead(http.HandlerFunc(s.handleListBlocks)))
 	s.mux.Handle("GET /api/firewall/kernel", s.requireRead(http.HandlerFunc(s.handleKernelDump)))
+	s.mux.Handle("GET /api/config", s.requireRead(http.HandlerFunc(s.handleConfig)))
 	s.mux.Handle("GET /api/rules", s.requireRead(http.HandlerFunc(s.handleRules)))
 	s.mux.Handle("GET /api/audit", s.requireRead(http.HandlerFunc(s.handleAudit)))
 	s.mux.Handle("GET /api/me", s.requireRead(http.HandlerFunc(s.handleMe)))

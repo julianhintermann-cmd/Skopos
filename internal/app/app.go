@@ -42,6 +42,7 @@ import (
 // App is a fully wired Skopos runtime.
 type App struct {
 	cfg      *config.Config
+	cfgInfo  config.LoadInfo
 	log      *slog.Logger
 	demo     bool
 	clock    func() time.Time
@@ -52,6 +53,10 @@ type App struct {
 type Options struct {
 	// Demo forces the synthetic traffic source regardless of config.
 	Demo bool
+	// ConfigInfo is what the loader reported about the file it read. Passed in
+	// rather than re-derived, so the dashboard states what this process
+	// actually loaded rather than what a second look would find now.
+	ConfigInfo config.LoadInfo
 	// Logger receives structured logs (defaults to stderr text at info level).
 	Logger *slog.Logger
 }
@@ -64,6 +69,7 @@ func New(cfg *config.Config, opts Options) *App {
 	}
 	return &App{
 		cfg:      cfg,
+		cfgInfo:  opts.ConfigInfo,
 		log:      log,
 		demo:     opts.Demo || cfg.Demo,
 		clock:    time.Now,
@@ -520,6 +526,7 @@ func (a *App) Run(ctx context.Context) error {
 	// --- HTTP API ----------------------------------------------------------
 	srv, err := api.New(api.Deps{
 		Store: st, Firewall: fw, Notifier: dispatcher, Config: a.cfg,
+		ConfigInfo:          a.cfgInfo,
 		Live:                live,
 		LiveFlows:           liveSink,
 		Cloudflare:          cf,

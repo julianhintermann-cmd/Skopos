@@ -89,7 +89,7 @@ func TestSelfHealIsAudited(t *testing.T) {
 	if !strings.Contains(e.Detail, "the skopos table is not in the kernel") {
 		t.Errorf("detail %q does not say what the kernel was found to be missing", e.Detail)
 	}
-	if !strings.Contains(e.Detail, "1 block rules") {
+	if !strings.Contains(e.Detail, "1 block rule,") {
 		t.Errorf("detail %q does not say what was reapplied", e.Detail)
 	}
 }

@@ -48,5 +48,5 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	return app.New(cfg, app.Options{Demo: demoMode}).Run(ctx)
+	return app.New(cfg, app.Options{Demo: demoMode, ConfigInfo: info}).Run(ctx)
 }

@@ -304,18 +304,18 @@ func coveredBy(list []netip.Prefix, p netip.Prefix) (netip.Prefix, bool) {
 // method runs from startup and from a config reload, and naming an operator
 // who may not have been involved would be a guess in the one place that must
 // not guess. Their edit is audited where they made it, at the same moment.
-func (s *Service) auditReleased(ctx context.Context, was, now []netip.Prefix) {
+func (s *Service) auditReleased(ctx context.Context, before, after []netip.Prefix) {
 	blocks, err := s.store.ActiveBlocks(ctx)
 	if err != nil {
 		s.log("firewall: could not read which blocks the new never-block list releases: %v", err)
 		return
 	}
 	for _, b := range blocks {
-		cover, covered := coveredBy(now, b.Prefix)
+		cover, covered := coveredBy(after, b.Prefix)
 		if !covered {
 			continue
 		}
-		if _, already := coveredBy(was, b.Prefix); already {
+		if _, already := coveredBy(before, b.Prefix); already {
 			continue
 		}
 		if err := s.store.Audit(ctx, model.AuditEntry{

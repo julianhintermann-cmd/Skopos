@@ -265,6 +265,11 @@ type KernelHealth struct {
 	// long the gap has been open rather than just that one exists.
 	FailingSince time.Time `json:"failing_since,omitzero"`
 	Error        string    `json:"error,omitempty"`
+	// ContentsChecked is false when the sets could only be checked for
+	// existence, because the desired state could not be read to compare them
+	// against. The structural half of the check still ran; saying so beats a
+	// clean bill of health that quietly covered less ground than usual.
+	ContentsChecked bool `json:"contents_checked"`
 }
 
 // KernelHealth returns the outcome of the last verification pass.
@@ -278,10 +283,11 @@ func (s *Service) KernelHealth() KernelHealth {
 	return h
 }
 
-func (s *Service) recordHealth(ok bool, err error) {
+func (s *Service) recordHealth(ok, contents bool, err error) {
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
 	s.health.OK = ok
+	s.health.ContentsChecked = contents
 	s.health.CheckedAt = s.clock()
 	if ok {
 		s.health.FailingSince = time.Time{}
@@ -315,13 +321,13 @@ func (s *Service) Verify(ctx context.Context) error {
 	wanted := s.cfg.Enforce
 	s.cfgMu.RUnlock()
 	if !wanted || !s.backend.Available() {
-		s.recordHealth(true, nil)
+		s.recordHealth(true, true, nil)
 		return nil
 	}
 
-	err := s.checkKernel(ctx)
+	contents, err := s.checkKernel(ctx)
 	if err == nil {
-		s.recordHealth(true, nil)
+		s.recordHealth(true, contents, nil)
 		return nil
 	}
 
@@ -330,15 +336,16 @@ func (s *Service) Verify(ctx context.Context) error {
 	// have to notice before their firewall comes back.
 	s.log("firewall: the kernel no longer matches what Skopos programmed (%v) — rebuilding", err)
 	if rerr := s.reapplyAll(ctx); rerr != nil {
-		s.recordHealth(false, fmt.Errorf("%v; rebuilding it failed too: %w", err, rerr))
+		s.recordHealth(false, false, fmt.Errorf("%v; rebuilding it failed too: %w", err, rerr))
 		return fmt.Errorf("firewall verification failed and could not be repaired: %w", rerr)
 	}
-	if verr := s.checkKernel(ctx); verr != nil {
-		s.recordHealth(false, fmt.Errorf("%v; still wrong after rebuilding: %w", err, verr))
+	contents, verr := s.checkKernel(ctx)
+	if verr != nil {
+		s.recordHealth(false, contents, fmt.Errorf("%v; still wrong after rebuilding: %w", err, verr))
 		return fmt.Errorf("firewall rebuilt but still does not match: %w", verr)
 	}
 	s.log("firewall: rebuilt and verified")
-	s.recordHealth(true, nil)
+	s.recordHealth(true, contents, nil)
 	return nil
 }
 
@@ -353,26 +360,33 @@ func (s *Service) Verify(ctx context.Context) error {
 // merges ranges and interval sets store two elements per range — so the
 // invariant is the one that actually matters: a set Skopos believes it filled
 // must not be empty in the kernel.
-func (s *Service) checkKernel(ctx context.Context) error {
+// It reports whether the contents could be compared at all, so a pass that
+// covered less ground than usual is visible rather than indistinguishable from
+// a full one.
+func (s *Service) checkKernel(ctx context.Context) (contents bool, err error) {
 	if err := s.backend.Verify(ctx); err != nil {
-		return err
+		return false, err
 	}
 	want, err := s.expectedNonEmpty(ctx)
 	if err != nil {
-		// Not being able to read the desired state is not evidence the kernel
-		// is wrong, so do not claim it is.
-		return nil
+		// Not being able to read the desired state is not evidence that the
+		// kernel is wrong, and rebuilding the firewall because the database
+		// hiccupped would be the worse mistake. But a check that silently
+		// covers half of what it usually does is the shape this whole
+		// verification exists to remove, so the caller is told.
+		s.log("firewall: could not read the desired state to compare the kernel against: %v", err)
+		return false, nil
 	}
 	counts, err := s.backend.SetCounts(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the kernel sets: %w", err)
+		return false, fmt.Errorf("reading the kernel sets: %w", err)
 	}
 	for _, name := range allSets {
 		if want[name] && counts[name] == 0 {
-			return fmt.Errorf("the %s set is empty in the kernel, but Skopos has rules for it", name)
+			return true, fmt.Errorf("the %s set is empty in the kernel, but Skopos has rules for it", name)
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // expectedNonEmpty names the sets Skopos believes it has filled.

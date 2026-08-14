@@ -98,6 +98,11 @@ type Service struct {
 	// Listed reports whether the address is in one of the blocklists the
 	// operator already subscribes to. Answered from memory, no request.
 	Listed func(netip.Addr) bool
+	// FeedsLoaded reports whether any blocklist is actually loaded. Without
+	// it, Listed answering false is indistinguishable from having nothing to
+	// compare against — and the card would state "not on your blocklists" as
+	// a fact on the strength of an empty set.
+	FeedsLoaded func() bool
 
 	clock func() time.Time
 
@@ -178,6 +183,17 @@ func (s *Service) local(addr netip.Addr, info *Info) {
 		}
 	}
 	if s.Listed == nil {
+		return
+	}
+	if s.FeedsLoaded != nil && !s.FeedsLoaded() {
+		// Saying "not on your blocklists" when no blocklist has loaded is a
+		// negative asserted against nothing — the same shape as reading an
+		// absent measurement as a clean score. Either the feeds are switched
+		// off, or every download failed; in both cases the honest answer is
+		// that we do not know.
+		info.Signals = append(info.Signals, Signal{
+			Source: "blocklists", Detail: "no blocklists loaded — nothing to check against",
+		})
 		return
 	}
 	if s.Listed(addr) {
@@ -280,6 +296,9 @@ func (s *Service) blocklistDE(ctx context.Context, ip string, info *Info) error 
 
 	attacks, reports, ok := parseBlocklistDE(string(body))
 	if !ok {
+		info.Signals = append(info.Signals, Signal{
+			Source: "blocklist.de", Detail: "no answer — the reply was not recognised",
+		})
 		return fmt.Errorf("blocklist.de: unrecognised response")
 	}
 	if reports <= 0 && attacks <= 0 {
@@ -302,9 +321,11 @@ func (s *Service) blocklistDE(ctx context.Context, ip string, info *Info) error 
 }
 
 // parseBlocklistDE reads the service's plain-text reply, which is a couple of
-// "key: value" lines. Tolerant on purpose: an unfamiliar key is skipped
-// rather than failing a lookup whose other sources answered fine.
+// "key: value" lines. Unfamiliar keys are skipped, but the two that carry the
+// answer must both be present and parse — a partial read is reported as no
+// answer rather than as a zero.
 func parseBlocklistDE(body string) (attacks, reports int, ok bool) {
+	var sawAttacks, sawReports bool
 	for _, line := range strings.Split(body, "\n") {
 		key, value, found := strings.Cut(line, ":")
 		if !found {
@@ -316,12 +337,15 @@ func parseBlocklistDE(body string) (attacks, reports int, ok bool) {
 		}
 		switch strings.ToLower(strings.TrimSpace(key)) {
 		case "attacks":
-			attacks, ok = n, true
+			attacks, sawAttacks = n, true
 		case "reports":
-			reports, ok = n, true
+			reports, sawReports = n, true
 		}
 	}
-	return attacks, reports, ok
+	// Both keys, or nothing. Accepting a half-parse meant a reply whose report
+	// count failed to parse — a thousand separator is enough — still reported a
+	// confident zero, which is the one answer we must never invent.
+	return attacks, reports, sawAttacks && sawReports
 }
 
 // blocklistDEScore maps report volume onto the shared 0–100 scale. Its
@@ -368,7 +392,7 @@ func (s *Service) dshield(ctx context.Context, ip string, info *Info) error {
 	// DShield types loosely: counts arrive as numbers or strings, and unknown
 	// addresses answer with nulls. flexInt absorbs all of it.
 	var out struct {
-		IP struct {
+		IP *struct {
 			Number   string  `json:"number"`
 			Count    flexInt `json:"count"`
 			Attacks  flexInt `json:"attacks"`
@@ -387,7 +411,29 @@ func (s *Service) dshield(ctx context.Context, ip string, info *Info) error {
 		return err
 	}
 
-	rec := out.IP
+	// A decode into that struct succeeds on any well-formed JSON — a rate-limit
+	// notice, an error body, a future response shape — and leaves every field
+	// zero. Reading that zero as "no reports" is exactly how this panel came to
+	// show a confident green nothing next to a critical alert for an address
+	// with over a thousand reports against it. The echoed address is what
+	// proves the reply is an answer about the address we asked about.
+	// The reply has to carry something about the address before a zero in it
+	// can mean anything. Without this check a decode succeeded on any
+	// well-formed JSON — a rate-limit notice, an error body, a future response
+	// shape — leaving every field zero, and that zero was read as "no
+	// reports". It is how this panel came to show a confident green nothing
+	// beside a critical alert for an address with over a thousand reports
+	// against it. (This environment cannot reach isc.sans.edu, so the check is
+	// deliberately structural rather than tied to one field name.)
+	if out.IP == nil || (out.IP.Number == "" && out.IP.Count == 0 && out.IP.Attacks == 0 &&
+		out.IP.MinDate == "" && out.IP.MaxDate == "" && out.IP.AsName == "") {
+		info.Signals = append(info.Signals, Signal{
+			Source: "dshield", Detail: "no answer — the reply carried nothing about this address",
+		})
+		return fmt.Errorf("dshield: unrecognised response")
+	}
+
+	rec := *out.IP
 	reports, targets := int(rec.Count), int(rec.Attacks)
 	if reports > info.AbuseReports {
 		info.AbuseReports = reports

@@ -323,6 +323,7 @@ func (a *App) Run(ctx context.Context) error {
 	rep.Geo = geo.Lookup
 	if observers.feeds != nil {
 		rep.Listed = observers.feeds.Listed
+		rep.FeedsLoaded = func() bool { return observers.feeds.Count() > 0 }
 	}
 
 	// Release check: a monitoring tool quietly running a stale image is a

@@ -245,3 +245,76 @@ func TestDShieldScore(t *testing.T) {
 		}
 	}
 }
+
+// The 0.3.0 failure, guarded. A decode into the DShield response struct
+// succeeds on any well-formed JSON and leaves every field zero; reading that
+// zero as "no reports" is how the card showed a confident green nothing beside
+// a critical alert for an address with over a thousand reports against it.
+func TestDShieldUnrecognisedReplyIsNotNoReports(t *testing.T) {
+	for _, body := range []string{
+		`{"error":"rate limited"}`,
+		`{"data":{"count":1430}}`,
+		`{}`,
+		`{"ip":null}`,
+	} {
+		s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/ip/") {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		info, _ := s.Lookup(context.Background(), netip.MustParseAddr("203.0.113.9"))
+		for _, sig := range info.Signals {
+			if sig.Source != "dshield" {
+				continue
+			}
+			if sig.Detail == "no reports" {
+				t.Errorf("body %s was reported as a measured zero", body)
+			}
+			if !strings.Contains(sig.Detail, "no answer") {
+				t.Errorf("body %s produced %q, want it marked as no answer", body, sig.Detail)
+			}
+		}
+		if info.Source == "dshield" {
+			t.Errorf("body %s must not be credited to dshield as an answer", body)
+		}
+	}
+}
+
+// A reply whose report count fails to parse — a thousands separator is enough —
+// used to leave the other key's zero standing as a confident answer.
+func TestBlocklistDEPartialParseIsNotAZero(t *testing.T) {
+	for _, body := range []string{
+		"attacks: 0\nreports: 1,430",
+		"attacks: 0",
+		"1430",
+		"<html>rate limited</html>",
+	} {
+		attacks, reports, ok := parseBlocklistDE(body)
+		if ok {
+			t.Errorf("body %q parsed as attacks=%d reports=%d; it should be no answer",
+				body, attacks, reports)
+		}
+	}
+	if a, r, ok := parseBlocklistDE("attacks: 3\nreports: 7"); !ok || a != 3 || r != 7 {
+		t.Errorf("a complete reply must parse: %d %d %v", a, r, ok)
+	}
+}
+
+// "Not on your blocklists" is a positive claim of a negative. Asserting it
+// against a set that never loaded is the same error in a different place.
+func TestNoBlocklistsLoadedIsNotAClearance(t *testing.T) {
+	s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	s.Listed = func(netip.Addr) bool { return false }
+	s.FeedsLoaded = func() bool { return false }
+
+	info, _ := s.Lookup(context.Background(), netip.MustParseAddr("203.0.113.9"))
+	for _, sig := range info.Signals {
+		if sig.Source == "blocklists" && sig.Detail == "not on your blocklists" {
+			t.Error("claimed the address is not listed while no blocklist was loaded")
+		}
+	}
+}

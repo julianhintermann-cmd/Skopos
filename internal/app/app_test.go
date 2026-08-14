@@ -8,9 +8,17 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/flow"
 )
 
+// captureUp is a sample-state source reporting one healthy capture source, so
+// the meter's rates count as measurements rather than as the absence of one.
+func captureUp() flow.SampleState {
+	return flow.SampleState{
+		KeepRate: 1, Capture: flow.CaptureUp, SourcesUp: 1, SourcesTotal: 1,
+	}
+}
+
 func TestLiveMeterComputesRate(t *testing.T) {
 	now := time.Unix(1000, 0)
-	m := newLiveMeter(func() time.Time { return now }, nil)
+	m := newLiveMeter(func() time.Time { return now }, captureUp)
 
 	// 1000 packets of 100 bytes each.
 	for i := 0; i < 1000; i++ {
@@ -20,11 +28,14 @@ func TestLiveMeterComputesRate(t *testing.T) {
 	st := m.Snapshot()
 
 	// 100000 bytes/s = 800000 bits/s; 1000 packets/s.
-	if st.BitsPerSecond < 790000 || st.BitsPerSecond > 810000 {
-		t.Errorf("bits/s = %.0f, want ~800000", st.BitsPerSecond)
+	if st.BitsPerSecond == nil || st.PacketsPerSecond == nil {
+		t.Fatalf("capture is up: rates must be reported, got %+v", st)
 	}
-	if st.PacketsPerSecond < 990 || st.PacketsPerSecond > 1010 {
-		t.Errorf("packets/s = %.0f, want ~1000", st.PacketsPerSecond)
+	if *st.BitsPerSecond < 790000 || *st.BitsPerSecond > 810000 {
+		t.Errorf("bits/s = %.0f, want ~800000", *st.BitsPerSecond)
+	}
+	if *st.PacketsPerSecond < 990 || *st.PacketsPerSecond > 1010 {
+		t.Errorf("packets/s = %.0f, want ~1000", *st.PacketsPerSecond)
 	}
 }
 

@@ -10,14 +10,22 @@ import (
 )
 
 type captureSink struct {
-	mu    sync.Mutex
-	flows []model.Flow
+	mu       sync.Mutex
+	flows    []model.Flow
+	coverage []model.Coverage
 }
 
 func (c *captureSink) WriteFlows(f []model.Flow) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.flows = append(c.flows, f...)
+	return nil
+}
+
+func (c *captureSink) WriteCoverage(cov []model.Coverage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.coverage = append(c.coverage, cov...)
 	return nil
 }
 
@@ -102,6 +110,75 @@ func TestAggregatorSeparatesDistinctFlows(t *testing.T) {
 
 	if len(sink.flows) != 3 {
 		t.Errorf("got %d flows, want 3 distinct", len(sink.flows))
+	}
+}
+
+// A flush with no flows used to write nothing at all, which is precisely why a
+// quiet minute and a dead capture were indistinguishable afterwards. The
+// coverage heartbeat must land either way.
+func TestFlushWritesCoverageWithoutAnyFlows(t *testing.T) {
+	sink := &captureSink{}
+	a := New(Config{Classifier: defaultClassifier(), Sink: sink})
+	h := NewCaptureHealth()
+	h.Register("eth0")
+	h.Up("eth0")
+	a.SetCaptureHealth(h)
+
+	h.Tick(time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC), Window{Elapsed: time.Second})
+	if err := a.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if len(sink.flows) != 0 {
+		t.Errorf("wrote %d flows, want none", len(sink.flows))
+	}
+	if len(sink.coverage) != 1 {
+		t.Fatalf("wrote %d coverage records, want 1 — a quiet interval must still be recorded", len(sink.coverage))
+	}
+	if sink.coverage[0].SourcesUp != 1 {
+		t.Errorf("sources_up = %d, want 1", sink.coverage[0].SourcesUp)
+	}
+}
+
+// With nothing at all to report the flush stays a no-op, so an idle aggregator
+// does not write a row per tick.
+func TestFlushWithoutFlowsOrCoverageIsANoOp(t *testing.T) {
+	sink := &captureSink{}
+	a := New(Config{Classifier: defaultClassifier(), Sink: sink})
+	if err := a.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if len(sink.flows) != 0 || len(sink.coverage) != 0 {
+		t.Errorf("idle flush wrote flows=%d coverage=%d, want nothing", len(sink.flows), len(sink.coverage))
+	}
+}
+
+// The measured floor and the coverage that qualifies it must arrive together;
+// a flow batch without its coverage is a byte count nobody can interpret.
+func TestFlushWritesFlowsWithTheirCoverage(t *testing.T) {
+	sink := &captureSink{}
+	base := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
+	a := New(Config{Classifier: defaultClassifier(), Sink: sink})
+	h := NewCaptureHealth()
+	h.Register("eth0")
+	h.Up("eth0")
+	a.SetCaptureHealth(h)
+
+	a.Add(pkt(base, "192.168.1.10", "9.9.9.9", 40000, 443, 100))
+	h.Tick(base, Window{Observed: 1000, Kept: 100, Elapsed: time.Second})
+	if err := a.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if len(sink.flows) != 1 {
+		t.Fatalf("got %d flows, want 1", len(sink.flows))
+	}
+	if len(sink.coverage) != 1 {
+		t.Fatalf("got %d coverage records, want 1", len(sink.coverage))
+	}
+	c := sink.coverage[0]
+	if c.ObservedPackets != 1000 || c.KeptPackets != 100 {
+		t.Errorf("observed=%d kept=%d, want 1000/100 (a 1:10 keep rate)", c.ObservedPackets, c.KeptPackets)
 	}
 }
 

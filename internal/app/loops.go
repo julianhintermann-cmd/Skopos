@@ -21,13 +21,21 @@ import (
 // spawnCapture starts the capture source(s), applying the sampler before
 // handing each kept packet to the aggregator.
 func (a *App) spawnCapture(ctx context.Context, spawn func(string, func()), agg *flow.Aggregator, sampler *flow.Sampler, disp *notify.Dispatcher) {
+	// The aggregator writes the coverage heartbeat alongside the flows, so it
+	// needs the registry the sources report into.
+	health := sampler.Health()
+	agg.SetCaptureHealth(health)
+
 	handle := func(p flow.Packet) {
 		if sampler.Keep() {
 			agg.Add(p)
 		}
 	}
 
-	// Sampler measurement loop.
+	// Sampler measurement loop, which doubles as the coverage heartbeat. It
+	// ticks on the clock rather than on traffic, and that independence is the
+	// point: a minute with no packets still records that the capture was up
+	// for it, so a quiet network stops looking like a dead one.
 	spawn("sampler", func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -37,28 +45,36 @@ func (a *App) spawnCapture(ctx context.Context, spawn func(string, func()), agg 
 			case <-ctx.Done():
 				return
 			case now := <-t.C:
-				sampler.Measure(now.Sub(last))
+				health.Tick(now, sampler.Measure(now.Sub(last)))
 				last = now
 			}
 		}
 	})
 
+	// Sources are registered before any of them starts, so sources_total is
+	// right from the first heartbeat and one that never opens its interface
+	// reads as configured-and-down rather than as absent.
+	run := func(src capture.Source) {
+		health.Up(src.Name())
+		defer health.Down(src.Name())
+		if err := src.Run(ctx, handle); err != nil && ctx.Err() == nil {
+			a.log.Error("capture source stopped", "source", src.Name(), "err", err)
+			disp.System(ctx, model.SeverityWarning, "Skopos capture stopped",
+				"A capture source stopped: "+err.Error())
+		}
+	}
+
 	if a.demo {
 		src := capture.NewDemoSource(capture.DemoOptions{})
-		spawn("demo-source", func() { _ = src.Run(ctx, handle) })
+		health.Register(src.Name())
+		spawn("demo-source", func() { run(src) })
 		return
 	}
 
 	for _, iface := range resolveInterfaces(a.cfg.Interfaces) {
 		src := capture.NewInterfaceSource(iface)
-		name := "capture:" + iface
-		spawn(name, func() {
-			if err := src.Run(ctx, handle); err != nil && ctx.Err() == nil {
-				a.log.Error("capture source stopped", "source", src.Name(), "err", err)
-				disp.System(ctx, model.SeverityWarning, "Skopos capture stopped",
-					"A capture source stopped: "+err.Error())
-			}
-		})
+		health.Register(src.Name())
+		spawn("capture:"+iface, func() { run(src) })
 	}
 }
 

@@ -27,11 +27,28 @@ type LiveProvider interface {
 }
 
 // LiveStats is a point-in-time traffic snapshot.
+//
+// Every measured field is a pointer and omitted when absent. A rate of zero
+// and "there is no measurement" used to travel as the same four numbers, so a
+// dead capture rendered as a quiet network; the reader must be able to tell
+// the two apart from the payload alone.
 type LiveStats struct {
-	BitsPerSecond    float64 `json:"bits_per_second"`
-	PacketsPerSecond float64 `json:"packets_per_second"`
-	Sampling         bool    `json:"sampling"`
-	ObservedPPS      int     `json:"observed_pps"`
+	BitsPerSecond    *float64 `json:"bits_per_second,omitempty"`
+	PacketsPerSecond *float64 `json:"packets_per_second,omitempty"`
+	Sampling         bool     `json:"sampling,omitempty"`
+	ObservedPPS      *int     `json:"observed_pps,omitempty"`
+	// KeepRate qualifies the rates above: under sampling they count only the
+	// packets that survived, so they are a floor and the estimate is
+	// floor/keep_rate. It was computed and discarded until now.
+	KeepRate *float64 `json:"keep_rate,omitempty"`
+	// Capture is the measured state of the capture sources — up, partial,
+	// down or starting — decided server-side from the source registry so every
+	// surface agrees, and never inferred client-side from silence.
+	Capture      string     `json:"capture,omitempty"`
+	SourcesUp    *int       `json:"sources_up,omitempty"`
+	SourcesTotal *int       `json:"sources_total,omitempty"`
+	LastPacketAt *time.Time `json:"last_packet_at,omitempty"` // absent = none since start
+	MeasuredAt   *time.Time `json:"measured_at,omitempty"`
 }
 
 // Deps are the server's dependencies.

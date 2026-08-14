@@ -45,6 +45,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, h)
 }
 
+// unavailable collects the keys a response could not answer. A field carrying
+// a measurement must not be present unless it was measured, so a failed query
+// omits its key and names it here instead of filling in a zero — "Unacked
+// alerts 0", in green, was what an unreachable database used to look like.
+type unavailable []string
+
+func (u *unavailable) add(key string) { *u = append(*u, key) }
+
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()
@@ -54,22 +62,42 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	// One constant, used for the query and reported to the client, so the two
 	// cannot drift apart — the chart divides by it to get a rate.
 	res := store.Res1m
-	series, _ := s.deps.Store.Throughput(ctx, from, now, res)
-	talkers, _ := s.deps.Store.TopTalkers(ctx, from, now, res, 10)
-	blocks, _ := s.deps.Store.ActiveBlocks(ctx)
-	unacked, _ := s.deps.Store.CountUnackedAlerts(ctx)
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"live": s.liveSnapshot(),
-		// The chart turns bucket totals into a rate, so it needs to know how
-		// long a bucket is rather than assuming.
-		"resolution":     res,
-		"throughput_1h":  series,
-		"top_talkers":    talkers,
-		"active_blocks":  len(blocks),
-		"unacked_alerts": unacked,
-		"enforcing":      s.deps.Firewall.Enforcing(),
-	})
+	var missing unavailable
+	payload := map[string]any{
+		"live":       s.liveSnapshot(),
+		"resolution": res,
+		"enforcing":  s.deps.Firewall.Enforcing(),
+	}
+	if series, err := s.deps.Store.Throughput(ctx, from, now, res); err == nil {
+		// bucket_seconds ships alongside the resolution: the chart turns bucket
+		// totals into a rate and should not have to re-derive how long a bucket
+		// is, nor decline to draw a resolution it does not recognise.
+		payload["bucket_seconds"] = series.BucketSeconds
+		payload["throughput_1h"] = series.Points
+		payload["coverage"] = series.Coverage
+	} else {
+		missing.add("throughput_1h")
+	}
+	if talkers, err := s.deps.Store.TopTalkers(ctx, from, now, res, 10); err == nil {
+		payload["top_talkers"] = talkers
+	} else {
+		missing.add("top_talkers")
+	}
+	if blocks, err := s.deps.Store.ActiveBlocks(ctx); err == nil {
+		payload["active_blocks"] = len(blocks)
+	} else {
+		missing.add("active_blocks")
+	}
+	if unacked, err := s.deps.Store.CountUnackedAlerts(ctx); err == nil {
+		payload["unacked_alerts"] = unacked
+	} else {
+		missing.add("unacked_alerts")
+	}
+	if len(missing) > 0 {
+		payload["unavailable"] = []string(missing)
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +128,22 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	talkers, _ := s.deps.Store.TopTalkers(ctx, from, to, res, 25)
-	writeJSON(w, http.StatusOK, map[string]any{
+	var missing unavailable
+	payload := map[string]any{
 		"from": from, "to": to, "resolution": res,
-		"series": series, "top_talkers": talkers,
-	})
+		"bucket_seconds": series.BucketSeconds,
+		"series":         series.Points,
+		"coverage":       series.Coverage,
+	}
+	if talkers, err := s.deps.Store.TopTalkers(ctx, from, to, res, 25); err == nil {
+		payload["top_talkers"] = talkers
+	} else {
+		missing.add("top_talkers")
+	}
+	if len(missing) > 0 {
+		payload["unavailable"] = []string(missing)
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // handleLiveFlows returns the most recently completed flows so the live view

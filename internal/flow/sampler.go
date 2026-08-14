@@ -14,6 +14,7 @@ import (
 type Sampler struct {
 	thresholdPPS int
 	onChange     func(SampleState)
+	health       *CaptureHealth
 
 	mu        sync.Mutex
 	windowPPS int     // observed rate in the last measured window
@@ -21,14 +22,35 @@ type Sampler struct {
 	sampling  bool
 
 	counter atomic.Uint64 // packets seen since last measurement
+	kept    atomic.Uint64 // ...of which survived the drop decision
 	seq     atomic.Uint64 // monotonic counter used for deterministic sampling
 }
 
-// SampleState is reported on every sampling transition.
+// SampleState is reported on every sampling transition, and is also how the
+// live view learns what the capture is doing. Sampling and capture health
+// travel together because neither means anything alone: a keep rate describes
+// nothing if no source is running, and a rate of zero bits per second means
+// one thing under a live capture and something else entirely under a dead one.
 type SampleState struct {
 	Sampling    bool
 	ObservedPPS int
 	KeepRate    float64
+	// Capture, SourcesUp and SourcesTotal come from the source registry, not
+	// from the packet counters — silence is never read as a fault.
+	Capture      CaptureStatus
+	SourcesUp    int
+	SourcesTotal int
+}
+
+// Window is one measurement interval's packet counts. Both are exact: Keep
+// counts every packet before it decides whether to drop it, so the
+// pre-sampling total is known even during a flood. That is what lets a stored
+// byte count carry its own keep rate instead of being silently a tenth of the
+// truth.
+type Window struct {
+	Observed uint64
+	Kept     uint64
+	Elapsed  time.Duration
 }
 
 // NewSampler creates a Sampler. thresholdPPS <= 0 disables sampling entirely
@@ -37,14 +59,31 @@ func NewSampler(thresholdPPS int, onChange func(SampleState)) *Sampler {
 	return &Sampler{
 		thresholdPPS: thresholdPPS,
 		onChange:     onChange,
+		health:       NewCaptureHealth(),
 		rate:         1.0,
 	}
 }
+
+// Health is the capture-source registry and coverage accumulator. The sampler
+// carries it because it is the one object that sits on every packet and is
+// handed to both the capture loop and the live view.
+func (s *Sampler) Health() *CaptureHealth { return s.health }
 
 // Keep reports whether the current packet should be processed. It is cheap and
 // safe to call from the capture hot path.
 func (s *Sampler) Keep() bool {
 	s.counter.Add(1)
+	if !s.decide() {
+		return false
+	}
+	// Counting what survives, not only what arrived, is what makes the keep
+	// rate a measurement rather than the nominal figure — the nominal one is
+	// recomputed every second and can change sixty times inside one bucket.
+	s.kept.Add(1)
+	return true
+}
+
+func (s *Sampler) decide() bool {
 	if s.thresholdPPS <= 0 {
 		return true
 	}
@@ -65,11 +104,19 @@ func (s *Sampler) Keep() bool {
 }
 
 // Measure recomputes the keep-rate from the packets seen since the last call
-// and the elapsed time. The runtime calls it once per second.
-func (s *Sampler) Measure(elapsed time.Duration) {
+// and the elapsed time, and returns the window it just closed. The runtime
+// calls it once per second and hands the window to the coverage heartbeat.
+func (s *Sampler) Measure(elapsed time.Duration) Window {
+	// Kept is swapped before observed so a packet caught between the two can
+	// only be missing from Kept, never counted in Kept without its Observed.
+	// The pair is read as a keep rate and must never exceed 1.
+	kept := s.kept.Swap(0)
 	seen := s.counter.Swap(0)
+	w := Window{Observed: seen, Kept: kept, Elapsed: elapsed}
 	if elapsed <= 0 {
-		return
+		// The counts are still returned: they were measured, and dropping them
+		// because the clock did not advance would lose packets silently.
+		return w
 	}
 	pps := int(float64(seen) / elapsed.Seconds())
 
@@ -90,11 +137,16 @@ func (s *Sampler) Measure(elapsed time.Duration) {
 	if changed && s.onChange != nil {
 		s.onChange(state)
 	}
+	return w
 }
 
-// State returns the current sampler state.
+// State returns the current sampler state, with capture health folded in.
 func (s *Sampler) State() SampleState {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return SampleState{Sampling: s.sampling, ObservedPPS: s.windowPPS, KeepRate: s.rate}
+	st := SampleState{Sampling: s.sampling, ObservedPPS: s.windowPPS, KeepRate: s.rate}
+	s.mu.Unlock()
+
+	h := s.health.State()
+	st.Capture, st.SourcesUp, st.SourcesTotal = h.Status, h.SourcesUp, h.SourcesTotal
+	return st
 }

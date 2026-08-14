@@ -58,6 +58,12 @@ func (l *liveFlows) WriteFlows(flows []model.Flow) error {
 	return l.next.WriteFlows(flows)
 }
 
+// WriteCoverage implements flow.FlowSink. The live view shows flows, not
+// coverage, so the heartbeat passes straight through.
+func (l *liveFlows) WriteCoverage(cov []model.Coverage) error {
+	return l.next.WriteCoverage(cov)
+}
+
 // RecentFlows returns the retained flows newest-first for the initial snapshot.
 func (l *liveFlows) RecentFlows() []api.LiveFlow {
 	l.mu.Lock()

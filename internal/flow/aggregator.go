@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"time"
@@ -9,9 +10,15 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
-// FlowSink receives batches of completed flows. The store satisfies it.
+// FlowSink receives everything the capture pipeline produces: batches of
+// completed flows, and the coverage heartbeat that says what the capture was
+// doing while those flows were — or were not — arriving. The store satisfies
+// it. The two are one interface because they must land together: coverage that
+// stops being written the moment traffic stops is coverage that cannot tell a
+// quiet network from a dead capture, which is the whole reason it exists.
 type FlowSink interface {
 	WriteFlows([]model.Flow) error
+	WriteCoverage([]model.Coverage) error
 }
 
 // Observer sees every packet in real time, before aggregation. Detectors
@@ -46,8 +53,9 @@ type Aggregator struct {
 	nameLookup   func(netip.Addr) string
 	onFlushError func(error)
 
-	mu    sync.Mutex
-	flows map[key]*entry
+	mu     sync.Mutex
+	flows  map[key]*entry
+	health *CaptureHealth
 }
 
 // Config configures an Aggregator.
@@ -85,9 +93,22 @@ func New(cfg Config) *Aggregator {
 	}
 }
 
+// SetCaptureHealth attaches the coverage accumulator the capture loop feeds.
+// Without one the aggregator writes flows only, exactly as before, and every
+// bucket reads as "not recorded" rather than as verified-complete.
+func (a *Aggregator) SetCaptureHealth(h *CaptureHealth) {
+	a.mu.Lock()
+	a.health = h
+	a.mu.Unlock()
+}
+
 // Add records one packet: it is forwarded to the observer, then folded into
 // the matching flow (creating it, or attaching to the reverse direction of an
 // existing one).
+//
+// Only packets the sampler kept reach here, so the byte and packet counters on
+// every flow are a floor under sampling, not a total. The bucket's true packet
+// count lives in the coverage record instead, where it is exact.
 func (a *Aggregator) Add(p Packet) {
 	if a.observer != nil {
 		a.observer.Observe(p)
@@ -142,23 +163,42 @@ func (e *entry) touch(p Packet) {
 	}
 }
 
-// Flush drains the accumulated flows into the sink and clears the table. Each
-// call produces flow records covering at most one flush interval, which keeps
-// the aggregator's memory bounded regardless of traffic.
+// Flush drains the accumulated flows and the coverage heartbeat into the sink
+// and clears both. Each call produces flow records covering at most one flush
+// interval, which keeps the aggregator's memory bounded regardless of traffic.
 func (a *Aggregator) Flush() error {
 	a.mu.Lock()
-	if len(a.flows) == 0 {
-		a.mu.Unlock()
-		return nil
+	var batch []model.Flow
+	if len(a.flows) > 0 {
+		batch = make([]model.Flow, 0, len(a.flows))
+		for _, e := range a.flows {
+			batch = append(batch, e.toModel())
+		}
+		a.flows = make(map[key]*entry)
 	}
-	batch := make([]model.Flow, 0, len(a.flows))
-	for _, e := range a.flows {
-		batch = append(batch, e.toModel())
-	}
-	a.flows = make(map[key]*entry)
+	health := a.health
 	a.mu.Unlock()
 
-	return a.sink.WriteFlows(batch)
+	var cov []model.Coverage
+	if health != nil {
+		cov = health.Drain()
+	}
+	// A flush with no flows used to return here, which is what made a quiet
+	// minute and a dead capture byte-identical in the database: neither wrote
+	// a row, so nothing downstream could tell "no traffic" from "no
+	// measurement". Coverage is written either way.
+	if len(batch) == 0 && len(cov) == 0 {
+		return nil
+	}
+
+	var errs []error
+	if len(batch) > 0 {
+		errs = append(errs, a.sink.WriteFlows(batch))
+	}
+	if len(cov) > 0 {
+		errs = append(errs, a.sink.WriteCoverage(cov))
+	}
+	return errors.Join(errs...)
 }
 
 func (e *entry) toModel() model.Flow {

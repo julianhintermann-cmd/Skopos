@@ -75,6 +75,12 @@ func (d *domainRecorder) WriteFlows(flows []model.Flow) error {
 	return d.next.WriteFlows(flows)
 }
 
+// WriteCoverage implements flow.FlowSink. Domain contacts are derived from
+// flows, so the coverage heartbeat passes straight through.
+func (d *domainRecorder) WriteCoverage(cov []model.Coverage) error {
+	return d.next.WriteCoverage(cov)
+}
+
 // Run persists the accumulated contacts on an interval.
 func (d *domainRecorder) Run(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)

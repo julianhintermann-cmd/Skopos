@@ -94,6 +94,35 @@ func (f Flow) Bytes() uint64 { return f.OutBytes + f.InBytes }
 // Packets is the total packets in both directions.
 func (f Flow) Packets() uint64 { return f.OutPackets + f.InPackets }
 
+// Coverage records what the capture was doing during one interval. It is
+// written on a heartbeat, not when packets arrive, and that independence is
+// the whole point: the rollups write nothing for a minute with no traffic and
+// nothing for a minute with no capture, so without this record the two are
+// byte-identical in the database and a chart cannot tell "no traffic" from
+// "no measurement".
+type Coverage struct {
+	// Bucket is the start of the interval, truncated to the finest resolution
+	// (one minute). Coarser rollups accumulate from the same records.
+	Bucket time.Time
+	// SourcesTotal is how many capture sources were configured, SourcesUp how
+	// many stayed alive for the whole interval. A two-NIC capture that loses
+	// one is partial coverage — not whole, and not down.
+	SourcesTotal int
+	SourcesUp    int
+	// ObservedPackets is the true, pre-sampling count: the sampler counts
+	// every packet before it decides whether to drop it, so this is exact even
+	// while sampling. KeptPackets is what survived. Their ratio is the
+	// realized keep rate, which is what the stored byte counts are a fraction
+	// of — and it beats the nominal rate, which can change sixty times inside
+	// a one-minute bucket.
+	ObservedPackets uint64
+	KeptPackets     uint64
+	// SecondsCovered is how many heartbeats landed in the interval, so the
+	// minute Skopos started or stopped is honest about being partial instead
+	// of being dropped or passed off as whole.
+	SecondsCovered int
+}
+
 // Alert is a raised detection event.
 type Alert struct {
 	ID       int64

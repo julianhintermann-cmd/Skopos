@@ -92,27 +92,216 @@ type TimePoint struct {
 	Flows   int64     `json:"flows"`
 }
 
+// PointState says what a bucket's numbers mean. It is the discriminator that
+// makes a chart honest: only down and nodata carry nulls, and only they may be
+// drawn as a gap. A genuine zero is a measurement and plots at zero.
+type PointState string
+
+const (
+	// StateMeasured is capture up, nothing sampled: the numbers are exact.
+	StateMeasured PointState = "measured"
+	// StateSampled is a coverage deficit — a keep rate below 1, an interface
+	// missing, or a bucket only partly covered. The byte counts are a floor,
+	// and KeepRate says what fraction of the packets they came from.
+	StateSampled PointState = "sampled"
+	// StateDown is capture not running. No measurement exists for the bucket.
+	StateDown PointState = "down"
+	// StateNoData is outside recorded history: before Skopos recorded
+	// coverage, or pruned by retention.
+	StateNoData PointState = "nodata"
+)
+
+// Point is one bucket of a dense series.
+type Point struct {
+	Time  time.Time  `json:"time"`
+	State PointState `json:"state"`
+	// Bytes, Packets and Flows are nil exactly when State is down or nodata.
+	// Under sampling they are what was measured — a floor — and are never
+	// scaled by 1/keep_rate here: scaling would replace the one thing that was
+	// observed with an inference indistinguishable from a measurement. The
+	// estimate is floor/keep_rate and belongs to the render layer, labelled.
+	Bytes   *int64 `json:"bytes"`
+	Packets *int64 `json:"packets"`
+	Flows   *int64 `json:"flows"`
+	// KeepRate is the realized fraction of packets that survived sampling,
+	// present only when State is sampled.
+	KeepRate *float64 `json:"keep_rate,omitempty"`
+	// ObservedPackets is the bucket's true packet total, exact even under
+	// sampling: the sampler counts every packet before deciding whether to
+	// drop it. Present only when State is sampled, where it is the honest
+	// answer that Packets is not.
+	//
+	// The asymmetry is deliberate and surprising, so: this bucket total is
+	// exact, while per-tuple packet counts — top talkers, ports, destinations
+	// — remain sampled floors, because the exact count exists only in
+	// aggregate and was never attributed to a source or destination.
+	ObservedPackets *int64 `json:"observed_packets,omitempty"`
+	// SourcesUp and SourcesTotal are present only when some but not all
+	// capture sources covered the bucket — a coverage deficit KeepRate cannot
+	// express, and the one the "1 of 2 interfaces" label needs.
+	SourcesUp    *int `json:"sources_up,omitempty"`
+	SourcesTotal *int `json:"sources_total,omitempty"`
+}
+
+// CoverageCounts summarises a series so a caller can say "27 of 877 minutes
+// not captured" without walking it. A dense array of nodata has a length, so
+// len(series) > 0 is no longer a usable proxy for "there is data" — measured
+// plus sampled is.
+type CoverageCounts struct {
+	Measured int `json:"measured"`
+	Sampled  int `json:"sampled"`
+	Down     int `json:"down"`
+	NoData   int `json:"nodata"`
+}
+
+// Series is a dense throughput series: exactly one point per bucket in the
+// requested range, in order, with no holes.
+type Series struct {
+	Resolution    Resolution     `json:"resolution"`
+	BucketSeconds int            `json:"bucket_seconds"`
+	Points        []Point        `json:"series"`
+	Coverage      CoverageCounts `json:"coverage"`
+}
+
+// maxSeriesPoints bounds one series. A dense series is proportional to the
+// span rather than to the data, so this is the backstop ClampResolution cannot
+// provide: it leaves room for well over a century of daily buckets — any
+// honest "show me everything" — and refuses the rest rather than truncating,
+// because a truncated series that does not say so is the defect this file
+// exists to fix.
+const maxSeriesPoints = 50000
+
 // Throughput returns total bytes/packets/flows per bucket between from and to
-// (inclusive of from, exclusive of to) at the given resolution. Empty buckets
-// are omitted; the caller fills gaps for charting.
-func (s *Store) Throughput(ctx context.Context, from, to time.Time, res Resolution) ([]TimePoint, error) {
-	table, _, err := res.table()
+// (inclusive of from, exclusive of to) at the given resolution.
+//
+// The series is dense: one point per bucket, always. The previous contract
+// omitted empty buckets and asked the caller to fill the gaps, and no caller
+// ever did — so uPlot joined the last reading before an outage to the first
+// one after it and drew a straight invented line across the exact period the
+// operator most needs to see. Delegating an invariant to every present and
+// future caller, with no way to fail loudly, is what failed; the honest answer
+// is now the only representable one.
+func (s *Store) Throughput(ctx context.Context, from, to time.Time, res Resolution) (Series, error) {
+	table, size, err := res.table()
 	if err != nil {
-		return nil, err
+		return Series{}, err
 	}
+	// Align to bucket boundaries so the generated sequence lands on the same
+	// grid the rollups are keyed by.
+	start := bucket(from, size)
+	end := bucket(to.Add(size-time.Nanosecond), size)
+	if !end.After(start) {
+		return Series{Resolution: res, BucketSeconds: int(size / time.Second), Points: []Point{}}, nil
+	}
+	n := int(end.Sub(start) / size)
+	if n > maxSeriesPoints {
+		return Series{}, fmt.Errorf("store: %s buckets over that range would be %d points, more than the %d limit",
+			res, n, maxSeriesPoints)
+	}
+
+	totals, err := s.bucketTotals(ctx, table, start, end)
+	if err != nil {
+		return Series{}, err
+	}
+	cov, horizon, recorded, err := s.coverage(ctx, start, end, res)
+	if err != nil {
+		return Series{}, err
+	}
+
+	out := Series{Resolution: res, BucketSeconds: int(size / time.Second), Points: make([]Point, 0, n)}
+	for t := start; t.Before(end); t = t.Add(size) {
+		// The last bucket of a live window has not finished yet. Judging it
+		// incomplete would put a coverage warning on the newest point of every
+		// chart, permanently — and a mark that is always on is a mark the
+		// operator learns to ignore.
+		open := t.Add(size).After(to)
+		p := classify(t, toMs(t), totals, cov, horizon, recorded, out.BucketSeconds, open)
+		switch p.State {
+		case StateMeasured:
+			out.Coverage.Measured++
+		case StateSampled:
+			out.Coverage.Sampled++
+		case StateDown:
+			out.Coverage.Down++
+		case StateNoData:
+			out.Coverage.NoData++
+		}
+		out.Points = append(out.Points, p)
+	}
+	return out, nil
+}
+
+// classify decides what one bucket's numbers mean from the rollup row and the
+// coverage record, if either exists.
+func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]coverageRow,
+	horizon int64, recorded bool, bucketSeconds int, open bool) Point {
+
+	p := Point{Time: t, State: StateNoData}
+	total, measured := totals[ms]
+
+	if !recorded {
+		// Coverage has never been written — a database from before this
+		// release, or a build whose heartbeat has not run. What was measured
+		// is still a measurement; what was not is an absence, not a zero.
+		if !measured {
+			return p
+		}
+		p.State = StateMeasured
+		p.Bytes, p.Packets, p.Flows = &total.Bytes, &total.Packets, &total.Flows
+		return p
+	}
+	if ms < horizon {
+		// Older than the first coverage record. Nothing is known about whether
+		// the capture was running, and assuming it was would promote history
+		// to verified-complete on the strength of nothing.
+		return p
+	}
+	c, ok := cov[ms]
+	if !ok {
+		return p // a heartbeat gap inside recorded history is still an absence
+	}
+	if c.sourcesUp == 0 {
+		p.State = StateDown
+		return p
+	}
+
+	// The capture was up. Absent rollup rows are therefore a measured zero,
+	// not an absence — the one state the schema could not express before, and
+	// the reason a quiet 3am and a dead capture used to look identical.
+	vals := total
+	p.Bytes, p.Packets, p.Flows = &vals.Bytes, &vals.Packets, &vals.Flows
+
+	rate := c.keepRate()
+	partial := c.sourcesUp < c.sourcesTotal || (!open && c.secondsCovered < bucketSeconds)
+	if rate >= 1 && !partial {
+		p.State = StateMeasured
+		return p
+	}
+	p.State = StateSampled
+	p.KeepRate = &rate
+	observed := c.observedPackets
+	p.ObservedPackets = &observed
+	if partial {
+		up, srcs := c.sourcesUp, c.sourcesTotal
+		p.SourcesUp, p.SourcesTotal = &up, &srcs
+	}
+	return p
+}
+
+// bucketTotals sums a rollup table into one row per bucket.
+func (s *Store) bucketTotals(ctx context.Context, table string, from, to time.Time) (map[int64]TimePoint, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT bucket_ms, SUM(bytes), SUM(packets), SUM(flows)
 		FROM %s
 		WHERE bucket_ms >= ? AND bucket_ms < ?
-		GROUP BY bucket_ms
-		ORDER BY bucket_ms`, table),
+		GROUP BY bucket_ms`, table),
 		toMs(from), toMs(to))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []TimePoint
+	out := make(map[int64]TimePoint)
 	for rows.Next() {
 		var ms int64
 		var p TimePoint
@@ -120,7 +309,7 @@ func (s *Store) Throughput(ctx context.Context, from, to time.Time, res Resoluti
 			return nil, err
 		}
 		p.Time = fromMs(ms)
-		out = append(out, p)
+		out[ms] = p
 	}
 	return out, rows.Err()
 }

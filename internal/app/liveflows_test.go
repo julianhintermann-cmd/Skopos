@@ -9,10 +9,18 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
 
-type fakeSink struct{ batches [][]model.Flow }
+type fakeSink struct {
+	batches  [][]model.Flow
+	coverage []model.Coverage
+}
 
 func (f *fakeSink) WriteFlows(flows []model.Flow) error {
 	f.batches = append(f.batches, flows)
+	return nil
+}
+
+func (f *fakeSink) WriteCoverage(cov []model.Coverage) error {
+	f.coverage = append(f.coverage, cov...)
 	return nil
 }
 

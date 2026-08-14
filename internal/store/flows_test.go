@@ -67,15 +67,29 @@ func TestThroughputSeries(t *testing.T) {
 		mkFlow(base.Add(90*time.Second), "192.168.1.10", "9.9.9.9", 443, 2000),
 	})
 
-	pts, err := s.Throughput(ctx, base.Add(-time.Minute), base.Add(5*time.Minute), Res1m)
+	series, err := s.Throughput(ctx, base.Add(-time.Minute), base.Add(5*time.Minute), Res1m)
 	if err != nil {
 		t.Fatalf("Throughput: %v", err)
 	}
-	if len(pts) != 2 {
-		t.Fatalf("got %d points, want 2", len(pts))
+	// The series is dense: one point per minute across the whole range, not
+	// one per minute that happened to carry traffic.
+	if len(series.Points) != 6 {
+		t.Fatalf("got %d points, want 6 (one per bucket in range)", len(series.Points))
 	}
-	if !pts[0].Time.Before(pts[1].Time) {
-		t.Error("points not ordered by time ascending")
+	if series.BucketSeconds != 60 {
+		t.Errorf("bucket_seconds = %d, want 60", series.BucketSeconds)
+	}
+	var withBytes int
+	for i, p := range series.Points {
+		if i > 0 && !series.Points[i-1].Time.Before(p.Time) {
+			t.Fatal("points not ordered by time ascending")
+		}
+		if p.Bytes != nil && *p.Bytes > 0 {
+			withBytes++
+		}
+	}
+	if withBytes != 2 {
+		t.Errorf("%d buckets carry bytes, want 2", withBytes)
 	}
 }
 

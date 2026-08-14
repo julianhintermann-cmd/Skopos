@@ -30,10 +30,32 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metric("skopos_build_info", "Build information; always 1.", "gauge", 1, "version", version.Version)
 
+	// Throughput gauges are absent from the scrape when the capture is not
+	// running, so Prometheus renders a gap rather than a floor of zero that
+	// looks exactly like a quiet network.
 	live := s.liveSnapshot()
-	metric("skopos_throughput_bits_per_second", "Current observed throughput.", "gauge", live.BitsPerSecond)
-	metric("skopos_throughput_packets_per_second", "Current observed packet rate.", "gauge", live.PacketsPerSecond)
+	if live.BitsPerSecond != nil {
+		metric("skopos_throughput_bits_per_second", "Current observed throughput.", "gauge", *live.BitsPerSecond)
+	}
+	if live.PacketsPerSecond != nil {
+		metric("skopos_throughput_packets_per_second", "Current observed packet rate.", "gauge", *live.PacketsPerSecond)
+	}
 	metric("skopos_capture_sampling", "1 when the capture is sampling to keep up.", "gauge", boolValue(live.Sampling))
+	if live.KeepRate != nil {
+		metric("skopos_capture_keep_rate", "Fraction of observed packets that survived sampling.", "gauge", *live.KeepRate)
+	}
+	if live.SourcesUp != nil && live.SourcesTotal != nil {
+		metric("skopos_capture_sources_up", "Capture sources currently running.", "gauge", float64(*live.SourcesUp))
+		metric("skopos_capture_sources_total", "Capture sources configured.", "gauge", float64(*live.SourcesTotal))
+	}
+	if live.Capture != "" {
+		metric("skopos_capture_up", "1 when every configured capture source is running.", "gauge",
+			boolValue(live.Capture == "up"))
+	}
+	if live.LastPacketAt != nil {
+		metric("skopos_capture_last_packet_timestamp_seconds", "When a packet last arrived.", "gauge",
+			float64(live.LastPacketAt.UnixNano())/1e9)
+	}
 
 	metric("skopos_firewall_enforcing", "1 when blocks are applied to the kernel.", "gauge",
 		boolValue(s.deps.Firewall.Enforcing()))

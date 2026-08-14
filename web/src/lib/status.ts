@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
 import { useFetch } from './useFetch'
 import type { BlocksResponse, Health } from './api'
-import type { OverviewNow } from './contracts'
+import { verdictNow, type OverviewNow } from './contracts'
 import { formatRelative } from './format'
 
 // The three questions the strip answers, and the model behind them.
@@ -170,20 +170,57 @@ function enforcementChip(blocks: Fetched<BlocksResponse>, asOf: string | undefin
 
   const d = blocks.data
   const stale = blocks.stale ? asOf : undefined
-  // "wanted but not ok" is the case a config-sourced pill can never express:
-  // the setting says enforce and the kernel readback says otherwise.
-  const kernelBroken = d.kernel ? d.kernel.wanted && !d.kernel.ok : d.enforcement === 'enforce' && !d.enforcing
-  if (d.enforcement === 'enforce' && kernelBroken) {
+
+  // The strip reads the verdict the server derived, never the fields under it.
+  //
+  // It used to test `kernel.wanted && !kernel.ok`, which was the right question
+  // asked of the wrong shape: the endpoint now sends an EnforcementState, both
+  // of those are undefined, and the test quietly evaluated to false — so the
+  // strip said "Enforcing" over a kernel holding nothing. A green label sourced
+  // from a field that does not exist is the same defect as one sourced from a
+  // configuration file, arriving by a newer route.
+  //
+  // verdictNow re-ages the reading in the browser, because a payload frozen in
+  // a sleeping tab keeps vouching for a kernel nobody has looked at since.
+  if (d.kernel) {
+    const verdict = verdictNow(d.kernel, Date.now())
+    switch (verdict) {
+      case 'enforcing':
+        return { ...base, tone: 'good', label: 'Enforcing', detail: 'The kernel was read back and holds the rules Skopos programmed.', asOf: stale }
+      case 'partial':
+        return { ...base, tone: 'warn', label: 'Partly verified', detail: 'The table and chains are there; the rule sets could not be checked this pass.', asOf: stale }
+      case 'degraded':
+        return {
+          ...base,
+          tone: 'crit',
+          label: 'Firewall degraded',
+          detail: `Enforce is set, but the kernel is not holding the rules${d.kernel.error ? `: ${d.kernel.error}` : ''}. Blocks are recorded and nothing is dropped.`,
+          asOf: stale,
+        }
+      case 'unable':
+        return { ...base, tone: 'crit', label: 'Cannot enforce', detail: 'Enforce is set and this backend cannot apply rules. Nothing is being dropped.', asOf: stale }
+      case 'unverified':
+        // Deliberately not green and not red: nobody has looked recently, which
+        // is neither a fault nor an all-clear.
+        return { ...base, tone: 'unknown', label: 'Not verified', detail: 'Enforce is set, and the kernel has not been read back recently enough to confirm it.', asOf: stale }
+      case 'observing':
+        return { ...base, tone: 'neutral', label: 'Observing', detail: 'Observe mode: blocks are recorded and counted, but no packet is dropped.', asOf: stale }
+    }
+  }
+
+  // No kernel key at all: an older server, or one that could not answer. Fall
+  // back to the configuration and say that is what this is.
+  if (d.enforcement === 'enforce' && !d.enforcing) {
     return {
       ...base,
       tone: 'crit',
       label: 'Firewall degraded',
-      detail: `Enforce is set, but the kernel is not holding the rules${d.kernel?.error ? `: ${d.kernel.error}` : ''}. Blocks are recorded and nothing is dropped.`,
+      detail: 'Enforce is set and the backend is not applying rules. Blocks are recorded and nothing is dropped.',
       asOf: stale,
     }
   }
   if (d.enforcement === 'enforce') {
-    return { ...base, tone: 'good', label: 'Enforcing', detail: 'Blocks are applied in the kernel on this machine.', asOf: stale }
+    return { ...base, tone: 'unknown', label: 'Enforce set, unconfirmed', detail: 'The server did not report a kernel reading, so this is the setting rather than a confirmation.', asOf: stale }
   }
   if (d.enforcement === 'observe') {
     return {

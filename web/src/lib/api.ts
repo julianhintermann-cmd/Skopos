@@ -1,7 +1,7 @@
 // Typed client for the Skopos API. Thin wrappers over fetch with JSON handling
 // and a shared error shape; every view calls through here.
 
-import type { Point, CoverageCounts } from './contracts'
+import type { Point, CoverageCounts, EnforcementState } from './contracts'
 
 export class APIError extends Error {
   status: number
@@ -65,6 +65,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new APIError(401, data.error || 'unauthorized', data.otp_required === true)
   }
   if (!resp.ok) throw new APIError(resp.status, data.error || resp.statusText)
+  // 202 is inside resp.ok and means the opposite of what a success branch
+  // assumes: the server stored the change and the kernel did not take it.
+  // Letting it through as success is how a refused quarantine came back as a
+  // green toast — the caller has to be made to notice, so it is thrown and
+  // carries the server's own account of what failed.
+  if (resp.status === 202) {
+    const applied = (data as { applied?: { error?: string; errors?: { field?: string; message?: string }[] } }).applied
+    const detail =
+      applied?.error ||
+      applied?.errors?.map((e) => (e.field ? `${e.field}: ${e.message}` : e.message)).join('; ') ||
+      'the change was saved but the firewall did not take it'
+    throw new APIError(202, detail)
+  }
   return data as T
 }
 
@@ -190,19 +203,7 @@ export interface BlocksResponse {
   protected?: string[] | null
   // What the kernel was last actually found to hold, as opposed to what the
   // configuration intends. Absent from older servers.
-  kernel?: KernelHealth
-}
-
-// KernelHealth is the result of reading the firewall back out of the kernel.
-// "wanted" is the setting; "ok" is what was found. Keeping them apart is the
-// point: a green pill sourced from a config file says nothing about whether
-// anything is being dropped.
-export interface KernelHealth {
-  wanted: boolean
-  ok: boolean
-  checked_at?: string
-  failing_since?: string
-  error?: string
+  kernel?: EnforcementState
 }
 
 // networkPrefix widens an address to the network an operator would think of

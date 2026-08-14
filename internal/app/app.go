@@ -433,8 +433,8 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("loading runtime settings: %w", err)
 	}
 	a.applySettings(ctx, setman.Current(), fw, pol, observers, st)
-	setman.OnChange(func(r settings.Runtime) {
-		a.applySettings(context.Background(), r, fw, pol, observers, st)
+	setman.OnApply(func(r settings.Runtime) settings.ApplyResult {
+		return a.applySettings(context.Background(), r, fw, pol, observers, st)
 	})
 	setman.OnChange(settingsAuditor(st, a.clock))
 
@@ -511,10 +511,10 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Applying device policies on demand, so an edit in the UI reaches the
 	// kernel immediately instead of at the next sync tick.
-	applyDevicePolicies := func() {
+	applyDevicePolicies := func() error {
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		a.applyDevicePoliciesOnce(c, st, fw)
+		return a.applyDevicePoliciesOnce(c, st, fw)
 	}
 
 	// --- HTTP API ----------------------------------------------------------

@@ -560,8 +560,21 @@ type rebuilt struct {
 }
 
 func (r rebuilt) String() string {
-	return fmt.Sprintf("%d block rules, %d never-block prefixes, %d country prefixes, %d device policies",
-		r.blocks, r.protected, r.country, r.devices)
+	return fmt.Sprintf("%s, %s, %s, %s",
+		count(r.blocks, "block rule", "block rules"),
+		count(r.protected, "never-block prefix", "never-block prefixes"),
+		count(r.country, "country prefix", "country prefixes"),
+		count(r.devices, "device policy", "device policies"))
+}
+
+// count keeps the entry readable at one of anything. A person reads these, and
+// "1 block rules" is where a record starts sounding like machine output that
+// nobody checks.
+func count(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // reapplyAll rebuilds the whole ruleset from the desired state.
@@ -622,9 +635,6 @@ func (s *Service) reapplyAll(ctx context.Context) (rebuilt, error) {
 // audit error is swallowed because the action succeeded and the entry is a
 // note beside it; here the entry is the only trace there is.
 func (s *Service) auditSelfHeal(ctx context.Context, action, detail string) {
-	if true {
-		return
-	}
 	if err := s.store.Audit(ctx, model.AuditEntry{
 		Actor: ActorSystem, Action: action, Target: TargetRuleset, Detail: detail,
 	}); err != nil {

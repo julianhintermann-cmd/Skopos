@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"time"
 
@@ -146,7 +147,10 @@ func settingsAuditor(st *store.Store, clock func() time.Time) func(settings.Runt
 // device inventory. A device's address can change with DHCP, so the rules are
 // re-derived on an interval rather than only when the operator edits them.
 func (a *App) syncDevicePolicies(ctx context.Context, st *store.Store, fw *firewall.Service) {
-	a.applyDevicePoliciesOnce(ctx, st, fw)
+	// The periodic path deliberately drops the error: it already warned, and
+	// the next tick retries in thirty seconds. The on-demand path below is the
+	// one whose caller is a person waiting for an answer.
+	_ = a.applyDevicePoliciesOnce(ctx, st, fw)
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
@@ -154,18 +158,18 @@ func (a *App) syncDevicePolicies(ctx context.Context, st *store.Store, fw *firew
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			a.applyDevicePoliciesOnce(ctx, st, fw)
+			_ = a.applyDevicePoliciesOnce(ctx, st, fw)
 		}
 	}
 }
 
 // applyDevicePoliciesOnce derives the kernel rules from the inventory and
 // pushes them.
-func (a *App) applyDevicePoliciesOnce(ctx context.Context, st *store.Store, fw *firewall.Service) {
+func (a *App) applyDevicePoliciesOnce(ctx context.Context, st *store.Store, fw *firewall.Service) error {
 	devices, err := st.RestrictedDevices(ctx)
 	if err != nil {
 		a.warnf("device policies: loading: %v", err)
-		return
+		return fmt.Errorf("loading device policies: %w", err)
 	}
 	rules := make([]firewall.DeviceRule, 0, len(devices))
 	for _, d := range devices {
@@ -186,5 +190,7 @@ func (a *App) applyDevicePoliciesOnce(ctx context.Context, st *store.Store, fw *
 	}
 	if err := fw.SetDevicePolicies(ctx, rules); err != nil {
 		a.warnf("device policies: applying: %v", err)
+		return fmt.Errorf("applying device policies: %w", err)
 	}
+	return nil
 }

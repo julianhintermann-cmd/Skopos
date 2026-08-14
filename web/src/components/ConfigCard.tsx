@@ -112,7 +112,7 @@ export function ConfigCard({
             detail={
               data.inert_keys && data.inert_keys.length > 0
                 ? 'This build parses and validates these and then reads none of them. They are kept so existing files keep loading; setting them changes nothing.'
-                : 'Every key in your file is read by this build.'
+                : undefined
             }
           >
             {data.inert_keys && data.inert_keys.length > 0 ? (
@@ -122,7 +122,7 @@ export function ConfigCard({
                 ))}
               </span>
             ) : (
-              <span className="text-sm text-fg-muted">—none in your file</span>
+              <span className="text-sm text-fg-muted">Every key in your file is read by this build.</span>
             )}
           </Fact>
 
@@ -212,7 +212,7 @@ export function ConfigCard({
         )}
       </Fact>
 
-      <p className="px-4 pb-4 pt-3 text-xs text-fg-muted" style={{ borderTop: '1px solid var(--sk-line)' }}>
+      <p className="border-t border-line px-4 pb-4 pt-3 text-xs text-fg-muted">
         Settings changed from the dashboard live in the Skopos database, not in this file, and they shadow it
         — a key overridden here keeps its dashboard value even after you edit the file and restart. The
         Protection card marks each one <em>changed here</em> and can drop them all at once.

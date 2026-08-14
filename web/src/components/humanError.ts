@@ -35,6 +35,13 @@ export function humanError(err: unknown, action: 'block' | 'unblock' | 'apply' =
   if (lower.includes('file exists') || lower.includes('eexist')) {
     return 'That range overlaps one already blocked. The kernel will not hold two overlapping ranges, so nothing was changed — block the wider range instead, or lift the existing one first.'
   }
+  // 202 travels as an error on purpose: the server stored the change and the
+  // kernel refused it. Both halves have to be said, because "it did not work"
+  // would send someone to re-enter a setting that is already saved, and "saved"
+  // alone would leave them believing it is in force.
+  if (status === 202) {
+    return `Saved, but the firewall did not take it: ${raw}. The setting is stored and is not in effect.`
+  }
   if (status === 409) {
     return `Conflict: ${raw}. Nothing was changed.`
   }

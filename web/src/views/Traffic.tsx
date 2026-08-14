@@ -190,6 +190,12 @@ function WindowVolume({
   const talkers = data.top_talkers
   const talkersNamed = (data.unavailable ?? []).includes('top_talkers')
   const alertsCapped = alerts.data?.alerts != null && alerts.data.alerts.length >= STRIP_ALERT_LIMIT
+  // When either list stops updating the row can be missing a mark that has
+  // since been raised, and a row missing a mark reads as a quiet window.
+  const marksStale = alerts.freshness === 'stale' || blocks.freshness === 'stale'
+  const marksAt = marksStale ? clockOf(oldest(alerts.updatedAt, blocks.updatedAt)) : undefined
+  const geoStale =
+    geo.freshness === 'stale' ? <StaleBadge since={clockOf(geo.updatedAt)} error={geo.error ?? undefined} /> : undefined
 
   return (
     <div className="flex flex-col gap-4">
@@ -232,11 +238,17 @@ function WindowVolume({
             {coverage.text}
           </p>
         )}
-        <p className="px-4 pb-3 text-xs" style={{ color: 'var(--muted)' }}>
-          Marks show alerts raised in this window and blocks still in force; a block that expired inside it is not on
-          the row.
-          {alertsCapped && ` Only the newest ${STRIP_ALERT_LIMIT} alerts were read, so older ones in this window are missing.`}
-        </p>
+        {points.length > 0 && (
+          // What the strip does not carry, said rather than implied by an empty
+          // row: /api/blocks answers for what is in force now, so a block that
+          // expired inside this window leaves no mark.
+          <p className="px-4 pb-3 text-xs" style={{ color: 'var(--muted)' }}>
+            Marks are alerts raised in this window and blocks still in force; one that has since expired is not on the
+            row.
+            {alertsCapped && ` Only the newest ${STRIP_ALERT_LIMIT} alerts were read, so older ones in this window are missing.`}
+            {marksAt && ` Both lists last arrived at ${marksAt} and have not updated since.`}
+          </p>
+        )}
       </Card>
 
       <Card>
@@ -262,6 +274,7 @@ function WindowVolume({
           sub={`${range} · ${mapDir === 'out' ? 'where your traffic goes' : 'who is knocking from outside'}`}
           right={
             <div className="flex items-center gap-1">
+              {geoStale}
               {(['out', 'in'] as const).map((d) => (
                 <button
                   key={d}
@@ -295,7 +308,7 @@ function WindowVolume({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Destination countries" sub={`${range} · tap a country to block it`} />
+          <CardHeader title="Destination countries" sub={`${range} · tap a country to block it`} right={geoStale} />
           <div className="px-4 pb-4">
             <GeoBody summary={geo.data} freshness={geo.freshness} error={geo.error}>
               {(s) =>
@@ -309,7 +322,7 @@ function WindowVolume({
           </div>
         </Card>
         <Card>
-          <CardHeader title="Source countries" sub={`${range} · who is knocking from outside`} />
+          <CardHeader title="Source countries" sub={`${range} · who is knocking from outside`} right={geoStale} />
           <div className="px-4 pb-4">
             <GeoBody summary={geo.data} freshness={geo.freshness} error={geo.error}>
               {(s) =>
@@ -788,6 +801,14 @@ function clockOf(ms: number | null | undefined): string | undefined {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+// oldest is the earlier of two arrival times, so a sentence covering two polls
+// dates itself by the one that has been silent longest.
+function oldest(a: number | null, b: number | null): number | null {
+  if (a === null) return b
+  if (b === null) return a
+  return Math.min(a, b)
+}
+
 function bucketLabel(bucket: number | null): string {
   if (bucket === 60) return 'minutes'
   if (bucket === 3600) return 'hours'
@@ -849,6 +870,12 @@ function stripEvents(series: SeriesResponse, alerts: Alert[] | null, blocks: Blo
 // gapSpans turns runs of uncaptured buckets into the spans the strip hatches.
 // They are read off the same array the chart draws, so the hatch cannot
 // disagree with the break in the line above it.
+//
+// A span ends at the next bucket's own timestamp rather than at start + one
+// bucket. The chart's x-scale runs from the first bucket's timestamp to the
+// last one's, so a run that reaches the end of the series would otherwise be
+// computed a bucket wider than the picture it is annotating and paint past its
+// right edge.
 function gapSpans(points: Point[] | null, bucket: number | null): StripEvent[] {
   if (!points || !bucket || bucket <= 0) return []
   const units = bucketLabel(bucket)
@@ -862,12 +889,11 @@ function gapSpans(points: Point[] | null, bucket: number | null): StripEvent[] {
     }
     let j = i + 1
     while (j < points.length && points[j].state === p.state) j++
-    const startMs = new Date(p.time).getTime()
-    const endMs = new Date(points[j - 1].time).getTime() + bucket * 1000
-    if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+    const until = j < points.length ? points[j].time : points[points.length - 1].time
+    if (Number.isFinite(new Date(p.time).getTime()) && Number.isFinite(new Date(until).getTime())) {
       out.push({
         time: p.time,
-        until: new Date(endMs).toISOString(),
+        until,
         kind: 'gap',
         label:
           p.state === 'down'

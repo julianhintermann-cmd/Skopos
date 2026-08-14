@@ -709,9 +709,21 @@ func (s *Server) handleSetDevicePolicy(w http.ResponseWriter, r *http.Request) {
 		Actor: id.name, Action: "device_policy", Target: mac, Detail: detail,
 	})
 	// Push it to the kernel now instead of waiting for the sync loop, so the
-	// operator sees the effect immediately.
+	// operator sees the effect immediately — and say which of the two things
+	// happened. The policy is stored either way; whether it is in force is a
+	// separate fact, and answering 200 for both meant a quarantined device
+	// showed as restricted while it still reached the internet.
 	if s.deps.ApplyDevicePolicies != nil {
-		s.deps.ApplyDevicePolicies()
+		if err := s.deps.ApplyDevicePolicies(); err != nil {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"ok": false, "stored": true, "policy": policy,
+				"applied": map[string]any{"ok": false, "error": err.Error()},
+			})
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "policy": policy})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "stored": true, "policy": policy,
+		"applied": map[string]any{"ok": true},
+	})
 }

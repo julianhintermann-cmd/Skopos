@@ -3,9 +3,12 @@ import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { useFetch } from '../lib/useFetch'
 import { api, type CFStatus, type Health } from '../lib/api'
-import { Card, CardHeader, Button, Pill, TextInput } from '../components/ui'
+import { Card, CardHeader, Button, Pill, TextInput, KeyValue, useToast } from '../components/ui'
 import { useTheme } from '../lib/theme'
 import { RuntimeSettings } from '../components/RuntimeSettings'
+import { ConfigCard } from '../components/ConfigCard'
+import { Glossary } from '../components/settingsHelp'
+import { PageTitle } from '../components/PageTitle'
 
 export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const health = useFetch<Health>('/api/health', { pollMs: 15000, onUnauthorized })
@@ -13,7 +16,23 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
 
   return (
     <div className="flex flex-col gap-4">
+      {/* This view had no h1 at all, so a screen reader arriving from the nav
+          landed in a list of h2 cards with nothing naming the page. */}
+      <PageTitle title="Settings">
+        what this Skopos is configured with, and the parts of it you can change without a restart
+      </PageTitle>
+
+      {/* Above Protection on purpose: whether the file was read at all decides
+          what every value under it means. */}
+      <ConfigCard
+        onUnauthorized={onUnauthorized}
+        cloudflare={cf.data ? { connected: cf.data.connected, zones: cf.data.zones.length } : null}
+        cloudflareError={cf.error}
+      />
+
       <RuntimeSettings onUnauthorized={onUnauthorized} canWrite={canWrite} />
+
+      <Glossary />
 
       <Appearance />
 
@@ -49,10 +68,18 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
 
       <Card>
         <CardHeader title="About" sub="Skopos — the watcher" />
-        <div className="grid grid-cols-2 gap-px px-4 pb-4 sm:grid-cols-3">
-          <Meta label="Version" value={health.data?.version || 'dev'} />
-          <Meta label="Capture" value={health.data?.capture || '—'} />
-          <Meta label="Firewall" value={health.data?.firewall || '—'} />
+        {/* KeyValue renders a null as words. These three used to fall back to
+            'dev' and two em-dashes, so a health request that never landed was
+            drawn as a running build with an unnamed capture mode. */}
+        <div className="px-4 pb-4">
+          <KeyValue
+            columns={3}
+            items={[
+              { label: 'Version', value: health.data?.version || null },
+              { label: 'Capture', value: health.data?.capture || null },
+              { label: 'Firewall', value: health.data?.firewall || null },
+            ]}
+          />
         </div>
         <div className="flex flex-wrap gap-4 px-4 pb-4 text-sm">
           <a href="https://github.com/julianhintermann-cmd/skopos" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-strong)' }} className="underline">
@@ -233,36 +260,41 @@ function ReputationSources() {
   )
 }
 
+// Whether a channel is configured is answered at rest by the Configuration
+// card, from the server. This is the other half — whether a configured channel
+// can actually be reached — and it can only be answered by sending something.
 function Notifications() {
-  const [result, setResult] = useState('')
+  const toast = useToast()
+  const [sending, setSending] = useState(false)
+
+  // The outcome used to be written into a bare <span> beside the button: no
+  // live region, so a screen reader was told nothing about whether the
+  // notification went out. Same fix as the identical card on System.
   const send = async () => {
-    setResult('sending…')
+    setSending(true)
     try {
       const r = await api.post<{ ok: boolean; error?: string }>('/api/notify/test')
-      setResult(r.ok ? 'sent ✓' : `failed: ${r.error}`)
+      toast.show(
+        r.ok
+          ? { message: 'Test notification sent.', tone: 'ok' }
+          : { message: `Test notification failed: ${r.error}`, tone: 'crit', ttlMs: 9000 },
+      )
     } catch (e) {
-      setResult((e as Error).message)
+      toast.show({ message: `Test notification failed: ${(e as Error).message}`, tone: 'crit', ttlMs: 9000 })
+    } finally {
+      setSending(false)
     }
   }
+
   return (
     <Card className="px-4 py-3.5">
-      <CardHeader title="Notifications" sub="verify your ntfy / webhook setup" />
-      <div className="mt-2 flex items-center gap-3">
-        <Button onClick={send}>Send test notification</Button>
-        {result && <span className="text-sm" style={{ color: 'var(--muted)' }}>{result}</span>}
+      <CardHeader title="Notifications" sub="whether a configured channel can actually be reached" />
+      <div className="mt-2">
+        <Button onClick={() => void send()} loading={sending}>
+          Send test notification
+        </Button>
       </div>
     </Card>
-  )
-}
-
-function Meta({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="py-2">
-      <div className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
-        {label}
-      </div>
-      <div className="mt-0.5 text-sm font-medium">{value}</div>
-    </div>
   )
 }
 

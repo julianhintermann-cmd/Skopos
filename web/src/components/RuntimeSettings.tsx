@@ -132,30 +132,31 @@ export function RuntimeSettings({ onUnauthorized, canWrite }: { onUnauthorized: 
   const send = async (patch: Record<string, unknown>): Promise<Outcome> => {
     setBusy(true)
     try {
-      const r = await api.post<SaveResult>('/api/settings', patch)
-      // Read the settings back rather than trusting the echo. The response does
-      // carry `effective`, but one source for what this card renders is the
-      // whole point of the card.
-      refresh()
-      return outcomeOf(r)
+      return outcomeOf(await api.post<SaveResult>('/api/settings', patch))
     } catch (e) {
       return failureOf(e, 'the change was applied')
     } finally {
       setBusy(false)
+      // Read the settings back on every path, including the failures. The
+      // response body does carry `effective`, but one source for what this card
+      // renders is the whole point of the card — and after a request that was
+      // never answered, re-reading is the only way to learn whether it landed.
+      refresh()
     }
   }
+
+  const setEnforcement = async (mode: string) => setEnforceOutcome(await send({ enforcement: mode }))
 
   const reset = async () => {
     setBusy(true)
     setResetOutcome(null)
     try {
-      const r = await api.del<SaveResult>('/api/settings')
-      refresh()
-      setResetOutcome(outcomeOf(r))
+      setResetOutcome(outcomeOf(await api.del<SaveResult>('/api/settings')))
     } catch (e) {
       setResetOutcome(failureOf(e, 'the overrides were dropped'))
     } finally {
       setBusy(false)
+      refresh()
     }
   }
 
@@ -201,9 +202,7 @@ export function RuntimeSettings({ onUnauthorized, canWrite }: { onUnauthorized: 
           <Segmented<string>
             ariaLabel="Enforcement"
             value={eff.enforcement}
-            onChange={(mode) => {
-              void (async () => setEnforceOutcome(await send({ enforcement: mode })))()
-            }}
+            onChange={(mode) => void setEnforcement(mode)}
             options={[
               { value: 'observe', label: 'Observe', tone: 'warn', hint: 'record every decision, drop nothing' },
               { value: 'enforce', label: 'Enforce', tone: 'ok', hint: 'load the blocks into the kernel' },
@@ -465,22 +464,23 @@ function OutcomeNote({ outcome }: { outcome: Outcome | null }) {
   )
 }
 
-// ServerHolds is the other half of the draft fix: whenever a field is showing
-// something other than what Skopos holds, it says what Skopos holds.
-function ServerHolds({ value }: { value: string }) {
-  return (
-    <p className="mt-1.5 text-xs text-fg-muted">
-      Unsaved. Skopos holds <code className="rounded-sm bg-raised px-1 py-0.5 font-mono">{value}</code>.
-    </p>
-  )
-}
-
-// DraftFeedback is the pair every editable row needs and no row may skip.
+// DraftFeedback is the pair every editable row needs and no row may skip: what
+// happened to the last save, and — whenever the field is showing something
+// other than what Skopos holds — what Skopos holds.
+//
+// After a request that was never answered the lead changes, because "unsaved"
+// would be a claim nobody is in a position to make: the change may well have
+// been applied before the connection dropped. All that can honestly be said is
+// what the server last confirmed.
 function DraftFeedback({ dirty, server, outcome }: { dirty: boolean; server: string; outcome: Outcome | null }) {
+  if (!dirty) return <OutcomeNote outcome={outcome} />
+  const lead = outcome?.kind === 'unknown' ? 'Skopos last confirmed' : 'Unsaved. Skopos holds'
   return (
     <>
       <OutcomeNote outcome={outcome} />
-      {dirty && <ServerHolds value={server} />}
+      <p className="mt-1.5 text-xs text-fg-muted">
+        {lead} <code className="rounded-sm bg-raised px-1 py-0.5 font-mono">{server}</code>.
+      </p>
     </>
   )
 }

@@ -79,7 +79,14 @@ type Deps struct {
 	ReloadMutes func()
 	// ApplyDevicePolicies pushes per-device rules to the kernel right after
 	// an edit, instead of waiting for the periodic sync. Nil-safe.
-	ApplyDevicePolicies func()
+	//
+	// It returns an error because the kernel can refuse: a device policy is
+	// stored and then programmed, and those are two outcomes. Without the
+	// return the endpoint answered success for a quarantine the kernel never
+	// took — the device shows as restricted and reaches the internet anyway,
+	// which is the failure mode with the largest gap between what the page
+	// says and what is true.
+	ApplyDevicePolicies func() error
 	// Settings owns the runtime-editable configuration subset (nil disables
 	// the settings endpoints).
 	Settings SettingsManager

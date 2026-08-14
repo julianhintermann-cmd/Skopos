@@ -20,6 +20,7 @@ import (
 
 	"github.com/julianhintermann-cmd/skopos/internal/api"
 	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
+	"github.com/julianhintermann-cmd/skopos/internal/capture"
 	"github.com/julianhintermann-cmd/skopos/internal/cloudflare"
 	"github.com/julianhintermann-cmd/skopos/internal/config"
 	"github.com/julianhintermann-cmd/skopos/internal/detect"
@@ -40,10 +41,11 @@ import (
 
 // App is a fully wired Skopos runtime.
 type App struct {
-	cfg   *config.Config
-	log   *slog.Logger
-	demo  bool
-	clock func() time.Time
+	cfg      *config.Config
+	log      *slog.Logger
+	demo     bool
+	clock    func() time.Time
+	closeLog func() error
 }
 
 // Options tweak how the app runs.
@@ -56,21 +58,183 @@ type Options struct {
 
 // New builds an App from configuration.
 func New(cfg *config.Config, opts Options) *App {
-	log := opts.Logger
+	log, closeLog := opts.Logger, func() error { return nil }
 	if log == nil {
-		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(cfg.Logging.Level)}))
+		log, closeLog = buildLogger(cfg)
 	}
 	return &App{
-		cfg:   cfg,
-		log:   log,
-		demo:  opts.Demo || cfg.Demo,
-		clock: time.Now,
+		cfg:      cfg,
+		log:      log,
+		demo:     opts.Demo || cfg.Demo,
+		clock:    time.Now,
+		closeLog: closeLog,
 	}
+}
+
+// buildLogger builds the process logger: the readable stderr log always, plus
+// structured JSON in a rotated file under <storage.cold>/logs when
+// logging.file is on.
+//
+// That second half is the one an incident review reads. Container stdout dies
+// with the container — precisely the moment worth reading about — and
+// logging.file defaulted to true, documented rotated JSON logs, and wrote
+// nothing at all, so anyone who went looking after a restart found an empty
+// directory.
+//
+// Cold storage is a NAS share and is allowed to be missing. A monitor that
+// refuses to start because it cannot open its log file is worse than one that
+// says so once on stderr and keeps watching, so a failure here degrades to
+// stdout-only rather than aborting.
+func buildLogger(cfg *config.Config) (*slog.Logger, func() error) {
+	level := logLevel(cfg.Logging.Level)
+	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	noop := func() error { return nil }
+	if !cfg.Logging.File {
+		return slog.New(stderr), noop
+	}
+	path := filepath.Join(cfg.Storage.Cold, "logs", "skopos.log")
+	w, err := openLogFile(path, cfg.Logging.MaxSize.Bytes(), cfg.Logging.MaxBackups)
+	if err != nil {
+		log := slog.New(stderr)
+		log.Warn("file logging is off: cannot open the log file", "path", path, "err", err)
+		return log, noop
+	}
+	jsonh := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})
+	return slog.New(teeHandler{stderr, jsonh}), w.Close
+}
+
+// teeHandler writes every record to both handlers, so the same line is
+// readable on stdout and machine-readable on disk.
+type teeHandler [2]slog.Handler
+
+func (t teeHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return t[0].Enabled(ctx, l) || t[1].Enabled(ctx, l)
+}
+
+func (t teeHandler) Handle(ctx context.Context, r slog.Record) error {
+	var first error
+	for _, h := range t {
+		if !h.Enabled(ctx, r.Level) {
+			continue
+		}
+		// Handlers may retain the record, so each gets its own copy.
+		if err := h.Handle(ctx, r.Clone()); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (t teeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return teeHandler{t[0].WithAttrs(attrs), t[1].WithAttrs(attrs)}
+}
+
+func (t teeHandler) WithGroup(name string) slog.Handler {
+	return teeHandler{t[0].WithGroup(name), t[1].WithGroup(name)}
+}
+
+// logFile is an append-only log file that rotates itself at maxSize, keeping
+// maxBackups generations as skopos.log.1 … skopos.log.N. Nothing exotic: the
+// point is a bounded amount of disk and a file that outlives the container,
+// not a log-shipping pipeline.
+type logFile struct {
+	path       string
+	maxSize    int64
+	maxBackups int
+
+	mu   sync.Mutex
+	f    *os.File
+	size int64
+}
+
+// openLogFile opens (or creates) the log, appending to whatever is already
+// there. maxSize 0 disables rotation; maxBackups 0 rotates into nothing, which
+// caps the logs at one file's worth.
+func openLogFile(path string, maxSize int64, maxBackups int) (*logFile, error) {
+	// The log names the hosts and addresses seen on the household's network,
+	// so neither the directory nor the file is world-readable.
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if maxBackups < 0 {
+		maxBackups = 0
+	}
+	return &logFile{path: path, maxSize: maxSize, maxBackups: maxBackups, f: f, size: info.Size()}, nil
+}
+
+func (l *logFile) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return 0, os.ErrClosed
+	}
+	// Rotate before the write rather than after, so maxSize is a ceiling and
+	// not a threshold the file is always just over.
+	if l.maxSize > 0 && l.size > 0 && l.size+int64(len(b)) > l.maxSize {
+		if err := l.rotate(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := l.f.Write(b)
+	l.size += int64(n)
+	return n, err
+}
+
+// rotate closes the current file, shifts the generations down and starts an
+// empty one. The caller holds the lock.
+func (l *logFile) rotate() error {
+	if err := l.f.Close(); err != nil {
+		return err
+	}
+	// Drop the oldest generation, then shift the rest one number up.
+	_ = os.Remove(l.backupPath(l.maxBackups))
+	for i := l.maxBackups - 1; i >= 1; i-- {
+		_ = os.Rename(l.backupPath(i), l.backupPath(i+1))
+	}
+	if l.maxBackups > 0 {
+		if err := os.Rename(l.path, l.backupPath(1)); err != nil {
+			return err
+		}
+	} else if err := os.Remove(l.path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	l.f, l.size = f, 0
+	return nil
+}
+
+func (l *logFile) backupPath(n int) string { return l.path + "." + itoa(n) }
+
+func (l *logFile) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
 }
 
 // Run starts every subsystem and blocks until ctx is cancelled, then shuts
 // down gracefully. It returns the first fatal error.
 func (a *App) Run(ctx context.Context) error {
+	if a.closeLog != nil {
+		defer func() { _ = a.closeLog() }()
+	}
+
 	// --- storage -----------------------------------------------------------
 	st, err := store.Open(store.Options{Path: dbPath(a.cfg)})
 	if err != nil {
@@ -460,7 +624,18 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	})
 	a.spawnMaintenance(runCtx, spawn, st, dispatcher)
+	a.spawnAlertRetention(runCtx, spawn, st)
 	a.spawnFeeds(runCtx, spawn, observers.feeds, dispatcher)
+
+	// capture.dns and capture.sni are privacy promises, not performance
+	// knobs, so they are applied to the parser itself: with a switch off the
+	// names are never lifted out of the packet, rather than being read and
+	// then discarded. Both parsers ran unconditionally until this call
+	// existed, and the switches were decoration.
+	capture.SetPayloadParsing(capture.PayloadParsing{
+		DNS: a.cfg.Capture.DNS,
+		SNI: a.cfg.Capture.SNI,
+	})
 	a.spawnCapture(runCtx, spawn, agg, sampler, dispatcher)
 	a.spawnPresence(runCtx, spawn, st, dispatcher)
 	a.spawnWeeklyReport(runCtx, spawn, st, dispatcher)
@@ -505,6 +680,37 @@ func (a *App) Run(ctx context.Context) error {
 	cancel()
 	wg.Wait()
 	return nil
+}
+
+// spawnAlertRetention prunes the alert history hourly, on the same cadence as
+// the other retention work. The alerts table was the only one with no bound at
+// all, so on a NAS whose disk is also the household's storage it grew for as
+// long as Skopos ran; storage.retention.alerts now bounds it, and "0" still
+// means keep everything.
+func (a *App) spawnAlertRetention(ctx context.Context, spawn func(string, func()), st *store.Store) {
+	keep := a.cfg.Storage.Retention.Alerts.Std()
+	if keep <= 0 {
+		return
+	}
+	spawn("alert-retention", func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				n, err := st.PruneAlerts(ctx, a.clock().Add(-keep))
+				if err != nil {
+					a.log.Warn("pruning alerts", "err", err)
+					continue
+				}
+				if n > 0 {
+					a.log.Info("pruned expired alerts", "alerts", n, "keep", keep)
+				}
+			}
+		}
+	})
 }
 
 // refreshBlockWatch keeps the block watcher's matcher aligned with the stored

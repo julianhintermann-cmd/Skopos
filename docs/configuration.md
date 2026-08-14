@@ -19,6 +19,7 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | `storage.retention.rollup_1m` | string | `90d` | Rollup1m is how long 1-minute aggregates are kept. |
 | `storage.retention.rollup_1h` | string | `730d` | Rollup1h is how long 1-hour aggregates are kept. |
 | `storage.retention.rollup_1d` | string |  | Rollup1d is how long daily aggregates are kept. "0" keeps them forever. |
+| `storage.retention.alerts` | string | `365d` | Alerts is how long alerts and the incidents grouping them are kept. Every other table had a bound and this one did not, so on a NAS whose disk is also the household's storage the alert history was the one thing that grew for as long as Skopos ran. An incident is deleted with the last of its alerts, never before, so the Alerts view never offers an episode whose events are gone. "0" keeps them forever. |
 | `storage.archive_at` | string | `03:00` | ArchiveAt is reserved for an export-to-cold job that does not exist yet. It is accepted so existing configuration files keep loading, and has no effect. Raw flows past their retention are deleted, not exported; the daily backup is the durable copy. |
 | **`storage.backup`** | object | | Backup configures the daily SQLite online backup to cold storage. |
 | `storage.backup.enabled` | boolean | `true` | Enabled turns the daily database backup to cold storage on or off. |
@@ -26,12 +27,12 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | `storage.backup.at` | string | `03:30` | At is the local time of day the backup runs. |
 | **`capture`** | object | | Capture tunes packet capture and metadata enrichment. |
 | `capture.sample_threshold_pps` | integer | `80000` | SampleThresholdPPS is the packets-per-second rate above which adaptive sampling kicks in to protect the NAS CPU. The transition is reported as a system event, never silent. "0" disables sampling. |
-| `capture.dns` | boolean | `true` | DNS enables parsing DNS responses (names only) so the dashboard can show hostnames instead of bare IPs. |
-| `capture.sni` | boolean | `true` | SNI enables parsing TLS ClientHello server names (metadata only). |
-| `capture.rdns` | boolean | `true` | RDNS enables cached, rate-limited reverse-DNS lookups for external addresses shown in the dashboard. |
+| `capture.dns` | boolean | `true` | DNS enables parsing DNS responses (names only) so the dashboard can show hostnames instead of bare IPs. Turning it off stops the parser reading them at all — nothing is filtered after the fact — so the household's lookups are not recorded anywhere. mDNS answers go with it: a printer announcing itself is then filed by address and MAC rather than as "printer.local". |
+| `capture.sni` | boolean | `true` | SNI enables parsing TLS ClientHello server names (metadata only). Turning it off stops the ClientHello being read at all, which also ends the JA4 client fingerprint — it comes out of the same handshake — so device pages show no fingerprints. |
+| `capture.rdns` | boolean | `true` | RDNS is reserved for reverse-DNS lookups that do not exist yet. It is accepted so existing configuration files keep loading, and has no effect. No address is ever looked up in reverse today; the names in the dashboard come from observed DNS answers and TLS SNI, which capture.dns and capture.sni govern. |
 | `capture.devices` | boolean | `true` | Devices enables the LAN device inventory built from ARP/NDP traffic and mDNS/DHCP names. Required by the new_device detector. |
 | `capture.flow_flush` | string | `10s` | FlowFlush is how often aggregated flow counters are flushed from memory to the database. |
-| `capture.flow_idle_timeout` | string | `1m0s` | FlowIdleTimeout is how long a flow may stay silent before it is considered finished and flushed. |
+| `capture.flow_idle_timeout` | string | `1m0s` | FlowIdleTimeout is reserved for an idle-expiry rule that does not exist yet. It is accepted so existing configuration files keep loading, and has no effect. Every open flow is flushed on the flow_flush tick whether it has been silent or not. |
 | **`capture.mirror`** | object | | Mirror declares which interfaces carry mirrored traffic from a switch's SPAN port or a tap. |
 | `capture.mirror.interfaces` | list of string |  | Interfaces are fed by a switch's mirror/SPAN port, or a tap: they carry other devices' traffic, not this machine's. Declaring them changes nothing about how packets are captured — it tells Skopos that what it sees is the whole segment, so the dashboard can say plainly that visibility is network-wide while blocking still only acts on traffic passing this machine's kernel. |
 | **`detection`** | object | | Detection configures the detectors that decide what counts as suspicious, and how alerts are throttled. |
@@ -103,9 +104,9 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | `server.trusted_proxies` | list of string |  | TrustedProxies lists the networks — in CIDR form, e.g. "127.0.0.1/32" or "172.18.0.0/16" — whose X-Forwarded-For header Skopos will believe. Leave it empty, the default, unless Skopos really does sit behind a reverse proxy. The header costs nothing to forge. Honouring it from any source lets a single attacker present a fresh address on every request, and the login rate limiter — which counts failures per address — then never counts to two. Connections from outside these networks are identified by the address they actually came from. |
 | **`logging`** | object | | Logging configures log verbosity and file logging to cold storage. |
 | `logging.level` | string | `info` | Level is one of debug, info, warn, error. |
-| `logging.file` | boolean | `true` | File enables structured JSON logs in rotated files under <storage.cold>/logs in addition to the readable stdout log. |
-| `logging.max_size` | string | `50MiB` | MaxSize is the size at which the current log file is rotated. |
-| `logging.max_backups` | integer | `10` | MaxBackups is the number of rotated log files to keep. |
+| `logging.file` | boolean | `true` | File enables structured JSON logs in <storage.cold>/logs/skopos.log, in addition to the readable stdout log. Container stdout dies with the container, which is exactly when an incident is worth reading about, so this is the copy that survives a restart. Cold storage is allowed to be missing: Skopos then logs one warning and keeps monitoring rather than refusing to start. |
+| `logging.max_size` | string | `50MiB` | MaxSize is the size at which the current log file is rotated to skopos.log.1. "0" disables rotation, letting the file grow. |
+| `logging.max_backups` | integer | `10` | MaxBackups is the number of rotated log files to keep. "0" keeps none: rotation then simply starts an empty file. |
 | **`metrics`** | object | | Metrics configures the optional Prometheus endpoint. |
 | `metrics.enabled` | boolean |  | Enabled serves Prometheus metrics on /metrics. |
 | **`updates`** | object | | Updates configures the daily release check. |

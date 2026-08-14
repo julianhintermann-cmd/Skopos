@@ -28,6 +28,7 @@ func Default() *Config {
 				Rollup1m: Duration(90 * 24 * time.Hour),
 				Rollup1h: Duration(730 * 24 * time.Hour),
 				Rollup1d: 0, // forever
+				Alerts:   Duration(365 * 24 * time.Hour),
 			},
 			ArchiveAt: ClockTime{Hour: 3, Minute: 0},
 			Backup: Backup{

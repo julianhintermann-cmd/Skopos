@@ -181,3 +181,61 @@ func TestClockTimeParsing(t *testing.T) {
 		t.Error("ParseClockTime(25:00) should fail")
 	}
 }
+
+func TestPrivacySwitchesCanBeTurnedOff(t *testing.T) {
+	// The half of the privacy gate that lives here: both switches default to
+	// true, so "false" has to survive being decoded over the default. If it
+	// does not, the parser downstream never hears about the operator's choice.
+	cfg, err := Parse([]byte("capture:\n  dns: false\n  sni: false\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Capture.DNS {
+		t.Error("capture.dns: false was lost in the merge with the defaults")
+	}
+	if cfg.Capture.SNI {
+		t.Error("capture.sni: false was lost in the merge with the defaults")
+	}
+	// Untouched siblings keep their defaults.
+	if !cfg.Capture.Devices {
+		t.Error("capture.devices lost its default")
+	}
+}
+
+func TestLoggingFileCanBeTurnedOff(t *testing.T) {
+	cfg, err := Parse([]byte("logging:\n  file: false\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Logging.File {
+		t.Error("logging.file: false was lost in the merge with the defaults")
+	}
+}
+
+func TestAlertRetentionDefaultAndOverride(t *testing.T) {
+	if got := Default().Storage.Retention.Alerts.Std(); got != 365*24*time.Hour {
+		t.Errorf("default alert retention = %v, want 365d", got)
+	}
+	cfg, err := Parse([]byte("storage:\n  retention:\n    alerts: 30d\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := cfg.Storage.Retention.Alerts.Std(); got != 30*24*time.Hour {
+		t.Errorf("alert retention = %v, want 30d", got)
+	}
+	// "0" is the documented way to keep alerts forever and must validate.
+	zero, err := Parse([]byte("storage:\n  retention:\n    alerts: 0\n"))
+	if err != nil {
+		t.Fatalf("alerts: 0 must be accepted: %v", err)
+	}
+	if zero.Storage.Retention.Alerts != 0 {
+		t.Errorf("alerts: 0 = %v, want 0", zero.Storage.Retention.Alerts)
+	}
+}
+
+func TestNegativeAlertRetentionIsRejected(t *testing.T) {
+	_, err := Parse([]byte("storage:\n  retention:\n    alerts: -5h\n"))
+	if err == nil || !strings.Contains(err.Error(), "storage.retention.alerts") {
+		t.Fatalf("want an error naming storage.retention.alerts, got: %v", err)
+	}
+}

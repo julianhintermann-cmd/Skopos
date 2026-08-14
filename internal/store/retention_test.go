@@ -160,3 +160,100 @@ func TestBackupCreatesFileAndPrunes(t *testing.T) {
 		}
 	}
 }
+
+// alertAt inserts one alert and files it into its source's incident, the way
+// the policy engine does.
+func alertAt(t *testing.T, s *Store, ts time.Time, src string) model.Alert {
+	t.Helper()
+	a, err := s.InsertAlert(context.Background(), model.Alert{
+		Time:     ts,
+		Detector: "portscan",
+		Severity: model.SeverityWarning,
+		Source:   netip.MustParseAddr(src),
+		Title:    "port scan",
+		Count:    1,
+	})
+	if err != nil {
+		t.Fatalf("InsertAlert: %v", err)
+	}
+	if _, err := s.AttachToIncident(context.Background(), a); err != nil {
+		t.Fatalf("AttachToIncident: %v", err)
+	}
+	return a
+}
+
+func countRows(t *testing.T, s *Store, table string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+		t.Fatalf("counting %s: %v", table, err)
+	}
+	return n
+}
+
+func TestPruneAlertsDropsOldAlertsAndTheEpisodesTheyEmptied(t *testing.T) {
+	s, base := testStore(t)
+	ctx := context.Background()
+	cutoff := base.Add(-365 * 24 * time.Hour)
+
+	// A finished episode from before the cutoff: both it and its alert go.
+	alertAt(t, s, cutoff.Add(-30*24*time.Hour), "203.0.113.7")
+	// A recent episode: untouched.
+	alertAt(t, s, base.Add(-time.Hour), "198.51.100.4")
+	// An episode straddling the cutoff — two alerts from one source an hour
+	// apart, so they group. The older alert goes, the episode stays because
+	// it still has the newer one.
+	alertAt(t, s, cutoff.Add(-30*time.Minute), "192.0.2.9")
+	alertAt(t, s, cutoff.Add(30*time.Minute), "192.0.2.9")
+
+	if got := countRows(t, s, "incidents"); got != 3 {
+		t.Fatalf("fixture built %d incidents, want 3", got)
+	}
+
+	deleted, err := s.PruneAlerts(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneAlerts: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (both alerts older than the cutoff)", deleted)
+	}
+	if got := countRows(t, s, "alerts"); got != 2 {
+		t.Errorf("remaining alerts = %d, want 2", got)
+	}
+	// The emptied episode must go with its alerts: an incident whose events
+	// have all been deleted is a claim the Alerts view cannot back up.
+	if got := countRows(t, s, "incidents"); got != 2 {
+		t.Errorf("remaining incidents = %d, want 2 (the fully expired one is gone)", got)
+	}
+	inc, err := s.ListIncidents(ctx, IncidentFilter{})
+	if err != nil {
+		t.Fatalf("ListIncidents: %v", err)
+	}
+	for _, i := range inc {
+		if i.Source == "203.0.113.7" {
+			t.Errorf("the expired episode survived its alerts: %+v", i)
+		}
+		full, err := s.IncidentByID(ctx, i.ID)
+		if err != nil {
+			t.Fatalf("IncidentByID(%d): %v", i.ID, err)
+		}
+		if len(full.Alerts) == 0 {
+			t.Errorf("incident %d (%s) is left with no alerts", i.ID, i.Source)
+		}
+	}
+}
+
+func TestPruneAlertsKeepsEverythingWhenRetentionIsOff(t *testing.T) {
+	// "0" means keep forever, and a zero cutoff must delete nothing however
+	// old the history is.
+	s, base := testStore(t)
+	alertAt(t, s, base.Add(-10*365*24*time.Hour), "203.0.113.7")
+
+	deleted, err := s.PruneAlerts(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("PruneAlerts: %v", err)
+	}
+	if deleted != 0 || countRows(t, s, "alerts") != 1 {
+		t.Errorf("deleted = %d with %d alerts left, want 0 and 1", deleted, countRows(t, s, "alerts"))
+	}
+}

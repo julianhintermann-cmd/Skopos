@@ -64,6 +64,11 @@
               "type": "string",
               "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
               "description": "Rollup1d is how long daily aggregates are kept. \"0\" keeps them\nforever."
+            },
+            "alerts": {
+              "type": "string",
+              "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
+              "description": "Alerts is how long alerts and the incidents grouping them are kept.\nEvery other table had a bound and this one did not, so on a NAS whose\ndisk is also the household's storage the alert history was the one\nthing that grew for as long as Skopos ran. An incident is deleted\nwith the last of its alerts, never before, so the Alerts view never\noffers an episode whose events are gone. \"0\" keeps them forever."
             }
           },
           "additionalProperties": false,
@@ -108,15 +113,15 @@
         },
         "dns": {
           "type": "boolean",
-          "description": "DNS enables parsing DNS responses (names only) so the dashboard can\nshow hostnames instead of bare IPs."
+          "description": "DNS enables parsing DNS responses (names only) so the dashboard can\nshow hostnames instead of bare IPs. Turning it off stops the parser\nreading them at all — nothing is filtered after the fact — so the\nhousehold's lookups are not recorded anywhere. mDNS answers go with\nit: a printer announcing itself is then filed by address and MAC\nrather than as \"printer.local\"."
         },
         "sni": {
           "type": "boolean",
-          "description": "SNI enables parsing TLS ClientHello server names (metadata only)."
+          "description": "SNI enables parsing TLS ClientHello server names (metadata only).\nTurning it off stops the ClientHello being read at all, which also\nends the JA4 client fingerprint — it comes out of the same handshake\n— so device pages show no fingerprints."
         },
         "rdns": {
           "type": "boolean",
-          "description": "RDNS enables cached, rate-limited reverse-DNS lookups for external\naddresses shown in the dashboard."
+          "description": "RDNS is reserved for reverse-DNS lookups that do not exist yet. It is\naccepted so existing configuration files keep loading, and has no\neffect. No address is ever looked up in reverse today; the names in\nthe dashboard come from observed DNS answers and TLS SNI, which\ncapture.dns and capture.sni govern."
         },
         "devices": {
           "type": "boolean",
@@ -130,7 +135,7 @@
         "flow_idle_timeout": {
           "type": "string",
           "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
-          "description": "FlowIdleTimeout is how long a flow may stay silent before it is\nconsidered finished and flushed."
+          "description": "FlowIdleTimeout is reserved for an idle-expiry rule that does not\nexist yet. It is accepted so existing configuration files keep\nloading, and has no effect. Every open flow is flushed on the\nflow_flush tick whether it has been silent or not."
         },
         "mirror": {
           "properties": {
@@ -519,16 +524,16 @@
         },
         "file": {
           "type": "boolean",
-          "description": "File enables structured JSON logs in rotated files under\n\u003cstorage.cold\u003e/logs in addition to the readable stdout log."
+          "description": "File enables structured JSON logs in \u003cstorage.cold\u003e/logs/skopos.log,\nin addition to the readable stdout log. Container stdout dies with the\ncontainer, which is exactly when an incident is worth reading about,\nso this is the copy that survives a restart. Cold storage is allowed\nto be missing: Skopos then logs one warning and keeps monitoring\nrather than refusing to start."
         },
         "max_size": {
           "type": "string",
           "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
-          "description": "MaxSize is the size at which the current log file is rotated."
+          "description": "MaxSize is the size at which the current log file is rotated to\nskopos.log.1. \"0\" disables rotation, letting the file grow."
         },
         "max_backups": {
           "type": "integer",
-          "description": "MaxBackups is the number of rotated log files to keep."
+          "description": "MaxBackups is the number of rotated log files to keep. \"0\" keeps\nnone: rotation then simply starts an empty file."
         }
       },
       "additionalProperties": false,

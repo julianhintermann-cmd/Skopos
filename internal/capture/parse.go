@@ -7,11 +7,49 @@ package capture
 import (
 	"encoding/binary"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/flow"
 	"github.com/julianhintermann-cmd/skopos/internal/model"
 )
+
+// PayloadParsing selects which application-layer parsers are allowed to read
+// a packet's payload.
+//
+// These are privacy switches, not performance knobs. Reading DNS questions and
+// TLS server names out of a household's traffic is the most revealing thing
+// Skopos does, and capture.dns/capture.sni were documented as governing it
+// while both parsers ran unconditionally — someone who turned DNS off to stop
+// recording which sites their family visits was recording them anyway. So the
+// switch sits at the parser, not downstream of it: with DNS off the names are
+// never lifted out of the packet, and there is nothing to filter, forget or
+// leak later.
+type PayloadParsing struct {
+	// DNS allows DNS and mDNS answers to be read for address→name mappings.
+	DNS bool
+	// SNI allows TLS ClientHellos to be read for the server name and the
+	// JA4 client fingerprint, which come from the same handshake.
+	SNI bool
+}
+
+// payloadParsing is process-wide because every capture source in a process
+// runs under one configuration, and atomic because it is set once at startup
+// while the capture goroutines read it for every packet. It starts fully on so
+// that a caller who never configures it — the parser is also a library — sees
+// the parsing the function names promise.
+var payloadParsing atomic.Pointer[PayloadParsing]
+
+// SetPayloadParsing applies the capture.dns and capture.sni switches to every
+// subsequent parse.
+func SetPayloadParsing(p PayloadParsing) { payloadParsing.Store(&p) }
+
+func currentPayloadParsing() PayloadParsing {
+	if p := payloadParsing.Load(); p != nil {
+		return *p
+	}
+	return PayloadParsing{DNS: true, SNI: true}
+}
 
 // EtherType values we care about.
 const (
@@ -31,17 +69,22 @@ const (
 // ParseIPPacket parses a bare IP packet — no link-layer header — into a
 // flow.Packet. Point-to-point links (VPN tunnels, PPP, 6in4) carry no Ethernet
 // header at all, so frames from them have no MAC addresses and must not be
-// read as if they had.
+// read as if they had. How much of the payload is read is whatever
+// SetPayloadParsing was last given.
 func ParseIPPacket(pkt []byte, ts time.Time) (flow.Packet, bool) {
+	return parseIPPacket(pkt, ts, currentPayloadParsing())
+}
+
+func parseIPPacket(pkt []byte, ts time.Time, pp PayloadParsing) (flow.Packet, bool) {
 	if len(pkt) < 1 {
 		return flow.Packet{}, false
 	}
 	p := flow.Packet{Time: ts, Size: uint64(len(pkt))}
 	switch pkt[0] >> 4 {
 	case 4:
-		return parseIPv4(pkt, p)
+		return parseIPv4(pkt, p, pp)
 	case 6:
-		return parseIPv6(pkt, p)
+		return parseIPv6(pkt, p, pp)
 	default:
 		return flow.Packet{}, false
 	}
@@ -49,8 +92,13 @@ func ParseIPPacket(pkt []byte, ts time.Time) (flow.Packet, bool) {
 
 // ParseFrame parses one Ethernet frame into a flow.Packet. It returns ok=false
 // for frames it cannot or does not need to turn into a flow (ARP, truncated,
-// unsupported ethertype). It never panics on malformed input.
+// unsupported ethertype). It never panics on malformed input. How much of the
+// payload is read is whatever SetPayloadParsing was last given.
 func ParseFrame(frame []byte, ts time.Time) (flow.Packet, bool) {
+	return parseFrame(frame, ts, currentPayloadParsing())
+}
+
+func parseFrame(frame []byte, ts time.Time, pp PayloadParsing) (flow.Packet, bool) {
 	if len(frame) < 14 {
 		return flow.Packet{}, false
 	}
@@ -72,16 +120,16 @@ func ParseFrame(frame []byte, ts time.Time) (flow.Packet, bool) {
 
 	switch etherType {
 	case etherIPv4:
-		return parseIPv4(frame[off:], p)
+		return parseIPv4(frame[off:], p, pp)
 	case etherIPv6:
-		return parseIPv6(frame[off:], p)
+		return parseIPv6(frame[off:], p, pp)
 	default:
 		// ARP and everything else are not flows.
 		return flow.Packet{}, false
 	}
 }
 
-func parseIPv4(b []byte, p flow.Packet) (flow.Packet, bool) {
+func parseIPv4(b []byte, p flow.Packet, pp PayloadParsing) (flow.Packet, bool) {
 	if len(b) < 20 {
 		return flow.Packet{}, false
 	}
@@ -117,7 +165,7 @@ func parseIPv4(b []byte, p flow.Packet) (flow.Packet, bool) {
 	if binary.BigEndian.Uint16(b[6:8])&0x1fff != 0 {
 		return laterFragment(proto, p)
 	}
-	return parseL4(b[ihl:], proto, p)
+	return parseL4(b[ihl:], proto, p, pp)
 }
 
 // laterFragment records a fragment that arrived without a transport header.
@@ -135,7 +183,7 @@ func laterFragment(proto byte, p flow.Packet) (flow.Packet, bool) {
 	return p, true
 }
 
-func parseIPv6(b []byte, p flow.Packet) (flow.Packet, bool) {
+func parseIPv6(b []byte, p flow.Packet, pp PayloadParsing) (flow.Packet, bool) {
 	if len(b) < 40 {
 		return flow.Packet{}, false
 	}
@@ -155,7 +203,7 @@ func parseIPv6(b []byte, p flow.Packet) (flow.Packet, bool) {
 	for hops := 0; hops < 8; hops++ {
 		switch next {
 		case ipProtoTCP, ipProtoUDP, ipProtoICMPv6, ipProtoICMP:
-			return parseL4(rest, next, p)
+			return parseL4(rest, next, p, pp)
 		case 0, 43, 60: // hop-by-hop, routing, destination options
 			if len(rest) < 8 {
 				return flow.Packet{}, false
@@ -173,7 +221,7 @@ func parseIPv6(b []byte, p flow.Packet) (flow.Packet, bool) {
 	return flow.Packet{}, false
 }
 
-func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
+func parseL4(b []byte, proto byte, p flow.Packet, pp PayloadParsing) (flow.Packet, bool) {
 	switch proto {
 	case ipProtoTCP:
 		if len(b) < 20 {
@@ -186,8 +234,8 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 		// SYN set, ACK clear => a fresh connection attempt.
 		p.SYN = flags&0x02 != 0 && flags&0x10 == 0
 		dataOff := int(b[12]>>4) * 4
-		if dataOff >= 20 && dataOff < len(b) {
-			p = enrichTCPPayload(b[dataOff:], p)
+		if dataOff >= 20 && dataOff < len(b) && (pp.DNS || pp.SNI) {
+			p = enrichTCPPayload(b[dataOff:], p, pp)
 		}
 		return p, true
 	case ipProtoUDP:
@@ -197,7 +245,7 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 		p.Proto = model.ProtoUDP
 		p.SrcPort = binary.BigEndian.Uint16(b[0:2])
 		p.DstPort = binary.BigEndian.Uint16(b[2:4])
-		if p.SrcPort == portDNS || p.SrcPort == portMDNS || p.DstPort == portMDNS {
+		if pp.DNS && (p.SrcPort == portDNS || p.SrcPort == portMDNS || p.DstPort == portMDNS) {
 			p.Names = parseDNSNames(b[8:])
 		}
 		return p, true
@@ -212,13 +260,17 @@ func parseL4(b []byte, proto byte, p flow.Packet) (flow.Packet, bool) {
 // enrichTCPPayload reads what a TCP payload can tell us without keeping any
 // connection state: a TLS ClientHello gives the server name and the client's
 // JA4 fingerprint, DNS-over-TCP gives name mappings. Anything else is left
-// untouched — payload bytes never leave this function.
-func enrichTCPPayload(payload []byte, p flow.Packet) flow.Packet {
+// untouched — payload bytes never leave this function, and each half is read
+// only while its switch in pp allows it.
+func enrichTCPPayload(payload []byte, p flow.Packet, pp PayloadParsing) flow.Packet {
 	if p.SrcPort == portDNS || p.DstPort == portDNS {
 		// DNS over TCP prefixes the message with a 2-byte length.
-		if len(payload) > 2 {
+		if pp.DNS && len(payload) > 2 {
 			p.Names = parseDNSNames(payload[2:])
 		}
+		return p
+	}
+	if !pp.SNI {
 		return p
 	}
 	if hello, ok := parseClientHello(payload); ok {

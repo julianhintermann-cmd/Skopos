@@ -112,6 +112,14 @@ type Retention struct {
 	// Rollup1d is how long daily aggregates are kept. "0" keeps them
 	// forever.
 	Rollup1d Duration `yaml:"rollup_1d" json:"rollup_1d,omitzero"`
+
+	// Alerts is how long alerts and the incidents grouping them are kept.
+	// Every other table had a bound and this one did not, so on a NAS whose
+	// disk is also the household's storage the alert history was the one
+	// thing that grew for as long as Skopos ran. An incident is deleted
+	// with the last of its alerts, never before, so the Alerts view never
+	// offers an episode whose events are gone. "0" keeps them forever.
+	Alerts Duration `yaml:"alerts" json:"alerts,omitzero"`
 }
 
 // Backup configures SQLite online backups.
@@ -145,14 +153,24 @@ type Capture struct {
 	SampleThresholdPPS int `yaml:"sample_threshold_pps" json:"sample_threshold_pps,omitempty"`
 
 	// DNS enables parsing DNS responses (names only) so the dashboard can
-	// show hostnames instead of bare IPs.
+	// show hostnames instead of bare IPs. Turning it off stops the parser
+	// reading them at all — nothing is filtered after the fact — so the
+	// household's lookups are not recorded anywhere. mDNS answers go with
+	// it: a printer announcing itself is then filed by address and MAC
+	// rather than as "printer.local".
 	DNS bool `yaml:"dns" json:"dns,omitempty"`
 
 	// SNI enables parsing TLS ClientHello server names (metadata only).
+	// Turning it off stops the ClientHello being read at all, which also
+	// ends the JA4 client fingerprint — it comes out of the same handshake
+	// — so device pages show no fingerprints.
 	SNI bool `yaml:"sni" json:"sni,omitempty"`
 
-	// RDNS enables cached, rate-limited reverse-DNS lookups for external
-	// addresses shown in the dashboard.
+	// RDNS is reserved for reverse-DNS lookups that do not exist yet. It is
+	// accepted so existing configuration files keep loading, and has no
+	// effect. No address is ever looked up in reverse today; the names in
+	// the dashboard come from observed DNS answers and TLS SNI, which
+	// capture.dns and capture.sni govern.
 	RDNS bool `yaml:"rdns" json:"rdns,omitempty"`
 
 	// Devices enables the LAN device inventory built from ARP/NDP traffic
@@ -163,8 +181,10 @@ type Capture struct {
 	// memory to the database.
 	FlowFlush Duration `yaml:"flow_flush" json:"flow_flush,omitzero"`
 
-	// FlowIdleTimeout is how long a flow may stay silent before it is
-	// considered finished and flushed.
+	// FlowIdleTimeout is reserved for an idle-expiry rule that does not
+	// exist yet. It is accepted so existing configuration files keep
+	// loading, and has no effect. Every open flow is flushed on the
+	// flow_flush tick whether it has been silent or not.
 	FlowIdleTimeout Duration `yaml:"flow_idle_timeout" json:"flow_idle_timeout,omitzero"`
 
 	// Mirror declares which interfaces carry mirrored traffic from a
@@ -469,14 +489,20 @@ type Logging struct {
 	// Level is one of debug, info, warn, error.
 	Level string `yaml:"level" json:"level,omitempty"`
 
-	// File enables structured JSON logs in rotated files under
-	// <storage.cold>/logs in addition to the readable stdout log.
+	// File enables structured JSON logs in <storage.cold>/logs/skopos.log,
+	// in addition to the readable stdout log. Container stdout dies with the
+	// container, which is exactly when an incident is worth reading about,
+	// so this is the copy that survives a restart. Cold storage is allowed
+	// to be missing: Skopos then logs one warning and keeps monitoring
+	// rather than refusing to start.
 	File bool `yaml:"file" json:"file,omitempty"`
 
-	// MaxSize is the size at which the current log file is rotated.
+	// MaxSize is the size at which the current log file is rotated to
+	// skopos.log.1. "0" disables rotation, letting the file grow.
 	MaxSize Size `yaml:"max_size" json:"max_size,omitzero"`
 
-	// MaxBackups is the number of rotated log files to keep.
+	// MaxBackups is the number of rotated log files to keep. "0" keeps
+	// none: rotation then simply starts an empty file.
 	MaxBackups int `yaml:"max_backups" json:"max_backups,omitempty"`
 }
 

@@ -49,8 +49,10 @@ storage:
     rollup_1m: 90d     # 1-minute aggregates
     rollup_1h: 730d    # 1-hour aggregates
     rollup_1d: 0       # daily aggregates — 0 means keep forever
+    alerts: 365d       # alerts and their incidents — 0 means keep forever
 
-  archive_at: "03:00"  # daily local time to export raw flows to cold storage
+  archive_at: "03:00"  # accepted but inert — nothing is exported to cold
+                       # storage today; the daily backup below is the copy
 
   backup:
     enabled: true
@@ -62,12 +64,18 @@ storage:
 # -----------------------------------------------------------------------------
 capture:
   sample_threshold_pps: 80000  # adaptive sampling above this rate; 0 disables
+  # The two privacy switches. Off means the names are never read out of the
+  # packet — not read and then hidden — so nothing about who visited what is
+  # recorded. dns: false also gives up mDNS device hostnames; sni: false also
+  # gives up the JA4 client fingerprint, which comes from the same handshake.
   dns: true                    # read DNS response names (names only)
   sni: true                    # read TLS SNI server names (metadata only)
-  rdns: true                   # cached, rate-limited reverse DNS for the UI
+  rdns: true                   # accepted but inert — no address is ever
+                               # looked up in reverse today
   devices: true                # LAN device inventory (needed by new_device)
   flow_flush: 10s
-  flow_idle_timeout: 60s
+  flow_idle_timeout: 60s       # accepted but inert — every open flow is
+                               # flushed on the flow_flush tick
 
   # If a switch mirrors the LAN onto one of this machine's interfaces, name it
   # under `interfaces` above and list it here. Skopos then sees every device's
@@ -178,9 +186,12 @@ server:
 # -----------------------------------------------------------------------------
 logging:
   level: info            # debug | info | warn | error
+  # <cold>/logs/skopos.log — the copy that survives a container restart, which
+  # is when you most want to read it. Cold storage may be unmounted: Skopos
+  # then warns once and keeps monitoring on stdout alone.
   file: true             # JSON logs under <cold>/logs in addition to stdout
-  max_size: 50MiB
-  max_backups: 10
+  max_size: 50MiB        # rotate at this size; 0 disables rotation
+  max_backups: 10        # rotated files kept as skopos.log.1 … .10
 
 metrics:
   enabled: false         # serve Prometheus metrics on /metrics (read scope)

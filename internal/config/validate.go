@@ -43,6 +43,9 @@ func (c *Config) Validate() error {
 	if c.Storage.Retention.RawFlows <= 0 {
 		bad("storage.retention.raw_flows: must be positive (0 would delete every raw flow immediately)")
 	}
+	if c.Storage.Retention.Alerts < 0 {
+		bad("storage.retention.alerts: must not be negative (use 0 to keep alerts forever)")
+	}
 	if c.Storage.Backup.Enabled && c.Storage.Backup.Keep < 1 {
 		bad("storage.backup.keep: must be at least 1 when backups are enabled")
 	}

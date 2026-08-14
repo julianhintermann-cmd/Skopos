@@ -49,6 +49,35 @@ func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (int64, e
 	return total, nil
 }
 
+// PruneAlerts deletes alerts raised before the cutoff, and with them the
+// incidents that grouped nothing else. It returns the number of alerts
+// deleted.
+//
+// Alerts were the one table with no bound at all: flows, rollups, names and
+// incidents are all pruned, so on a NAS whose disk is also the household's
+// storage the alert history was the only thing that grew for as long as Skopos
+// ran. It is not in ApplyRetention's table-driven list because it is not one
+// table — an incident is a claim about a set of alerts ("one attacker, 40
+// events"), and deleting the alerts while keeping the claim would leave the
+// Alerts view offering episodes whose events no longer exist.
+//
+// An incident's last_ms is the time of its newest alert, so last_ms < cutoff
+// is exactly the set whose alerts have all just been deleted. Incidents that
+// straddle the cutoff keep their newest alerts and stay.
+func (s *Store) PruneAlerts(ctx context.Context, before time.Time) (int64, error) {
+	cutoff := toMs(before)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM alerts WHERE time_ms < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("retention on alerts: %w", err)
+	}
+	deleted, _ := res.RowsAffected()
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM incidents WHERE last_ms < ?`, cutoff); err != nil {
+		return deleted, fmt.Errorf("retention on incidents: %w", err)
+	}
+	return deleted, nil
+}
+
 // EnforceHotLimit keeps total hot-storage usage under maxBytes by deleting the
 // oldest raw flows first (aggregated rollups are preserved). It measures the
 // database's real on-disk footprint including the WAL, deletes in batches

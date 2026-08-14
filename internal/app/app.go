@@ -307,9 +307,13 @@ func (a *App) Run(ctx context.Context) error {
 	}, backend, st, a.clock)
 	fw.SetLogger(a.warnf)
 
+	// Deliberately not kept as a variable. Everything that used to read one —
+	// alert suppression, the live "dropped" flag, country coverage — now asks
+	// fw.EnforcingNow(), because whether the kernel is dropping is a question
+	// with a different answer at noon than at boot, and a snapshot answered
+	// the boot one forever.
 	enforceOn := a.cfg.Firewall.Enforcement == "enforce"
 	backendAvail := backend.Available()
-	enforceActive := enforceOn && backendAvail
 	if enforceOn && !backendAvail {
 		a.log.Warn("firewall backend unavailable — running monitor-only", "backend", backend.Name())
 		dispatcher.System(ctx, model.SeverityWarning, "Skopos firewall degraded",
@@ -330,7 +334,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Preventive country blocking: keep the kernel's country sets in sync
 	// with the blocked-country list and the GeoIP database.
-	countryEnf := newCountryEnforcer(geo, countries, fw, enforceActive, a.logf, a.warnf)
+	countryEnf := newCountryEnforcer(geo, countries, fw, fw.EnforcingNow, a.logf, a.warnf)
 
 	// Blocked traffic is still captured — the tap sits before netfilter — so
 	// tally those packets per block: live proof the firewall works, and in
@@ -368,11 +372,17 @@ func (a *App) Run(ctx context.Context) error {
 		muter.Replace(out)
 	}
 	reloadMutes()
-	if enforceActive {
-		// Sources the kernel is already dropping raise no further alerts;
-		// their ongoing attempts show in the per-block counters instead.
-		pol.SetAlreadyBlocked(watch.Contains)
-	}
+	// Sources the kernel is already dropping raise no further alerts; their
+	// ongoing attempts show in the per-block counters instead.
+	//
+	// The suppression is asked per finding rather than installed once at
+	// startup. Registering it behind a boot-time bool meant an operator who
+	// switched to observe at noon kept having alerts silenced on the grounds
+	// that the kernel was handling them, which it had stopped doing — silence
+	// justified by a fact that was no longer true.
+	pol.SetAlreadyBlocked(func(a netip.Addr) bool {
+		return fw.EnforcingNow() && watch.Contains(a)
+	})
 	pol.SetLogger(a.warnf)
 
 	// --- detectors + observers --------------------------------------------
@@ -437,7 +447,7 @@ func (a *App) Run(ctx context.Context) error {
 	// for country coverage only on inbound-initiated flows (established
 	// flows the LAN opened itself are exempted by conntrack).
 	blockedFlow := func(f model.Flow) bool {
-		if !enforceActive {
+		if !fw.EnforcingNow() {
 			return false
 		}
 		if watch.Contains(f.SrcIP) || watch.Contains(f.DstIP) {

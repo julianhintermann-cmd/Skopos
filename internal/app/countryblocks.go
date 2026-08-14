@@ -26,9 +26,12 @@ type countryEnforcer struct {
 	fw       *firewall.Service
 	logf     func(string, ...any)
 	warnf    func(string, ...any)
-	// enforceActive mirrors the startup enforcement decision; Covered must
-	// answer false in observe mode, where the kernel drops nothing.
-	enforceActive bool
+	// enforcing answers whether the kernel is dropping right now. It used to
+	// be a bool captured at startup, which made Covered keep answering from a
+	// decision the operator had since reversed: disarm the firewall at noon
+	// and the live view went on flagging flows as dropped by country until the
+	// process restarted.
+	enforcing func() bool
 
 	trigger chan struct{}
 
@@ -41,16 +44,16 @@ type countryEnforcer struct {
 	loaded bool
 }
 
-func newCountryEnforcer(provider geoip.Provider, list *geoip.Blocklist, fw *firewall.Service, enforceActive bool, logf, warnf func(string, ...any)) *countryEnforcer {
+func newCountryEnforcer(provider geoip.Provider, list *geoip.Blocklist, fw *firewall.Service, enforcing func() bool, logf, warnf func(string, ...any)) *countryEnforcer {
 	ce := &countryEnforcer{
-		provider:      provider,
-		list:          list,
-		fw:            fw,
-		logf:          logf,
-		warnf:         warnf,
-		enforceActive: enforceActive,
-		trigger:       make(chan struct{}, 1),
-		counts:        map[string]int{},
+		provider:  provider,
+		list:      list,
+		fw:        fw,
+		logf:      logf,
+		warnf:     warnf,
+		enforcing: enforcing,
+		trigger:   make(chan struct{}, 1),
+		counts:    map[string]int{},
 	}
 	empty := netset.New()
 	empty.Build()
@@ -60,9 +63,10 @@ func newCountryEnforcer(provider geoip.Provider, list *geoip.Blocklist, fw *fire
 }
 
 // Covered reports whether the kernel's preventive country sets drop packets
-// from addr. Always false in observe mode or before the first load.
+// from addr. False in observe mode, before the first load, and whenever the
+// kernel is not confirmed to be holding what Skopos programmed.
 func (ce *countryEnforcer) Covered(addr netip.Addr) bool {
-	if !ce.enforceActive {
+	if ce.enforcing == nil || !ce.enforcing() {
 		return false
 	}
 	return ce.set.Load().Contains(addr)

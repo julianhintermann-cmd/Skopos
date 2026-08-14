@@ -69,6 +69,24 @@ export interface TimePoint {
   flows: number
 }
 
+// Seconds covered by one rollup bucket. The server chooses the resolution per
+// request (store.ChooseResolution widens it as the range grows) and reports it
+// next to the series, so anything turning bucket totals into a rate has to read
+// it rather than assume minutes. Returns null for a resolution this build does
+// not know, so callers can decline to draw instead of scaling by a guess.
+export function bucketSeconds(resolution: string): number | null {
+  switch (resolution) {
+    case '1m':
+      return 60
+    case '1h':
+      return 3600
+    case '1d':
+      return 86400
+    default:
+      return null
+  }
+}
+
 // LiveFlow mirrors api.LiveFlow: a completed conversation shown in the live
 // view. Streamed over SSE (`flows` events) and returned by /api/live/flows.
 export interface LiveFlow {
@@ -98,6 +116,7 @@ export interface Talker {
 
 export interface Overview {
   live: LiveStats
+  resolution: string
   throughput_1h: TimePoint[] | null
   top_talkers: Talker[] | null
   active_blocks: number

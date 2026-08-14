@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type GeoIPSummary, type LiveFlow, type TimePoint, type Talker } from '../lib/api'
+import { api, bucketSeconds, type GeoIPSummary, type LiveFlow, type TimePoint, type Talker } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
@@ -98,7 +98,11 @@ export function Traffic({ onUnauthorized }: { onUnauthorized: () => void }) {
             <CardHeader title="Throughput" sub={`${range.label} · average bits per second`} />
             <div className="px-2 pb-2">
               {data?.series?.length ? (
-                <ThroughputChart points={data.series} height={280} />
+                <ThroughputChart
+                  points={data.series}
+                  bucketSeconds={bucketSeconds(data.resolution)}
+                  height={280}
+                />
               ) : (
                 <EmptyState>No traffic in this range.</EmptyState>
               )}

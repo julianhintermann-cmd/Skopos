@@ -75,7 +75,7 @@ services:
 
     volumes:
       - /volume1/docker/skopos/config:/config   # SSD  — config.yaml
-      - /volume1/docker/skopos/data:/data       # SSD  — database, state, spool
+      - /volume1/docker/skopos/data:/data       # SSD  — database, runtime state
       - /mnt/nas/skopos/archive:/archive        # HDD  — archives, logs, backups
 
     mem_limit: 512m
@@ -89,12 +89,12 @@ Adjust the two volume source paths, then `docker compose up -d` and open
 
 Two independent volumes, both fully configurable:
 
-- **Hot** (`/data`, put it on your SSD) — SQLite database, runtime state and
-  the spool buffer. Size-capped; the oldest raw flows are dropped first while
-  aggregates are kept, so it can never fill your disk.
+- **Hot** (`/data`, put it on your SSD) — SQLite database and runtime state.
+  Size-capped; the oldest raw flows are dropped first while aggregates are
+  kept, so it can never fill your disk.
 - **Cold** (`/archive`, put it on your HDD or NAS share) — daily database
-  archives, rotated logs and daily database backups. If it goes offline,
-  Skopos spools to hot storage and writes through later. Capture never stops.
+  backups. If it goes offline the backup is skipped and Skopos says so;
+  capture never stops.
 
 ---
 

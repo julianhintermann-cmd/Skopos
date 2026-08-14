@@ -8,7 +8,21 @@ import { useTheme } from '../lib/theme'
 // A single-series throughput chart: bits/s over time, teal area on a recessive
 // grid, with a crosshair + tooltip. One series → no legend box; the card title
 // names it (per the dataviz method).
-export function ThroughputChart({ points, height = 220 }: { points: TimePoint[]; height?: number }) {
+//
+// bucketSeconds is how much time one point covers, and it is required rather
+// than assumed: the server picks the rollup resolution per request, so a
+// hardcoded divisor silently overstates the rate by 60x as soon as the range
+// crosses into hourly buckets. Pass null when the resolution is unknown and
+// the chart declines to draw instead of scaling by a guess.
+export function ThroughputChart({
+  points,
+  bucketSeconds,
+  height = 220,
+}: {
+  points: TimePoint[]
+  bucketSeconds: number | null
+  height?: number
+}) {
   const el = useRef<HTMLDivElement>(null)
   const plot = useRef<uPlot | null>(null)
   const { resolved } = useTheme()
@@ -16,13 +30,15 @@ export function ThroughputChart({ points, height = 220 }: { points: TimePoint[];
   const data = useMemo<uPlot.AlignedData>(() => {
     const xs: number[] = []
     const ys: number[] = []
-    for (const p of points) {
-      xs.push(new Date(p.time).getTime() / 1000)
-      // bytes over the 1-minute bucket → average bits/s.
-      ys.push((p.bytes * 8) / 60)
+    if (bucketSeconds && bucketSeconds > 0) {
+      for (const p of points) {
+        xs.push(new Date(p.time).getTime() / 1000)
+        // bytes over one bucket → average bits/s across that bucket.
+        ys.push((p.bytes * 8) / bucketSeconds)
+      }
     }
     return [xs, ys]
-  }, [points])
+  }, [points, bucketSeconds])
 
   useEffect(() => {
     if (!el.current) return
@@ -89,6 +105,17 @@ export function ThroughputChart({ points, height = 220 }: { points: TimePoint[];
   useEffect(() => {
     plot.current?.setData(data)
   }, [data])
+
+  if (!bucketSeconds || bucketSeconds <= 0) {
+    return (
+      <div
+        className="flex w-full items-center justify-center text-sm text-[var(--muted)]"
+        style={{ minHeight: height }}
+      >
+        Cannot chart this range — the server reported a bucket size this build does not know.
+      </div>
+    )
+  }
 
   return <div ref={el} className="w-full" style={{ minHeight: height }} />
 }

@@ -59,10 +59,13 @@ type Config struct {
 	// NameLookup resolves an address to a hostname learned from passive DNS,
 	// filling in flows whose own packets carried no name. Optional.
 	NameLookup func(netip.Addr) string
-	// OnFlushError is called when a flush fails. The loop keeps running: a
-	// full disk that later frees up should resume recording on its own, and
-	// silently ending the only thing that writes history is the worst
-	// available outcome. Optional.
+	// OnFlushError reports the outcome of every flush attempt: the error when
+	// one fails, and nil on the first success after a failure. The loop keeps
+	// running either way — a full disk that later frees up should resume
+	// recording on its own, and silently ending the only thing that writes
+	// history is the worst available outcome. Reporting recovery too is what
+	// lets the caller send one "degraded" notice and one "recovered" notice
+	// instead of one every flush interval, forever. Optional.
 	OnFlushError func(error)
 }
 
@@ -181,6 +184,7 @@ func (e *entry) toModel() model.Flow {
 func (a *Aggregator) Run(ctx context.Context) error {
 	t := time.NewTicker(a.flush)
 	defer t.Stop()
+	var failing bool
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,10 +195,17 @@ func (a *Aggregator) Run(ctx context.Context) error {
 			// process — even after the space came back. Keep ticking and
 			// report, so recovery is automatic and the operator still hears
 			// about it.
-			if err := a.Flush(); err != nil {
-				if a.onFlushError != nil {
-					a.onFlushError(err)
-				}
+			err := a.Flush()
+			switch {
+			case err != nil:
+				failing = true
+			case failing:
+				failing = false
+			default:
+				continue // steady state: nothing to report
+			}
+			if a.onFlushError != nil {
+				a.onFlushError(err)
 			}
 		}
 	}

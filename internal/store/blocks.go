@@ -55,6 +55,28 @@ func (s *Store) AddBlock(ctx context.Context, b model.Block) (model.Block, error
 	return b, nil
 }
 
+// ActiveBlockFor returns the active block for a prefix, if there is one. The
+// firewall service reads it before it writes, so that a block whose kernel
+// apply fails can be rolled back to exactly what was there before instead of
+// leaving a row that claims an address is blocked when it is not.
+func (s *Store) ActiveBlockFor(ctx context.Context, prefix netip.Prefix) (model.Block, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, prefix, origin, reason, created_ms, expires_ms, active, removed_ms
+		FROM blocks WHERE prefix = ? AND active = 1 LIMIT 1`, prefix.String())
+	if err != nil {
+		return model.Block{}, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return model.Block{}, false, rows.Err()
+	}
+	b, err := scanBlock(rows)
+	if err != nil {
+		return model.Block{}, false, err
+	}
+	return b, true, rows.Err()
+}
+
 // RemoveBlock deactivates the active block for a prefix, recording when it was
 // removed. Returns whether a block was actually removed.
 func (s *Store) RemoveBlock(ctx context.Context, prefix netip.Prefix) (bool, error) {

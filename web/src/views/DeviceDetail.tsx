@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
-import { api, deviceName, type DeviceDetail as Detail } from '../lib/api'
+import { api, bucketSeconds, deviceName, type DeviceDetail as Detail } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { TalkerBars } from '../components/TalkerBars'
@@ -120,7 +120,11 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
         <CardHeader title="Throughput" sub={`${win.label} · average bits per second`} />
         <div className="px-2 pb-2">
           {series.length > 0 ? (
-            <ThroughputChart points={series} height={240} />
+            <ThroughputChart
+              points={series}
+              bucketSeconds={bucketSeconds(data.resolution)}
+              height={240}
+            />
           ) : (
             <EmptyState>No traffic from this device in the window.</EmptyState>
           )}

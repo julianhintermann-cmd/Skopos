@@ -1,5 +1,5 @@
 import { useFetch } from '../lib/useFetch'
-import type { Overview as OverviewData } from '../lib/api'
+import { bucketSeconds, type Overview as OverviewData } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Pill } from '../components/ui'
 import { ThroughputChart } from '../components/ThroughputChart'
 import { formatBits, formatBytes, formatPPS } from '../lib/format'
@@ -48,7 +48,11 @@ export function Overview({ onUnauthorized }: { onUnauthorized: () => void }) {
           right={data.live.sampling ? <Pill tone="warn">sampling</Pill> : undefined}
         />
         <div className="px-2 pb-2">
-          {series.length > 0 ? <ThroughputChart points={series} /> : <EmptyState>No traffic recorded yet.</EmptyState>}
+          {series.length > 0 ? (
+            <ThroughputChart points={series} bucketSeconds={bucketSeconds(data.resolution)} />
+          ) : (
+            <EmptyState>No traffic recorded yet.</EmptyState>
+          )}
         </div>
       </Card>
 

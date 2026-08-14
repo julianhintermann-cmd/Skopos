@@ -89,7 +89,7 @@ services:
     tmpfs: [/tmp]
     volumes:
       - /volume1/docker/skopos/config:/config   # SSD — config.yaml
-      - /volume1/docker/skopos/data:/data       # SSD (hot) — database, state, spool
+      - /volume1/docker/skopos/data:/data       # SSD (hot) — database, runtime state
       - /mnt/nas/skopos/archive:/archive        # HDD/NAS (cold) — archives, logs, backups
     mem_limit: 512m
     cpus: 2.0
@@ -111,7 +111,7 @@ Skopos keeps two independent volumes, both fully configurable:
 
 | Volume | Mount | Put it on | Holds |
 | ------ | ----- | --------- | ----- |
-| **Hot** | `/data` | SSD (fast, small) | SQLite database, runtime state, spool buffer. Capped (`storage.hot_max_size`, default 5 GiB) — oldest raw flows are dropped first, aggregates kept. |
+| **Hot** | `/data` | SSD (fast, small) | SQLite database and runtime state. Capped (`storage.hot_max_size`, default 5 GiB) — oldest raw flows are dropped first, aggregates kept. |
 | **Cold** | `/archive` | HDD / NAS share (large, cheap) | Daily database backups. If it goes offline the backup is skipped and Skopos says so; capture never stops. |
 
 ## Configuration

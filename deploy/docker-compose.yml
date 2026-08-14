@@ -42,7 +42,7 @@ services:
     volumes:
       # config.yaml lives on the SSD next to the hot data.
       - /volume1/docker/skopos/config:/config
-      # Hot storage (SSD): database, runtime state, spool buffer.
+      # Hot storage (SSD): database and runtime state.
       - /volume1/docker/skopos/data:/data
       # Cold storage (HDD / NAS share): Parquet archives, logs, backups.
       - /mnt/nas/skopos/archive:/archive

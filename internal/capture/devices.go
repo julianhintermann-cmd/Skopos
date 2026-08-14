@@ -27,6 +27,7 @@ type DeviceTracker struct {
 	store      DeviceStore
 	onNew      NewDeviceFunc
 	hostname   func(netip.Addr) string
+	onFlush    func(error)
 	flush      time.Duration
 
 	mu      sync.Mutex
@@ -60,6 +61,13 @@ func NewDeviceTracker(c *flow.Classifier, store DeviceStore, onNew NewDeviceFunc
 // instead of a bare MAC address. Optional: without it the hostname column
 // stays empty and the operator's own label is the only name.
 func (d *DeviceTracker) SetHostnameLookup(f func(netip.Addr) string) { d.hostname = f }
+
+// SetFlushReporter installs a callback that receives the outcome of every
+// flush: the error when one fails, nil on the first success afterwards. It
+// exists because this loop used to end permanently on the first error, taking
+// device inventory, new-device alerts and presence tracking with it, and doing
+// so without a single line anywhere. Optional.
+func (d *DeviceTracker) SetFlushReporter(f func(error)) { d.onFlush = f }
 
 // Observe implements flow.Observer. It records the local (internal) endpoint's
 // MAC/IP pair; routed WAN peers have no meaningful local MAC and are ignored.
@@ -166,16 +174,33 @@ func firstValid(addrs ...netip.Addr) netip.Addr {
 }
 
 // Run flushes on the configured interval until ctx is cancelled.
+//
+// A failed flush used to return, which ended the goroutine for good — and the
+// caller discarded the error, so one transient write failure silently stopped
+// device inventory, new-device alerts and presence tracking for the lifetime
+// of the process. Worse, frozen last-seen timestamps then made the presence
+// watcher announce that devices had left the network when they had not. Keep
+// ticking and report instead, the same way the flow aggregator does.
 func (d *DeviceTracker) Run(ctx context.Context) error {
 	t := time.NewTicker(d.flush)
 	defer t.Stop()
+	var failing bool
 	for {
 		select {
 		case <-ctx.Done():
 			return d.Flush(context.WithoutCancel(ctx))
 		case <-t.C:
-			if err := d.Flush(ctx); err != nil {
-				return err
+			err := d.Flush(ctx)
+			switch {
+			case err != nil:
+				failing = true
+			case failing:
+				failing = false
+			default:
+				continue
+			}
+			if d.onFlush != nil {
+				d.onFlush(err)
 			}
 		}
 	}

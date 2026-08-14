@@ -27,6 +27,11 @@ func TestCountryEnforcerCoverage(t *testing.T) {
 	}
 	backend := firewall.NewMemoryBackend(true)
 	fw := firewall.NewService(firewall.Config{Enforce: true}, backend, st, nil)
+	// Enforcing() now requires the base ruleset to genuinely exist, so the test
+	// has to come up the way the app does rather than assume it.
+	if err := fw.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	nop := func(string, ...any) {}
 
 	ce := newCountryEnforcer(geoip.NewDemoProvider(), list, fw, true, nop, nop)

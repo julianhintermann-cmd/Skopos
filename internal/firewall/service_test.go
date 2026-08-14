@@ -29,6 +29,13 @@ func newTestService(t *testing.T, cfg Config, backend Backend) (*Service, *store
 	t.Helper()
 	st := openStore(t)
 	svc := NewService(cfg, backend, st, func() time.Time { return time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC) })
+	// Mirror the real startup sequence. Enforcing() now requires the base
+	// ruleset to actually exist, so a service that never restored is one that
+	// is not enforcing — which is the honest answer, and the reason the tests
+	// have to come up the same way the app does.
+	if err := svc.Restore(context.Background()); err != nil {
+		t.Fatalf("restoring: %v", err)
+	}
 	return svc, st
 }
 

@@ -38,11 +38,11 @@ network:
 # Storage — two independent volumes: hot (SSD) and cold (HDD/NAS share)
 # -----------------------------------------------------------------------------
 storage:
-  hot: /data           # SSD: SQLite database, runtime state, spool buffer
+  hot: /data           # SSD: SQLite database and runtime state
   cold: /archive       # HDD/NAS: daily database backups
 
   hot_max_size: 5GiB   # cap on hot usage; oldest raw flows dropped first
-  spool_max_size: 2GiB # buffer used while cold storage is unreachable
+  spool_max_size: 2GiB # accepted but inert — nothing is spooled today
 
   retention:
     raw_flows: 7d      # individual flows; deleted after this, not archived

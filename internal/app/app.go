@@ -285,15 +285,33 @@ func (a *App) Run(ctx context.Context) error {
 	domains := newDomainRecorder(st, st, classifier.Internal, a.warnf)
 	liveSink := newLiveFlows(domains, nil, blockedFlow)
 
+	// degraded turns a repeating failure into two messages instead of an
+	// endless stream: one when it starts, one when it clears. A loop failing
+	// every ten seconds must not push every ten seconds — but a loop that has
+	// been failing since Tuesday must not be as quiet as one that just
+	// started, and until now these two failed entirely in the log. The callers
+	// only invoke this on a transition, so it holds no state of its own.
+	degraded := func(what, detail string) func(error) {
+		return func(err error) {
+			if err == nil {
+				a.log.Info(what + " recovered")
+				dispatcher.System(ctx, model.SeverityInfo, "Skopos "+what+" recovered",
+					detail+" is working again.")
+				return
+			}
+			a.log.Error(what+" failed", "err", err)
+			dispatcher.System(ctx, model.SeverityWarning, "Skopos "+what+" degraded",
+				detail+" is failing: "+err.Error()+". Skopos keeps retrying.")
+		}
+	}
+
 	agg := flow.New(flow.Config{
-		Classifier: classifier,
-		Sink:       liveSink,
-		Observer:   observers,
-		Flush:      a.cfg.Capture.FlowFlush.Std(),
-		NameLookup: resolver.Lookup,
-		OnFlushError: func(err error) {
-			a.log.Error("writing flows failed", "err", err)
-		},
+		Classifier:   classifier,
+		Sink:         liveSink,
+		Observer:     observers,
+		Flush:        a.cfg.Capture.FlowFlush.Std(),
+		NameLookup:   resolver.Lookup,
+		OnFlushError: degraded("recording", "Writing captured traffic to the database"),
 	})
 
 	runSpeedtest := a.speedtestFunc(st, dispatcher)
@@ -406,6 +424,8 @@ func (a *App) Run(ctx context.Context) error {
 	spawn("domains", func() { domains.Run(runCtx, time.Minute) })
 	spawn("live-broadcast", func() { a.broadcastLive(runCtx, srv.Hub(), live) })
 	if observers.deviceTracker != nil {
+		observers.deviceTracker.SetFlushReporter(
+			degraded("device inventory", "Updating the device list"))
 		spawn("devices", func() { _ = observers.deviceTracker.Run(runCtx) })
 	}
 	a.spawnMaintenance(runCtx, spawn, st, dispatcher)

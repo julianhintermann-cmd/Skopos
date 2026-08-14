@@ -51,13 +51,19 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 	now := s.clock()
 	from := now.Add(-time.Hour)
-	series, _ := s.deps.Store.Throughput(ctx, from, now, store.Res1m)
-	talkers, _ := s.deps.Store.TopTalkers(ctx, from, now, store.Res1m, 10)
+	// One constant, used for the query and reported to the client, so the two
+	// cannot drift apart — the chart divides by it to get a rate.
+	res := store.Res1m
+	series, _ := s.deps.Store.Throughput(ctx, from, now, res)
+	talkers, _ := s.deps.Store.TopTalkers(ctx, from, now, res, 10)
 	blocks, _ := s.deps.Store.ActiveBlocks(ctx)
 	unacked, _ := s.deps.Store.CountUnackedAlerts(ctx)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"live":           s.liveSnapshot(),
+		"live": s.liveSnapshot(),
+		// The chart turns bucket totals into a rate, so it needs to know how
+		// long a bucket is rather than assuming.
+		"resolution":     res,
 		"throughput_1h":  series,
 		"top_talkers":    talkers,
 		"active_blocks":  len(blocks),
@@ -375,8 +381,25 @@ func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error()+
 			" — remove it from the allowlist in Settings first if you really mean it")
 		return
+	case errors.Is(err, firewall.ErrWholeFamily):
+		writeError(w, http.StatusBadRequest,
+			"refusing to block "+prefix.String()+": that is every address at once, "+
+				"including the one you are reading this from. Block a narrower range.")
+		return
+	case errors.Is(err, firewall.ErrNotEnforced):
+		// The kernel's own wording ("file exists", "invalid argument") is not
+		// something an operator should ever have to read, and worse, it used
+		// to arrive next to a block that had already been written. Say plainly
+		// that nothing happened, and keep the detail in the log.
+		s.log("blocking %s failed: %v", prefix, err)
+		writeError(w, http.StatusConflict,
+			"could not block "+prefix.String()+": the firewall rejected the change, "+
+				"so nothing was blocked and nothing was recorded. The details are in the Skopos log.")
+		return
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.log("blocking %s failed: %v", prefix, err)
+		writeError(w, http.StatusInternalServerError,
+			"could not block "+prefix.String()+". The details are in the Skopos log.")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"prefix": prefix.String()})
@@ -460,15 +483,29 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 // parsePrefixOrIP accepts either a CIDR or a bare IP (treated as a host /32 or
 // /128).
+// Unmapping matters: ::ffff:203.0.113.5 is an IPv4 address wearing an IPv6
+// coat. Left alone it lands in the v6 set, whose rules only match nfproto
+// ipv6, so a real IPv4 packet from that address never touches it — a block the
+// UI lists as active and the kernel silently ignores.
 func parsePrefixOrIP(s string) (netip.Prefix, error) {
 	if p, err := netip.ParsePrefix(s); err == nil {
-		return p.Masked(), nil
+		return netip.PrefixFrom(p.Addr().Unmap(), unmappedBits(p)).Masked(), nil
 	}
 	a, err := netip.ParseAddr(s)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
+	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// unmappedBits rebases a prefix length onto the unmapped address: a 4-in-6
+// /128 is a /32 once the 96-bit prefix is gone.
+func unmappedBits(p netip.Prefix) int {
+	if p.Addr().Is4In6() && p.Bits() >= 96 {
+		return p.Bits() - 96
+	}
+	return p.Bits()
 }
 
 // handleUpdates reports whether a newer release exists. Disabled or

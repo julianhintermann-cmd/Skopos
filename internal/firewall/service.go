@@ -16,6 +16,7 @@ import (
 type Store interface {
 	AddBlock(ctx context.Context, b model.Block) (model.Block, error)
 	RemoveBlock(ctx context.Context, prefix netip.Prefix) (bool, error)
+	ActiveBlockFor(ctx context.Context, prefix netip.Prefix) (model.Block, bool, error)
 	ActiveBlocks(ctx context.Context) ([]model.Block, error)
 	ExpireBlocks(ctx context.Context) ([]model.Block, error)
 	Audit(ctx context.Context, e model.AuditEntry) error
@@ -46,6 +47,16 @@ type Config struct {
 // the default gateway.
 var ErrProtected = errors.New("address is on the never-block allowlist")
 
+// ErrWholeFamily is returned for a /0. It would blackhole every address of the
+// family, including the one the operator is reading the dashboard from, and
+// the kernel cannot express it as an interval anyway.
+var ErrWholeFamily = errors.New("blocking a whole address family is refused")
+
+// ErrNotEnforced is returned when the block was accepted and then could not be
+// programmed into the kernel. The stored row is rolled back before it is
+// returned, so the block list never lists an address the kernel has not got.
+var ErrNotEnforced = errors.New("the firewall rejected the change; nothing was blocked")
+
 // Service ties the store, backend and config together. It implements
 // policy.Blocker and owns reconciliation, restore-on-start and TTL expiry.
 type Service struct {
@@ -56,6 +67,12 @@ type Service struct {
 	log     func(string, ...any)
 
 	mu sync.Mutex
+
+	// applyMu serialises "write the desired state, then push it to the kernel"
+	// so a failed push can be rolled back against the state it actually saw.
+	// It must not be mu: Reconcile takes that, and a sync.Mutex is not
+	// reentrant.
+	applyMu sync.Mutex
 
 	// cfgMu guards the mutable parts of cfg (enforcement, default TTL) and
 	// baseReady, which the settings layer changes at runtime.
@@ -95,21 +112,29 @@ func (s *Service) SetLogger(f func(string, ...any)) { s.log = f }
 // and country prefixes into the kernel; turning it off tears the table down
 // again, so "observe" never leaves stale rules behind.
 func (s *Service) SetEnforce(ctx context.Context, on bool) error {
-	s.cfgMu.Lock()
+	s.cfgMu.RLock()
 	was := s.cfg.Enforce
-	s.cfg.Enforce = on
-	s.cfgMu.Unlock()
+	s.cfgMu.RUnlock()
 	if was == on {
 		return nil
 	}
 	if !s.backend.Available() {
-		return nil // monitor-only; the desired state is recorded either way
+		// Monitor-only; the desired state is recorded either way.
+		s.cfgMu.Lock()
+		s.cfg.Enforce = on
+		s.cfgMu.Unlock()
+		return nil
 	}
 	if on {
+		// The flag flips only once the kernel actually has a table to put the
+		// rules in. Setting it first meant a failed EnsureBase left Enforcing()
+		// answering true over an empty kernel — green on the dashboard, green
+		// in /api/health, green in the metrics, and nothing enforced.
 		if err := s.backend.EnsureBase(ctx); err != nil {
 			return fmt.Errorf("ensuring base ruleset: %w", err)
 		}
 		s.cfgMu.Lock()
+		s.cfg.Enforce = true
 		s.baseReady = true
 		protected := append([]netip.Prefix(nil), s.cfg.Protected...)
 		s.cfgMu.Unlock()
@@ -134,6 +159,7 @@ func (s *Service) SetEnforce(ctx context.Context, on bool) error {
 	}
 	// Switching to observe: clear every rule set so nothing keeps dropping.
 	s.cfgMu.Lock()
+	s.cfg.Enforce = false
 	s.baseReady = false
 	s.cfgMu.Unlock()
 	s.mu.Lock()
@@ -214,13 +240,18 @@ func (s *Service) Protects(prefix netip.Prefix) (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
-// Enforcing reports whether the service is in enforce mode and the backend can
-// actually apply rules.
+// Enforcing reports whether rules are actually being applied: enforce mode is
+// on, the backend is reachable, and the base ruleset is genuinely in place.
+//
+// That last condition is the one that used to be missing. Available() proves
+// only that netlink opens, not that the skopos table exists, so a failed
+// EnsureBase left this answering true over an empty kernel — and the dashboard,
+// /api/health and the Prometheus gauge all repeated it.
 func (s *Service) Enforcing() bool {
 	s.cfgMu.RLock()
-	on := s.cfg.Enforce
+	on, ready := s.cfg.Enforce, s.baseReady
 	s.cfgMu.RUnlock()
-	return on && s.backend.Available()
+	return on && ready && s.backend.Available()
 }
 
 // Block records a block (origin: detector) and reconciles. It implements
@@ -241,6 +272,12 @@ func (s *Service) ManualBlock(ctx context.Context, prefix netip.Prefix, actor, r
 }
 
 func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.BlockOrigin, actor, reason string, ttl time.Duration) error {
+	if !prefix.IsValid() {
+		return fmt.Errorf("not an address or network: %v", prefix)
+	}
+	if prefix.Bits() == 0 {
+		return fmt.Errorf("%w: %s", ErrWholeFamily, prefix)
+	}
 	if ttl <= 0 && origin == model.OriginDetector {
 		s.cfgMu.RLock()
 		ttl = s.cfg.DefaultTTL
@@ -251,14 +288,57 @@ func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.B
 		t := s.clock().Add(ttl)
 		expires = &t
 	}
+
+	// The store write and the kernel apply have to move together, or two
+	// concurrent blocks can interleave and leave a row behind that the kernel
+	// never received. Reconcile takes s.mu, so this has to be its own lock.
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
+	prior, hadPrior, err := s.store.ActiveBlockFor(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("reading the existing block: %w", err)
+	}
 	b := model.Block{Prefix: prefix, Origin: origin, Reason: reason, Expires: expires}
 	if _, err := s.store.AddBlock(ctx, b); err != nil {
 		return fmt.Errorf("recording block: %w", err)
 	}
+
+	if err := s.Reconcile(ctx); err != nil {
+		// The kernel did not take it, so the row must not survive claiming it
+		// did. A netlink batch is atomic, so the kernel is already back where
+		// it started; putting the store back beside it is what keeps the block
+		// list honest. The attempt is kept in the audit log, which is where a
+		// record of something that did not happen belongs.
+		s.restoreBlock(ctx, prefix, prior, hadPrior)
+		_ = s.store.Audit(ctx, model.AuditEntry{
+			Actor: actor, Action: "block-failed", Target: prefix.String(),
+			Detail: fmt.Sprintf("%s (%v)", reason, err),
+		})
+		s.log("firewall: could not program a block for %s: %v", prefix, err)
+		return fmt.Errorf("%w: %v", ErrNotEnforced, err)
+	}
+
 	_ = s.store.Audit(ctx, model.AuditEntry{
 		Actor: actor, Action: "block", Target: prefix.String(), Detail: reason,
 	})
-	return s.Reconcile(ctx)
+	return nil
+}
+
+// restoreBlock undoes a block whose kernel apply failed: either back to the
+// row that was there before, or gone entirely if the block was new.
+func (s *Service) restoreBlock(ctx context.Context, prefix netip.Prefix, prior model.Block, hadPrior bool) {
+	var err error
+	if hadPrior {
+		_, err = s.store.AddBlock(ctx, prior)
+	} else {
+		_, err = s.store.RemoveBlock(ctx, prefix)
+	}
+	if err != nil {
+		// Now the store and the kernel really can disagree, so say so loudly
+		// rather than let it pass as an ordinary failed block.
+		s.log("firewall: could not roll back the stored block for %s after a failed apply: %v", prefix, err)
+	}
 }
 
 // Unblock removes a block and reconciles.

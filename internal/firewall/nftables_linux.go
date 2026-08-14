@@ -240,19 +240,10 @@ func (b *nftBackend) loadLANRanges() error {
 		return err
 	}
 	elements := map[string][]nftables.SetElement{}
-	for _, p := range b.lan {
-		if !p.IsValid() || p.Bits() == 0 {
-			continue
+	for name, spans := range unionBySet(b.lan, setLAN4, setLAN6) {
+		for _, s := range spans {
+			elements[name] = append(elements[name], spanPair(s)...)
 		}
-		name := setLAN4
-		if p.Addr().Is6() {
-			name = setLAN6
-		}
-		start, end := intervalBounds(p)
-		elements[name] = append(elements[name],
-			nftables.SetElement{Key: start},
-			nftables.SetElement{Key: end, IntervalEnd: true},
-		)
 	}
 	for _, name := range []string{setLAN4, setLAN6} {
 		c.FlushSet(b.sets[name])
@@ -276,20 +267,14 @@ func (b *nftBackend) ReconcileProtected(_ context.Context, prefixes []netip.Pref
 	if err != nil {
 		return err
 	}
+	// The allowlist and the auto-appended gateway /32 routinely overlap — an
+	// allowlist of the LAN is exactly what the example config suggests — and an
+	// overlap here used to abort Restore before it programmed a single block.
 	elements := map[string][]nftables.SetElement{}
-	for _, p := range prefixes {
-		if !p.IsValid() || p.Bits() == 0 {
-			continue
+	for name, spans := range unionBySet(prefixes, setProtected4, setProtected6) {
+		for _, s := range spans {
+			elements[name] = append(elements[name], spanPair(s)...)
 		}
-		name := setProtected4
-		if p.Addr().Is6() {
-			name = setProtected6
-		}
-		start, end := intervalBounds(p)
-		elements[name] = append(elements[name],
-			nftables.SetElement{Key: start},
-			nftables.SetElement{Key: end, IntervalEnd: true},
-		)
 	}
 	for _, name := range []string{setProtected4, setProtected6} {
 		c.FlushSet(b.sets[name])
@@ -494,25 +479,16 @@ func (b *nftBackend) Reconcile(_ context.Context, desired []Rule) error {
 
 	now := time.Now()
 	elements := map[string][]nftables.SetElement{}
-	for _, r := range desired {
-		setName, ok := setFor(r)
-		if !ok {
-			continue
-		}
-		start, end := intervalBounds(r.Prefix)
-		el := nftables.SetElement{Key: start}
-		if r.Expires != nil {
-			ttl := r.Expires.Sub(now)
-			if ttl <= 0 {
+	// Coalesced first: the kernel rejects overlapping intervals outright, and
+	// one rejected batch wedges every later reconcile. See coalesce.go.
+	for setName, spans := range coalesceRules(desired) {
+		for _, s := range spans {
+			els, ok := spanElements(s, now)
+			if !ok {
 				continue // already expired; the expiry loop will drop it
 			}
-			el.Timeout = ttl
+			elements[setName] = append(elements[setName], els...)
 		}
-		// Interval sets need the exclusive upper bound with IntervalEnd.
-		elements[setName] = append(elements[setName],
-			el,
-			nftables.SetElement{Key: end, IntervalEnd: true},
-		)
 	}
 
 	for _, name := range blockSets {
@@ -575,21 +551,16 @@ func (b *nftBackend) ReconcileCountry(_ context.Context, prefixes []netip.Prefix
 		return nil
 	}
 
+	// GeoIP's own walk yields a disjoint trie, but a hand-edited prefix list or
+	// a future source need not, and one overlap would take the whole batch
+	// down. Merging is cheap here and removes the hazard for good.
 	count := 0
-	for _, p := range prefixes {
-		if !p.IsValid() || p.Bits() == 0 {
-			continue // never a whole address family
-		}
-		name := setCountry4
-		if p.Addr().Is6() {
-			name = setCountry6
-		}
-		start, end := intervalBounds(p)
-		pending[name] = append(pending[name],
-			nftables.SetElement{Key: start},
-			nftables.SetElement{Key: end, IntervalEnd: true},
-		)
-		if count++; count%countryChunk == 0 {
+	for name, spans := range unionBySet(prefixes, setCountry4, setCountry6) {
+		for _, s := range spans {
+			pending[name] = append(pending[name], spanPair(s)...)
+			if count++; count%countryChunk != 0 {
+				continue
+			}
 			if err := queue(); err != nil {
 				return err
 			}
@@ -605,6 +576,52 @@ func (b *nftBackend) ReconcileCountry(_ context.Context, prefixes []netip.Prefix
 		return err
 	}
 	return c.Flush()
+}
+
+// spanElements renders a coalesced range as the element pair an interval set
+// wants: the inclusive start, carrying the timeout, and the exclusive end
+// marker. It reports false when the range has already expired, so the caller
+// leaves it out and lets the expiry loop retire the row.
+func spanElements(s span, now time.Time) ([]nftables.SetElement, bool) {
+	el := nftables.SetElement{Key: setKey(s.lo)}
+	if s.expires != nil {
+		ttl := s.expires.Sub(now)
+		if ttl <= 0 {
+			return nil, false
+		}
+		el.Timeout = ttl
+	}
+	return []nftables.SetElement{el, {Key: setKey(s.hi), IntervalEnd: true}}, true
+}
+
+// spanPair is spanElements for the sets that carry no expiry.
+func spanPair(s span) []nftables.SetElement {
+	return []nftables.SetElement{{Key: setKey(s.lo)}, {Key: setKey(s.hi), IntervalEnd: true}}
+}
+
+// unionBySet splits a prefix list by address family and merges each side into
+// non-overlapping ranges, keyed by the set each family belongs in. A /0 is
+// dropped: no set here is ever meant to swallow a whole address family.
+func unionBySet(prefixes []netip.Prefix, name4, name6 string) map[string][]span {
+	var v4, v6 []netip.Prefix
+	for _, p := range prefixes {
+		switch {
+		case !p.IsValid() || p.Bits() == 0:
+			continue
+		case p.Addr().Is6():
+			v6 = append(v6, p)
+		default:
+			v4 = append(v4, p)
+		}
+	}
+	out := make(map[string][]span, 2)
+	if s := unionPrefixes(v4); len(s) > 0 {
+		out[name4] = s
+	}
+	if s := unionPrefixes(v6); len(s) > 0 {
+		out[name6] = s
+	}
+	return out
 }
 
 // setFor picks the set name for a rule by family and action.
@@ -626,16 +643,29 @@ func setFor(r Rule) (string, bool) {
 
 // intervalBounds returns the inclusive start and exclusive end addresses of a
 // prefix, as required by nftables interval sets.
+// Both are one byte wider than the address itself. The exclusive end of a
+// range that reaches the top of the family — 255.255.255.0/24, 240.0.0.0/4,
+// ffff::/16 — is one past the maximum address, which does not fit in an
+// address and which netip reports as an invalid Addr. Carrying it in an extra
+// leading byte keeps every bound orderable, so the coalescer can sort and
+// compare them without special cases. setKey strips that byte on the way to
+// the kernel, where the same value is written as a wrap to zero.
 func intervalBounds(p netip.Prefix) (start, end []byte) {
 	p = p.Masked()
-	startAddr := p.Addr()
-	start = ipBytes(startAddr)
-
-	// End = first address after the prefix range.
-	endAddr := lastAddr(p).Next()
-	end = ipBytes(endAddr)
+	start = append([]byte{0}, ipBytes(p.Addr())...)
+	end = append([]byte{0}, ipBytes(lastAddr(p))...)
+	for i := len(end) - 1; i >= 0; i-- {
+		if end[i]++; end[i] != 0 {
+			break
+		}
+	}
 	return start, end
 }
+
+// setKey renders a bound as the kernel key: the address bytes without the
+// ordering byte. A range ending one past the family maximum becomes the
+// all-zero key, which is how nftables spells "up to the end".
+func setKey(bound []byte) []byte { return bound[1:] }
 
 func ipBytes(a netip.Addr) []byte {
 	if a.Is4() {

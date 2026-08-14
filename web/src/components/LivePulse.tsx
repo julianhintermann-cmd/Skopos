@@ -13,11 +13,13 @@ import { formatBits, formatPPS } from '../lib/format'
 export function LivePulse({
   live,
   spark,
+  sparkTimes,
   connected,
   variant = 'full',
 }: {
   live: LiveNow | null
   spark: number[]
+  sparkTimes?: number[]
   connected: boolean
   variant?: 'full' | 'compact'
 }) {
@@ -80,7 +82,16 @@ export function LivePulse({
         />
         <div className="px-3 pb-3">
           {spark.length > 1 ? (
-            <Sparkline values={spark} height={variant === 'full' ? 96 : 72} />
+            <Sparkline
+              values={spark}
+              times={sparkTimes}
+              // The stream publishes once a second, so a hole wider than two
+              // is a hole rather than jitter, and the sparkline draws it as
+              // one instead of joining across it.
+              gapMs={2000}
+              formatValue={formatBits}
+              height={variant === 'full' ? 96 : 72}
+            />
           ) : (
             <div
               className="flex items-center justify-center text-sm"

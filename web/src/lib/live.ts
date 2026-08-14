@@ -24,6 +24,12 @@ export function useLiveStream({
 } = {}) {
   const [live, setLive] = useState<LiveNow | null>(null)
   const [spark, setSpark] = useState<number[]>([])
+  // The timestamp of each kept reading, so the sparkline can space its points
+  // by when they happened. Skipping an unmeasured second keeps the values
+  // honest but silently closes the gap: three missing seconds become three
+  // adjacent points, and a stalled capture draws as a continuous line at
+  // whatever rate preceded it.
+  const [sparkTimes, setSparkTimes] = useState<number[]>([])
   const [rows, setRows] = useState<FeedFlow[]>([])
   const [connected, setConnected] = useState(false)
   const [buffered, setBuffered] = useState(0)
@@ -62,6 +68,12 @@ export function useLiveStream({
         // getting rid of.
         if (typeof s.bits_per_second === 'number') {
           setSpark((prev) => [...prev, s.bits_per_second as number].slice(-MAX_SPARK))
+          // measured_at is when the server took the reading. Falling back to
+          // the browser's clock would put the point where it arrived rather
+          // than where it happened, which is the same error at a smaller
+          // scale.
+          const at = s.measured_at ? new Date(s.measured_at).getTime() : Date.now()
+          setSparkTimes((prev) => [...prev, at].slice(-MAX_SPARK))
         }
         return
       }
@@ -92,5 +104,5 @@ export function useLiveStream({
     setRows((prev) => [...held, ...prev.map((r) => ({ ...r, _fresh: false }))].slice(0, MAX_ROWS))
   }, [])
 
-  return { live, spark, rows, connected, buffered, flush }
+  return { live, spark, sparkTimes, rows, connected, buffered, flush }
 }

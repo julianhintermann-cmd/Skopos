@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
 import { api, type Alert, type Incident, type MuteRule } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill } from '../components/ui'
+import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill , useToast } from '../components/ui'
 import { BlockDialog } from '../components/BlockDialog'
 import { MuteDialog } from '../components/MuteDialog'
 import { SegmentedControl } from '../components/RangeControl'
@@ -11,6 +11,7 @@ import { PageTitle } from '../components/PageTitle'
 import { useDeviceIndex } from '../lib/links'
 import { useUrlState } from '../lib/useUrlState'
 import { formatTime } from '../lib/format'
+import { humanError } from '../components/humanError'
 
 // What Skopos noticed, grouped into episodes, and whether it has been dealt
 // with.
@@ -83,6 +84,7 @@ function Incidents({
     pollMs: 5000,
     onUnauthorized,
   })
+  const toast = useToast()
   const index = useDeviceIndex(onUnauthorized)
   const [muteFor, setMuteFor] = useState<Incident | null>(null)
   const [blockFor, setBlockFor] = useState<Incident | null>(null)
@@ -90,8 +92,13 @@ function Incidents({
   const incidents = data?.incidents ?? []
 
   const ack = async (id: number) => {
-    await api.post(`/api/incidents/${id}/ack`)
-    refresh()
+    try {
+      await api.post(`/api/incidents/${id}/ack`)
+    } catch (e) {
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   return (
@@ -214,14 +221,20 @@ function Events({
     pollMs: 5000,
     onUnauthorized,
   })
+  const toast = useToast()
   const index = useDeviceIndex(onUnauthorized)
   const [blockFor, setBlockFor] = useState<Alert | null>(null)
 
   const alerts = data?.alerts ?? []
 
   const ack = async (id: number) => {
-    await api.post(`/api/alerts/${id}/ack`)
-    refresh()
+    try {
+      await api.post(`/api/alerts/${id}/ack`)
+    } catch (e) {
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   return (
@@ -311,12 +324,18 @@ function Events({
 // MuteRules lists and removes the active suppression rules.
 function MuteRules({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, refresh } = useFetch<{ rules: MuteRule[] | null }>('/api/mutes', { pollMs: 30000, onUnauthorized })
+  const toast = useToast()
   const rules = data?.rules ?? []
   if (rules.length === 0) return null
 
   const remove = async (id: number) => {
-    await api.del(`/api/mutes/${id}`)
-    refresh()
+    try {
+      await api.del(`/api/mutes/${id}`)
+    } catch (e) {
+      toast.show({ message: humanError(e), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   return (

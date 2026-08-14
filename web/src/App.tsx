@@ -17,6 +17,7 @@ import { Cloudflare } from './views/Cloudflare'
 import { Settings } from './views/Settings'
 import { System } from './views/System'
 import { NotFound } from './views/NotFound'
+import { ToastHost } from './components/ui'
 
 type AuthState = 'loading' | 'authenticated' | 'anonymous'
 
@@ -70,6 +71,10 @@ export default function App() {
   // address.
   return (
     <BrowserRouter>
+      {/* Mounted once, above the routes, so an outcome survives the navigation
+          that caused it — acknowledging an alert moves you off the page whose
+          toast would otherwise unmount with it. */}
+      <ToastHost />
       <Routes>
         <Route element={<Layout me={me} onLogout={logout} onUnauthorized={onUnauthorized} />}>
           <Route index element={<Now onUnauthorized={onUnauthorized} />} />

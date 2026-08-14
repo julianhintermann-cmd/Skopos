@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useFetch } from '../lib/useFetch'
 import { api, countryFlag, countryName, type BlocksResponse, type GeoIPSummary } from '../lib/api'
-import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput } from '../components/ui'
+import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput , useToast } from '../components/ui'
 import { SegmentedControl } from '../components/RangeControl'
 import { EntityLink } from '../components/entity'
 import { PageTitle } from '../components/PageTitle'
@@ -9,6 +9,7 @@ import { Th, Td } from './Devices'
 import { useDeviceIndex, type DeviceIndex } from '../lib/links'
 import { useUrlState } from '../lib/useUrlState'
 import { formatCount, formatRelative, formatTime } from '../lib/format'
+import { humanError } from '../components/humanError'
 
 // blockName resolves a blocked prefix to a device name when it is a single
 // host that the inventory knows (strip the /32 or /128 the API normalises to).
@@ -26,6 +27,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
     pollMs: 5000,
     onUnauthorized,
   })
+  const toast = useToast()
   const [prefix, setPrefix] = useState('')
   const [reason, setReason] = useState('')
   const [ttl, setTtl] = useState('')
@@ -51,9 +53,20 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
     }
   }
 
+  // Every outcome is said out loud. This await used to stand bare, unlike the
+  // block path directly above it, so a 409 carrying "the block is still in
+  // place" became an unhandled rejection: the row vanished from nothing, the
+  // list refreshed, and the operator walked away believing an address was
+  // unblocked that the kernel was still dropping.
   const unblock = async (p: string) => {
-    await api.del(`/api/blocks?prefix=${encodeURIComponent(p)}`)
-    refresh()
+    try {
+      await api.del(`/api/blocks?prefix=${encodeURIComponent(p)}`)
+      toast.show({ message: `${p} is no longer blocked.`, tone: 'ok' })
+    } catch (e) {
+      toast.show({ message: humanError(e, 'unblock'), tone: 'crit', ttlMs: 9000 })
+    } finally {
+      refresh()
+    }
   }
 
   const observing = data?.enforcement === 'observe'

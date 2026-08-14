@@ -298,8 +298,8 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                       and said nothing about the kernel. What is recorded and
                       what is held are two separate claims, and only the second
                       one carries a timestamp. */}
-                  {blocks.length} recorded{' '}
-                  <KernelStatusLine state={kernel} prefix="· kernel:" />
+                  {blocks.length} recorded ·{' '}
+                  <KernelStatusLine state={kernel} prefix="kernel:" />
                   {mode === 'enforce' && (
                     <>
                       {' '}
@@ -413,7 +413,10 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
       )}
 
       <ConfirmDialog
-        open={bulkOpen}
+        // A selection can empty itself under a poll — rows expire, and another
+        // operator can lift a block from a second browser. Confirming an empty
+        // selection would act on nothing while reading as if it acted.
+        open={bulkOpen && sel.count > 0}
         title={`Unblock ${sel.count} ${sel.count === 1 ? 'address' : 'addresses'}?`}
         lead={
           recordedOnly(mode)

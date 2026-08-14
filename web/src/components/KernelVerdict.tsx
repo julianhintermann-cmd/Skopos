@@ -95,8 +95,7 @@ export function kernelWords(k: EnforcementState | undefined, nowMs: number): Ker
         // evidence would be a reading that never happened.
         when: 'The kernel is not read back in observe mode — there is nothing to read back.',
         whenShort: 'nothing to verify',
-        detail:
-          'Set firewall.enforcement: enforce in config.yaml and restart Skopos to make these blocks real.',
+        detail: 'Switch enforcement to enforce in Settings to make these blocks real.',
       }
     case 'enforcing':
       return {
@@ -156,7 +155,9 @@ export function kernelWords(k: EnforcementState | undefined, nowMs: number): Ker
           ? `Last read back ${rel}, at ${at}. A reading stops counting as evidence after ${staleMinutes} minutes.`
           : 'The kernel has never been read back.',
         whenShort: checked,
-        detail: `Skopos re-reads the kernel every ${verifyMinutes} minutes; three misses in a row look like this.`,
+        detail: rel
+          ? `Skopos re-reads the kernel every ${verifyMinutes} minutes; three misses in a row look like this.`
+          : `Skopos re-reads the kernel every ${verifyMinutes} minutes. If this does not change, the check is not running.`,
         at,
       }
   }
@@ -228,10 +229,8 @@ export function KernelStatusLine({ state, prefix }: { state: EnforcementState | 
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-1.5" title={w.sentence}>
       <span className={`inline-block h-1.5 w-1.5 shrink-0 self-center rounded-full ${toneFill[w.tone]}`} aria-hidden />
-      <span className={`text-xs font-medium ${toneText[w.tone]}`}>
-        {prefix ? `${prefix} ` : ''}
-        {w.label}
-      </span>
+      {prefix && <span className="text-xs text-fg-muted">{prefix}</span>}
+      <span className={`text-xs font-medium ${toneText[w.tone]}`}>{w.label}</span>
       <span className="text-xs text-fg-muted" title={w.at}>
         · {w.whenShort}
       </span>

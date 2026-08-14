@@ -18,13 +18,19 @@ const RAIL = '(min-width: 768px) and (max-width: 1023px) and (min-height: 481px)
 // NARROW is a different question from either of the above, and it is asked by
 // a view rather than by the shell: is there room for a wide table?
 //
-// Devices' table measures 994px with its controls at the 24px WCAG floor and
+// Devices' table measures 1007px with its controls at the 24px WCAG floor and
 // 1107 once a touch screen grows them to 44. The rail gives it 678px at iPad
 // portrait — 39% of every row past the right edge, and inside that 39% are
 // wake, forget and details. ScrollArea makes that clipping honest; it does not
-// make it reachable with a thumb. Below the width where the table genuinely
-// fits, the card layout is the answer, so nothing is hidden at all.
-const NARROW = '(max-width: 1279px)'
+// make it reachable with a thumb. Where the table does not genuinely fit, the
+// card layout is the answer, and nothing is hidden at all.
+//
+// The pointer clause is not a width heuristic in disguise: a coarse pointer is
+// the direct cause of both halves of the problem. It grows every control by
+// 20px, which is what pushes the table past its column, and it paints no
+// scrollbar, which is what made the overflow invisible. A 1280px tablet has
+// the width and still cannot use the table.
+const NARROW = '(max-width: 1279px), (pointer: coarse)'
 
 export type Tier = 'phone' | 'rail' | 'wide'
 

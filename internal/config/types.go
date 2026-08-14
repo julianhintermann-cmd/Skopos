@@ -65,33 +65,32 @@ type Network struct {
 
 // Storage configures data locations and retention.
 type Storage struct {
-	// Hot is the fast storage path (SSD): SQLite database, runtime state
-	// and the spool buffer. Mount this on your SSD volume.
+	// Hot is the fast storage path (SSD): SQLite database and runtime
+	// state. Mount this on your SSD volume.
 	Hot string `yaml:"hot" json:"hot,omitempty"`
 
-	// Cold is the archive path (HDD or NAS share): Parquet flow archives,
-	// rotated logs, alert archive and database backups. Skopos keeps
-	// working when this path is temporarily unavailable and spools to hot
-	// storage instead.
+	// Cold is the archive path (HDD or NAS share) for the daily database
+	// backup. Skopos keeps running when this path is unavailable; the
+	// backup is skipped and reported.
 	Cold string `yaml:"cold" json:"cold,omitempty"`
 
-	// HotMaxSize caps total hot-storage usage (database plus spool). When
-	// the cap is reached the oldest raw flows are dropped first; aggregated
-	// rollups are kept.
+	// HotMaxSize caps hot-storage usage. When the cap is reached the oldest
+	// raw flows are deleted first; aggregated rollups are kept.
 	HotMaxSize Size `yaml:"hot_max_size" json:"hot_max_size,omitzero"`
 
-	// SpoolMaxSize caps the spool buffer used while cold storage is
-	// unreachable. When the spool is full, the oldest spooled archives are
-	// dropped and a system notification is sent.
+	// SpoolMaxSize is reserved for a spool buffer that does not exist yet.
+	// It is accepted so existing configuration files keep loading, and has
+	// no effect. Nothing is spooled today.
 	SpoolMaxSize Size `yaml:"spool_max_size" json:"spool_max_size,omitzero"`
 
 	// Retention controls how long each data resolution is kept on hot
-	// storage before deletion (raw flows are archived to cold first).
+	// storage before it is deleted.
 	Retention Retention `yaml:"retention" json:"retention,omitzero"`
 
-	// ArchiveAt is the local time of day at which raw flows older than the
-	// retention window are exported to cold storage. Missed runs are
-	// caught up at the next start.
+	// ArchiveAt is reserved for an export-to-cold job that does not exist
+	// yet. It is accepted so existing configuration files keep loading, and
+	// has no effect. Raw flows past their retention are deleted, not
+	// exported; the daily backup is the durable copy.
 	ArchiveAt ClockTime `yaml:"archive_at" json:"archive_at,omitzero"`
 
 	// Backup configures the daily SQLite online backup to cold storage.
@@ -101,7 +100,7 @@ type Storage struct {
 // Retention controls per-resolution lifetimes on hot storage.
 type Retention struct {
 	// RawFlows is how long individual flow records stay in the database
-	// before being archived to cold storage as Parquet and deleted.
+	// before they are deleted. The rollups outlive them.
 	RawFlows Duration `yaml:"raw_flows" json:"raw_flows,omitzero"`
 
 	// Rollup1m is how long 1-minute aggregates are kept.

@@ -242,6 +242,12 @@ func (f *Feeds) Observe(p flow.Packet) {
 		f.firedMu.Unlock()
 		return
 	}
+	if len(f.fired) >= maxTrackedSources {
+		// Drop the whole memo rather than grow without bound: the worst case
+		// is one repeated alert per source, which the policy cooldown then
+		// absorbs anyway.
+		f.fired = make(map[netip.Addr]time.Time, maxTrackedSources)
+	}
 	f.fired[peer] = now
 	f.firedMu.Unlock()
 

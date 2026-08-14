@@ -66,6 +66,65 @@ func primaryInterface() string {
 	return ""
 }
 
+// localIPv6Prefixes returns the on-link global IPv6 prefixes this machine
+// holds.
+//
+// "Internal" is decided against network.private_ranges, whose defaults cover
+// RFC1918, ULA and link-local — everything except the case most home networks
+// actually run. An ISP that delegates a prefix gives every device a real
+// global address, and Skopos then read its own LAN as the internet: the
+// blocklist detector picked the wrong end of the flow, the country detector
+// could not see an attack on a device's own address, port-scan and rate
+// thresholds applied the strict external numbers to ordinary local traffic,
+// and the behavioural baseline never learned anything for a device that
+// speaks IPv6 by preference. Nothing in the shipped configuration told the
+// operator to add their prefix, and most could not name it if asked, so it is
+// discovered instead.
+func localIPv6Prefixes() []netip.Prefix {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	seen := map[string]bool{}
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			addr, ok := netip.AddrFromSlice(ipn.IP)
+			if !ok || !addr.Is6() || addr.Is4In6() {
+				continue
+			}
+			// Only genuinely global addresses: link-local and ULA are already
+			// covered by the shipped defaults.
+			if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLinkLocalUnicast() {
+				continue
+			}
+			ones, _ := ipn.Mask.Size()
+			if ones <= 0 || ones > 64 {
+				// A /128 says nothing about the neighbours; take the /64 the
+				// address sits in, which is what SLAAC hands out.
+				ones = 64
+			}
+			p := netip.PrefixFrom(addr, ones).Masked()
+			if !seen[p.String()] {
+				seen[p.String()] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
 // resolveGateways returns every default-route gateway, both families.
 //
 // The IPv6 one matters more than it looks: on a dual-stack home LAN the v6

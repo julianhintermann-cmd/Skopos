@@ -10,16 +10,16 @@ Skopos is configured by a single YAML file (default `/config/config.yaml`, overr
 | **`network`** | object | | Network groups address-classification settings shared by capture, detection and the firewall. |
 | `network.private_ranges` | list of string | `[10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, fc00::/7, fe80::/10]` | PrivateRanges are the CIDR ranges treated as "internal" when classifying traffic (LAN↔WAN, LAN↔LAN) and choosing block behaviour. Defaults to RFC 1918, IPv6 ULA and link-local ranges. |
 | **`storage`** | object | | Storage configures the hot (SSD) and cold (HDD/NAS) data paths and how long data is retained at each resolution. |
-| `storage.hot` | string | `/data` | Hot is the fast storage path (SSD): SQLite database, runtime state and the spool buffer. Mount this on your SSD volume. |
-| `storage.cold` | string | `/archive` | Cold is the archive path (HDD or NAS share): Parquet flow archives, rotated logs, alert archive and database backups. Skopos keeps working when this path is temporarily unavailable and spools to hot storage instead. |
-| `storage.hot_max_size` | string | `5GiB` | HotMaxSize caps total hot-storage usage (database plus spool). When the cap is reached the oldest raw flows are dropped first; aggregated rollups are kept. |
-| `storage.spool_max_size` | string | `2GiB` | SpoolMaxSize caps the spool buffer used while cold storage is unreachable. When the spool is full, the oldest spooled archives are dropped and a system notification is sent. |
-| **`storage.retention`** | object | | Retention controls how long each data resolution is kept on hot storage before deletion (raw flows are archived to cold first). |
-| `storage.retention.raw_flows` | string | `7d` | RawFlows is how long individual flow records stay in the database before being archived to cold storage as Parquet and deleted. |
+| `storage.hot` | string | `/data` | Hot is the fast storage path (SSD): SQLite database and runtime state. Mount this on your SSD volume. |
+| `storage.cold` | string | `/archive` | Cold is the archive path (HDD or NAS share) for the daily database backup. Skopos keeps running when this path is unavailable; the backup is skipped and reported. |
+| `storage.hot_max_size` | string | `5GiB` | HotMaxSize caps hot-storage usage. When the cap is reached the oldest raw flows are deleted first; aggregated rollups are kept. |
+| `storage.spool_max_size` | string | `2GiB` | SpoolMaxSize is reserved for a spool buffer that does not exist yet. It is accepted so existing configuration files keep loading, and has no effect. Nothing is spooled today. |
+| **`storage.retention`** | object | | Retention controls how long each data resolution is kept on hot storage before it is deleted. |
+| `storage.retention.raw_flows` | string | `7d` | RawFlows is how long individual flow records stay in the database before they are deleted. The rollups outlive them. |
 | `storage.retention.rollup_1m` | string | `90d` | Rollup1m is how long 1-minute aggregates are kept. |
 | `storage.retention.rollup_1h` | string | `730d` | Rollup1h is how long 1-hour aggregates are kept. |
 | `storage.retention.rollup_1d` | string |  | Rollup1d is how long daily aggregates are kept. "0" keeps them forever. |
-| `storage.archive_at` | string | `03:00` | ArchiveAt is the local time of day at which raw flows older than the retention window are exported to cold storage. Missed runs are caught up at the next start. |
+| `storage.archive_at` | string | `03:00` | ArchiveAt is reserved for an export-to-cold job that does not exist yet. It is accepted so existing configuration files keep loading, and has no effect. Raw flows past their retention are deleted, not exported; the daily backup is the durable copy. |
 | **`storage.backup`** | object | | Backup configures the daily SQLite online backup to cold storage. |
 | `storage.backup.enabled` | boolean | `true` | Enabled turns the daily database backup to cold storage on or off. |
 | `storage.backup.keep` | integer | `14` | Keep is the number of backup generations retained on cold storage. |

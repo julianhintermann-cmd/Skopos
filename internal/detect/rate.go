@@ -126,16 +126,20 @@ func (d *Rate) Observe(p flow.Packet) {
 
 	st := d.sources[p.SrcIP]
 	if st == nil {
+		if len(d.sources) >= maxTrackedSources {
+			return
+		}
 		st = &rateState{}
 		d.sources[p.SrcIP] = st
 	}
 	packets := st.packets.add(now, d.cfg.Window, 1)
-	conns := st.conns.total
+	// Adding zero still slides the window, so a source that stops opening
+	// connections stops counting as if it had.
+	newConn := 0
 	if p.Proto == model.ProtoTCP && p.SYN {
-		conns = st.conns.add(now, d.cfg.Window, 1)
-	} else {
-		conns = st.conns.add(now, d.cfg.Window, 0)
+		newConn = 1
 	}
+	conns := st.conns.add(now, d.cfg.Window, newConn)
 
 	if !st.firedAt.IsZero() && now.Sub(st.firedAt) < d.cfg.Window {
 		return

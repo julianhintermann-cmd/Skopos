@@ -112,7 +112,7 @@ Skopos keeps two independent volumes, both fully configurable:
 | Volume | Mount | Put it on | Holds |
 | ------ | ----- | --------- | ----- |
 | **Hot** | `/data` | SSD (fast, small) | SQLite database, runtime state, spool buffer. Capped (`storage.hot_max_size`, default 5 GiB) — oldest raw flows are dropped first, aggregates kept. |
-| **Cold** | `/archive` | HDD / NAS share (large, cheap) | Parquet flow archives, rotated logs, alert archive, daily database backups. If it goes offline, Skopos spools to hot storage and writes through later — capture never stops. |
+| **Cold** | `/archive` | HDD / NAS share (large, cheap) | Daily database backups. If it goes offline the backup is skipped and Skopos says so; capture never stops. |
 
 ## Configuration
 
@@ -167,7 +167,7 @@ revoke the token from Cloudflare at any time.
 interfaces → capture (AF_PACKET) → flow aggregator ┬→ detectors → policy ┬→ ntfy / webhook
                                           │         │                     └→ nftables (inet skopos)
                                           │         └→ live stream ────────→ SSE → Live view
-                                          └→ SQLite (hot) → Parquet archive (cold)
+                                          └→ SQLite (hot) → daily backup (cold)
                                                      ↑
                                             REST + SSE API → React dashboard (embedded)
                                                      ↑
@@ -182,7 +182,7 @@ view; throughput is pushed once a second so open dashboards never busy-poll.
 
 - **Backend:** Go (native AF_PACKET capture and nftables via netlink; a small,
   static, multi-arch image).
-- **Storage:** SQLite (WAL) with rollup tables on hot storage; Parquet archives
+- **Storage:** SQLite (WAL) with rollup tables on hot storage; daily backups
   on cold.
 - **Frontend:** React + TypeScript + Vite, uPlot for time series.
 - **Images:** `linux/amd64` and `linux/arm64`, on GHCR and Docker Hub.

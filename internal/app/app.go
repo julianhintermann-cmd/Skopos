@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -104,7 +105,17 @@ func (a *App) Run(ctx context.Context) error {
 		geo = gm
 	}
 
-	classifier := flow.NewClassifier(a.cfg.Network.PrivateRanges)
+	// The configured private ranges cover RFC1918, ULA and link-local. On a
+	// network with an ISP-delegated IPv6 prefix that leaves every local
+	// device looking external, so the on-link global prefixes are discovered
+	// and added. Anything explicitly configured still wins by being in the
+	// same list.
+	privateRanges := append([]string(nil), a.cfg.Network.PrivateRanges...)
+	for _, p := range localIPv6Prefixes() {
+		privateRanges = append(privateRanges, p.String())
+		a.log.Info("treating the on-link IPv6 prefix as internal", "prefix", p)
+	}
+	classifier := flow.NewClassifier(privateRanges)
 
 	// --- notification ------------------------------------------------------
 	dispatcher := notify.FromConfig(a.cfg)
@@ -346,10 +357,24 @@ func (a *App) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// A panic in any one loop used to take the whole process with it: the
+	// monitor, the firewall, the dashboard and the API all stop together, and
+	// if the trigger is a recurring traffic pattern it does so again on every
+	// restart. Each loop is contained instead, and says loudly what happened —
+	// losing one subsystem is bad, losing all of them silently is worse.
 	spawn := func(name string, fn func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					a.log.Error("subsystem panicked and stopped",
+						"subsystem", name, "panic", r, "stack", string(debug.Stack()))
+					dispatcher.System(context.WithoutCancel(runCtx), model.SeverityCritical,
+						"Skopos subsystem stopped: "+name,
+						fmt.Sprintf("%s panicked and is no longer running: %v. Restart Skopos to recover it.", name, r))
+				}
+			}()
 			fn()
 		}()
 	}
@@ -359,7 +384,18 @@ func (a *App) Run(ctx context.Context) error {
 	// database write, the notification and the netlink call on the goroutine
 	// that is supposed to be reading packets off the wire.
 	spawn("policy", func() { pol.Run(runCtx) })
-	spawn("aggregator", func() { _ = agg.Run(runCtx) })
+	spawn("aggregator", func() {
+		// The aggregator writing flows is what "monitoring" means here. If it
+		// stops, the detectors keep alerting from the pre-aggregation stream
+		// and everything looks alive while the history quietly stops being
+		// recorded — so a write failure is worth saying out loud.
+		if err := agg.Run(runCtx); err != nil && runCtx.Err() == nil {
+			a.log.Error("flow aggregator stopped", "err", err)
+			dispatcher.System(context.WithoutCancel(runCtx), model.SeverityCritical,
+				"Skopos stopped recording traffic",
+				"The flow aggregator stopped: "+err.Error()+". Alerts still work, but nothing is being written to history.")
+		}
+	})
 	spawn("firewall-expiry", func() { fw.ExpireLoop(runCtx, time.Minute) })
 	spawn("country-enforcer", func() { countryEnf.run(runCtx) })
 	if a.cfg.Updates.Check {

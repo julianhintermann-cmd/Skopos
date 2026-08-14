@@ -27,28 +27,28 @@
       "properties": {
         "hot": {
           "type": "string",
-          "description": "Hot is the fast storage path (SSD): SQLite database, runtime state\nand the spool buffer. Mount this on your SSD volume."
+          "description": "Hot is the fast storage path (SSD): SQLite database and runtime\nstate. Mount this on your SSD volume."
         },
         "cold": {
           "type": "string",
-          "description": "Cold is the archive path (HDD or NAS share): Parquet flow archives,\nrotated logs, alert archive and database backups. Skopos keeps\nworking when this path is temporarily unavailable and spools to hot\nstorage instead."
+          "description": "Cold is the archive path (HDD or NAS share) for the daily database\nbackup. Skopos keeps running when this path is unavailable; the\nbackup is skipped and reported."
         },
         "hot_max_size": {
           "type": "string",
           "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
-          "description": "HotMaxSize caps total hot-storage usage (database plus spool). When\nthe cap is reached the oldest raw flows are dropped first; aggregated\nrollups are kept."
+          "description": "HotMaxSize caps hot-storage usage. When the cap is reached the oldest\nraw flows are deleted first; aggregated rollups are kept."
         },
         "spool_max_size": {
           "type": "string",
           "pattern": "^\\d+(\\.\\d+)?\\s*([KMGT]i?B|B)?$",
-          "description": "SpoolMaxSize caps the spool buffer used while cold storage is\nunreachable. When the spool is full, the oldest spooled archives are\ndropped and a system notification is sent."
+          "description": "SpoolMaxSize is reserved for a spool buffer that does not exist yet.\nIt is accepted so existing configuration files keep loading, and has\nno effect. Nothing is spooled today."
         },
         "retention": {
           "properties": {
             "raw_flows": {
               "type": "string",
               "pattern": "^(0|\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h|d))+$",
-              "description": "RawFlows is how long individual flow records stay in the database\nbefore being archived to cold storage as Parquet and deleted."
+              "description": "RawFlows is how long individual flow records stay in the database\nbefore they are deleted. The rollups outlive them."
             },
             "rollup_1m": {
               "type": "string",
@@ -68,12 +68,12 @@
           },
           "additionalProperties": false,
           "type": "object",
-          "description": "Retention controls how long each data resolution is kept on hot\nstorage before deletion (raw flows are archived to cold first)."
+          "description": "Retention controls how long each data resolution is kept on hot\nstorage before it is deleted."
         },
         "archive_at": {
           "type": "string",
           "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-          "description": "ArchiveAt is the local time of day at which raw flows older than the\nretention window are exported to cold storage. Missed runs are\ncaught up at the next start."
+          "description": "ArchiveAt is reserved for an export-to-cold job that does not exist\nyet. It is accepted so existing configuration files keep loading, and\nhas no effect. Raw flows past their retention are deleted, not\nexported; the daily backup is the durable copy."
         },
         "backup": {
           "properties": {

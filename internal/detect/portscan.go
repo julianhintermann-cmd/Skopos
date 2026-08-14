@@ -107,6 +107,9 @@ func (d *Portscan) Observe(p flow.Packet) {
 
 	st := d.sources[p.SrcIP]
 	if st == nil {
+		if len(d.sources) >= maxTrackedSources {
+			return
+		}
 		st = &scanState{}
 		d.sources[p.SrcIP] = st
 	}

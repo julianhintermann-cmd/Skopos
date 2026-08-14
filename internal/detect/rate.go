@@ -34,7 +34,10 @@ type rateState struct {
 	conns   rateWindow // new connection attempts
 	packets rateWindow // every packet
 	firedAt time.Time
+	last    time.Time // when this source was last heard from
 }
+
+func (s *rateState) seenAt() time.Time { return s.last }
 
 // rateBuckets is how finely the sliding window is divided. Twelve gives a
 // window edge that moves in steps of a twelfth of the window — smooth enough
@@ -126,12 +129,13 @@ func (d *Rate) Observe(p flow.Packet) {
 
 	st := d.sources[p.SrcIP]
 	if st == nil {
-		if len(d.sources) >= maxTrackedSources {
+		if !makeRoom(d.sources, now, d.cfg.Window) {
 			return
 		}
 		st = &rateState{}
 		d.sources[p.SrcIP] = st
 	}
+	st.last = now
 	packets := st.packets.add(now, d.cfg.Window, 1)
 	// Adding zero still slides the window, so a source that stops opening
 	// connections stops counting as if it had.

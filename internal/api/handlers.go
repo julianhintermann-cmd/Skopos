@@ -388,9 +388,13 @@ func (s *Server) handleAddBlock(w http.ResponseWriter, r *http.Request) {
 			" — remove it from the allowlist in Settings first if you really mean it")
 		return
 	case errors.Is(err, firewall.ErrWholeFamily):
+		// Deliberately says what it refuses, not what it guarantees: two
+		// halves of the address space blocked separately add up to the same
+		// thing, and neither half trips this. Promising an invariant that a
+		// second click defeats would be its own small untruth.
 		writeError(w, http.StatusBadRequest,
-			"refusing to block "+prefix.String()+": that is every address at once, "+
-				"including the one you are reading this from. Block a narrower range.")
+			"refusing to block "+prefix.String()+": a whole address family at once would "+
+				"include the address you are reading this from. Block a narrower range.")
 		return
 	case errors.Is(err, firewall.ErrNotEnforced):
 		// The kernel's own wording ("file exists", "invalid argument") is not

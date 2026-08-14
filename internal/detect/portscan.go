@@ -52,7 +52,10 @@ type attempt struct {
 type scanState struct {
 	attempts []attempt
 	firedAt  time.Time // suppresses re-firing within one window
+	last     time.Time // when this source was last heard from
 }
+
+func (s *scanState) seenAt() time.Time { return s.last }
 
 // SetThresholds swaps the detector's window and trigger counts at runtime.
 // Guarded by the same mutex the packet path already takes, so a change lands
@@ -107,12 +110,13 @@ func (d *Portscan) Observe(p flow.Packet) {
 
 	st := d.sources[p.SrcIP]
 	if st == nil {
-		if len(d.sources) >= maxTrackedSources {
+		if !makeRoom(d.sources, now, d.cfg.Window) {
 			return
 		}
 		st = &scanState{}
 		d.sources[p.SrcIP] = st
 	}
+	st.last = now
 	st.attempts = append(st.attempts, attempt{target: p.DstIP, port: p.DstPort, at: now})
 	if len(st.attempts) > d.maxAttempts {
 		st.attempts = st.attempts[len(st.attempts)-d.maxAttempts:]

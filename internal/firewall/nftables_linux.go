@@ -109,7 +109,12 @@ func (b *nftBackend) Verify(context.Context) error {
 	want := b.ruleCounts
 	b.mu.Unlock()
 	if len(want) == 0 {
-		return nil
+		// Not knowing what the chains should hold is a failure, not a pass.
+		// Treating it as a pass would mean one unlucky read at startup quietly
+		// switched off half of this check for the life of the process — a
+		// fail-open in the one component whose entire job is to be trusted.
+		// Reporting it instead makes the repair path rebuild and re-record.
+		return fmt.Errorf("no recorded rule counts to verify the chains against")
 	}
 	have, err := chainRuleCounts(c, table)
 	if err != nil {
@@ -308,9 +313,11 @@ func (b *nftBackend) EnsureBase(context.Context) error {
 	// all of those live in sets — so a later count is an exact O(1) check that
 	// the chains still hold their rules. Reading it back means the check
 	// cannot drift out of step when the rules here change.
-	if counts, err := chainRuleCounts(c, table); err == nil {
-		b.ruleCounts = counts
+	counts, err := chainRuleCounts(c, table)
+	if err != nil {
+		return err
 	}
+	b.ruleCounts = counts
 	// The LAN ranges are static configuration; load them once here.
 	return b.loadLANRanges()
 }

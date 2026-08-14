@@ -90,6 +90,15 @@ jobs:
       - name: Install
         working-directory: web
         run: npm ci --no-audit --no-fund
-      - name: Build (includes type-check)
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+      - name: Type-check
+        working-directory: web
+        # Explicit, because `tsc --noEmit` here would prove nothing:
+        # tsconfig.json is a solution file with "files": [], so it checks the
+        # empty list and exits 0. `tsc -b` follows the project references.
+        run: npm run typecheck
+      - name: Build
         working-directory: web
         run: npm run build

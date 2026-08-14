@@ -16,13 +16,38 @@ export class APIError extends Error {
   }
 }
 
+// requestTimeoutMs bounds every call. Without it a hung request never settles:
+// fetch has no default timeout, so a NAS that accepts the connection and then
+// stops answering — a saturated single SQLite connection, a container being
+// rebuilt, a Wi-Fi handover — leaves the promise pending forever. Nothing
+// rejects, so nothing marks the data stale, and the dashboard sits there
+// showing numbers from before the trouble started as though they were current.
+// That is the failure this whole release is about, arriving through the one
+// path that reports no error at all.
+//
+// 20s is well past a slow query on a busy NAS and well short of a person
+// deciding the page is broken.
+const requestTimeoutMs = 20_000
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method, headers: {} }
+  const init: RequestInit = { method, headers: {}, signal: AbortSignal.timeout(requestTimeoutMs) }
   if (body !== undefined) {
     ;(init.headers as Record<string, string>)['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
-  const resp = await fetch(path, init)
+  let resp: Response
+  try {
+    resp = await fetch(path, init)
+  } catch (e) {
+    // A timeout arrives as a DOMException whose message is "signal timed out",
+    // which tells a reader nothing about what they were waiting for. Status 0
+    // marks it as "never reached the server", which is the fact the caller has
+    // to branch on: an unanswered request may still have been applied.
+    if (e instanceof DOMException && e.name === 'TimeoutError') {
+      throw new APIError(0, `${path} did not answer within ${requestTimeoutMs / 1000}s`)
+    }
+    throw new APIError(0, e instanceof Error ? e.message : String(e))
+  }
   // 401 carries two different meanings here: "your session is gone, go to the
   // login screen", and login's own "right password, now the one-time code".
   // Reading the body tells them apart. Throwing away the body unread — which

@@ -225,8 +225,17 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
     }
   }, [zoneID, win, onUnauthorized])
 
-  const points = data?.points ?? []
+  const points = useMemo(() => data?.points ?? [], [data])
+
+  // null, not zero, when Cloudflare could not be reached.
+  //
+  // This used to reduce over `data?.points ?? []`, so a failed fetch summed an
+  // empty array and the page stated "Threats 0" — in green, with the subtitle
+  // "blocked at the edge". That is a security claim manufactured out of a
+  // network error: the honest answer is that we do not know, and the only
+  // number that can be reported as zero is one that came back as zero.
   const totals = useMemo(() => {
+    if (!data) return null
     let requests = 0, bytes = 0, cachedReq = 0, threats = 0
     for (const p of points) {
       requests += p.requests
@@ -234,9 +243,13 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
       cachedReq += p.cached_requests
       threats += p.threats
     }
-    const cachePct = requests > 0 ? Math.round((cachedReq / requests) * 100) : 0
+    // A cache hit rate over no requests is not 0%, it is undefined — a
+    // percentage needs a denominator that exists.
+    const cachePct = requests > 0 ? Math.round((cachedReq / requests) * 100) : null
     return { requests, bytes, cachePct, threats }
-  }, [points])
+  }, [data, points])
+
+  const noAnswer = err ? `Cloudflare did not answer: ${err}` : 'waiting for Cloudflare'
 
   return (
     <div className="flex flex-col gap-3">
@@ -245,10 +258,33 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Requests" value={formatCount(totals.requests)} tone="accent" hint={`last ${range}`} />
-        <StatTile label="Data served" value={formatBytes(totals.bytes).split(' ')[0]} unit={formatBytes(totals.bytes).split(' ')[1]} />
-        <StatTile label="Cache hit" value={`${totals.cachePct}`} unit="%" tone={totals.cachePct >= 50 ? 'good' : 'neutral'} />
-        <StatTile label="Threats" value={formatCount(totals.threats)} tone={totals.threats > 0 ? 'crit' : 'good'} hint="blocked at the edge" />
+        <StatTile
+          label="Requests"
+          value={totals ? formatCount(totals.requests) : null}
+          unavailable={noAnswer}
+          tone="accent"
+          hint={`last ${range}`}
+        />
+        <StatTile
+          label="Data served"
+          value={totals ? formatBytes(totals.bytes).split(' ')[0] : null}
+          unit={totals ? formatBytes(totals.bytes).split(' ')[1] : undefined}
+          unavailable={noAnswer}
+        />
+        <StatTile
+          label="Cache hit"
+          value={totals?.cachePct != null ? `${totals.cachePct}` : null}
+          unit="%"
+          unavailable={totals ? 'no requests in this window' : noAnswer}
+          tone={totals?.cachePct != null && totals.cachePct >= 50 ? 'good' : 'neutral'}
+        />
+        <StatTile
+          label="Threats"
+          value={totals ? formatCount(totals.threats) : null}
+          unavailable={noAnswer}
+          tone={totals && totals.threats > 0 ? 'crit' : 'neutral'}
+          hint="blocked at the edge"
+        />
       </div>
 
       <Card>

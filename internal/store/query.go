@@ -46,6 +46,44 @@ func ChooseResolution(span time.Duration) Resolution {
 	}
 }
 
+// coarseness orders the resolutions so a requested one can be compared with
+// the one the span actually warrants.
+func (r Resolution) coarseness() int {
+	switch r {
+	case Res1h:
+		return 1
+	case Res1d:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// ClampResolution honours a caller's requested resolution but never lets it be
+// finer than the span warrants.
+//
+// Without this, one query parameter turned a 0.3 ms request into a 45 second
+// one: asking for minute buckets over ninety days makes SQLite spill twenty-
+// three million rows through two temporary B-trees. Every query in this
+// process shares a single database connection, so that request also blocks the
+// flow writer and every other page for its whole duration — and with
+// authentication off and the port forwarded, anyone can send it, repeatedly.
+// A coarser resolution than the span warrants is harmless and stays allowed.
+func ClampResolution(requested Resolution, span time.Duration) Resolution {
+	auto := ChooseResolution(span)
+	switch requested {
+	case Res1m, Res1h, Res1d:
+		if requested.coarseness() < auto.coarseness() {
+			return auto
+		}
+		return requested
+	default:
+		// Anything we do not recognise falls back to the span's own answer
+		// rather than travelling on to fail deeper in as an unknown table.
+		return auto
+	}
+}
+
 // TimePoint is one bucket of a throughput series.
 type TimePoint struct {
 	Time    time.Time `json:"time"`

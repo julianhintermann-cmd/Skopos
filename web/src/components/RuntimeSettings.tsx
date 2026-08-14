@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
-import { api, type SettingsResponse, type RuntimeSettings as RS } from '../lib/api'
+import { api, type BlocksResponse, type SettingsResponse, type RuntimeSettings as RS } from '../lib/api'
 import { Card, CardHeader, Button, Pill, TextInput, Spinner } from './ui'
 
 // ns converts a Go duration (nanoseconds on the wire) to a human string, and
@@ -18,6 +18,11 @@ function toDurationString(ns: number): string {
 // operator can drop again with "Reset to config.yaml".
 export function RuntimeSettings({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { data, loading, refresh } = useFetch<SettingsResponse>('/api/settings', { onUnauthorized })
+  // Enforcement state has to come from the firewall, not from the string in
+  // the settings payload. Reading the config back to itself meant this card
+  // could show a green "enforce" pill while the Firewall view showed the
+  // degraded banner — the app contradicting itself about the same fact.
+  const blocks = useFetch<BlocksResponse>('/api/blocks', { pollMs: 15000, onUnauthorized })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -60,7 +65,8 @@ export function RuntimeSettings({ onUnauthorized, canWrite }: { onUnauthorized: 
   }
   if (!eff) return null
 
-  const enforcing = eff.enforcement === 'enforce'
+  const enforcing = blocks.data?.enforcing ?? false
+  const kernel = blocks.data?.kernel
 
   return (
     <Card>
@@ -110,6 +116,14 @@ export function RuntimeSettings({ onUnauthorized, canWrite }: { onUnauthorized: 
           <Pill tone={enforcing ? 'good' : 'warn'}>{eff.enforcement}</Pill>
         )}
       </Row>
+
+      {eff.enforcement === 'enforce' && kernel && !kernel.ok && (
+        <div className="px-4 pb-3 text-sm" style={{ color: 'var(--warn)' }}>
+          Set to enforce, but the kernel does not currently hold the rules
+          {kernel.failing_since ? ` (since ${new Date(kernel.failing_since).toLocaleString()})` : ''}
+          {kernel.error ? `: ${kernel.error}` : '.'} Skopos keeps retrying.
+        </div>
+      )}
 
       <DurationRow
         label="Automatic block lifetime"

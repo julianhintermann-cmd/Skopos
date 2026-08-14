@@ -161,6 +161,21 @@ export interface BlocksResponse {
   // Prefixes that can never be blocked: the operator's allowlist plus the
   // default gateway. A block form should say so before the operator commits.
   protected?: string[] | null
+  // What the kernel was last actually found to hold, as opposed to what the
+  // configuration intends. Absent from older servers.
+  kernel?: KernelHealth
+}
+
+// KernelHealth is the result of reading the firewall back out of the kernel.
+// "wanted" is the setting; "ok" is what was found. Keeping them apart is the
+// point: a green pill sourced from a config file says nothing about whether
+// anything is being dropped.
+export interface KernelHealth {
+  wanted: boolean
+  ok: boolean
+  checked_at?: string
+  failing_since?: string
+  error?: string
 }
 
 // networkPrefix widens an address to the network an operator would think of

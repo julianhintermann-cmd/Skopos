@@ -314,30 +314,146 @@ func (s *Service) Verify(ctx context.Context) error {
 		return nil
 	}
 
-	err := s.backend.Verify(ctx)
+	err := s.checkKernel(ctx)
 	if err == nil {
 		s.recordHealth(true, nil)
 		return nil
 	}
 
-	// Rebuild rather than merely complain: the desired state is all in the
-	// store, so recovery is a Restore away and an operator should not have to
-	// notice before their firewall comes back.
+	// Rebuild rather than merely complain: the desired state is all held here
+	// and in the store, so recovery is one pass away and an operator should not
+	// have to notice before their firewall comes back.
 	s.log("firewall: the kernel no longer matches what Skopos programmed (%v) — rebuilding", err)
-	s.cfgMu.Lock()
-	s.baseReady = false
-	s.cfgMu.Unlock()
-	if rerr := s.Restore(ctx); rerr != nil {
+	if rerr := s.reapplyAll(ctx); rerr != nil {
 		s.recordHealth(false, fmt.Errorf("%v; rebuilding it failed too: %w", err, rerr))
 		return fmt.Errorf("firewall verification failed and could not be repaired: %w", rerr)
 	}
-	if verr := s.backend.Verify(ctx); verr != nil {
+	if verr := s.checkKernel(ctx); verr != nil {
 		s.recordHealth(false, fmt.Errorf("%v; still wrong after rebuilding: %w", err, verr))
 		return fmt.Errorf("firewall rebuilt but still does not match: %w", verr)
 	}
 	s.log("firewall: rebuilt and verified")
 	s.recordHealth(true, nil)
 	return nil
+}
+
+// checkKernel asks the backend two separate questions: are the structures
+// there, and do they hold anything.
+//
+// Existence alone is not enough, and getting that wrong would have been
+// especially galling: the 0.2.1 defect left every set in place and emptied the
+// four it should not have touched, so a check that only confirmed the sets
+// exist would have passed straight through the very bug this verification was
+// written for. Comparing exact element counts would be brittle — coalescing
+// merges ranges and interval sets store two elements per range — so the
+// invariant is the one that actually matters: a set Skopos believes it filled
+// must not be empty in the kernel.
+func (s *Service) checkKernel(ctx context.Context) error {
+	if err := s.backend.Verify(ctx); err != nil {
+		return err
+	}
+	want, err := s.expectedNonEmpty(ctx)
+	if err != nil {
+		// Not being able to read the desired state is not evidence the kernel
+		// is wrong, so do not claim it is.
+		return nil
+	}
+	counts, err := s.backend.SetCounts(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the kernel sets: %w", err)
+	}
+	for _, name := range allSets {
+		if want[name] && counts[name] == 0 {
+			return fmt.Errorf("the %s set is empty in the kernel, but Skopos has rules for it", name)
+		}
+	}
+	return nil
+}
+
+// expectedNonEmpty names the sets Skopos believes it has filled.
+func (s *Service) expectedNonEmpty(ctx context.Context) (map[string]bool, error) {
+	blocks, err := s.store.ActiveBlocks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for name := range coalesceRules(s.rulesFor(blocks)) {
+		want[name] = true
+	}
+
+	s.cfgMu.RLock()
+	protected := append([]netip.Prefix(nil), s.cfg.Protected...)
+	s.cfgMu.RUnlock()
+	for _, p := range protected {
+		if p.IsValid() && p.Bits() > 0 {
+			want[pick(p.Addr().Is6(), setProtected6, setProtected4)] = true
+		}
+	}
+
+	s.countryMu.Lock()
+	countries := append([]netip.Prefix(nil), s.countryPrefixes...)
+	devices := append([]DeviceRule(nil), s.devicePolicies...)
+	s.countryMu.Unlock()
+	for _, p := range countries {
+		if p.IsValid() && p.Bits() > 0 {
+			want[pick(p.Addr().Is6(), setCountry6, setCountry4)] = true
+		}
+	}
+	for _, d := range devices {
+		if !d.Addr.IsValid() {
+			continue
+		}
+		if d.Policy == DeviceLANOnly {
+			want[pick(d.Addr.Is6(), setDevLANOnly6, setDevLANOnly4)] = true
+			continue
+		}
+		want[pick(d.Addr.Is6(), setDevQuar6, setDevQuar4)] = true
+	}
+	return want, nil
+}
+
+func pick(v6 bool, yes, no string) string {
+	if v6 {
+		return yes
+	}
+	return no
+}
+
+// reapplyAll rebuilds the whole ruleset from the desired state.
+//
+// It exists because Restore does not cover everything: Restore programs the
+// base, the never-block set and the blocks, while the country prefixes and the
+// per-device policies are only ever pushed by SetEnforce and their own loops.
+// Repairing with Restore alone therefore came back up with country blocking
+// and every device quarantine switched off — and then reported success, which
+// is the same silent-hole shape this whole verification exists to close.
+func (s *Service) reapplyAll(ctx context.Context) error {
+	if err := s.backend.EnsureBase(ctx); err != nil {
+		return fmt.Errorf("rebuilding the base ruleset: %w", err)
+	}
+	s.cfgMu.Lock()
+	s.baseReady = true
+	protected := append([]netip.Prefix(nil), s.cfg.Protected...)
+	s.cfgMu.Unlock()
+
+	s.countryMu.Lock()
+	countries := append([]netip.Prefix(nil), s.countryPrefixes...)
+	devices := append([]DeviceRule(nil), s.devicePolicies...)
+	s.countryMu.Unlock()
+
+	s.mu.Lock()
+	err := s.backend.ReconcileProtected(ctx, protected)
+	if err == nil {
+		err = s.backend.ReconcileDevices(ctx, devices)
+	}
+	if err == nil {
+		err = s.backend.ReconcileCountry(ctx, countries)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.Reconcile(ctx)
 }
 
 // Enforcing reports whether rules are actually being applied: enforce mode is

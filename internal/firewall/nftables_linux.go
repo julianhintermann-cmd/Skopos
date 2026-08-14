@@ -99,6 +99,37 @@ func (b *nftBackend) Verify(context.Context) error {
 	return nil
 }
 
+// SetCounts reports how many elements each of Skopos's sets currently holds.
+func (b *nftBackend) SetCounts(context.Context) (map[string]int, error) {
+	c, err := nftables.New()
+	if err != nil {
+		return nil, err
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tables {
+		if t.Name != tableName || t.Family != nftables.TableFamilyINet {
+			continue
+		}
+		out := make(map[string]int, len(allSets))
+		for _, name := range allSets {
+			set, err := c.GetSetByName(t, name)
+			if err != nil {
+				return nil, fmt.Errorf("reading set %s: %w", name, err)
+			}
+			els, err := c.GetSetElements(set)
+			if err != nil {
+				return nil, fmt.Errorf("reading elements of %s: %w", name, err)
+			}
+			out[name] = len(els)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("the %s table is gone from the kernel", tableName)
+}
+
 // EnsureBase creates the table, sets and chains with their static match rules.
 // It is idempotent: it deletes any prior skopos table first so a version
 // upgrade with changed rules converges cleanly.

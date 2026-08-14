@@ -96,19 +96,39 @@ export function Live({ onUnauthorized }: { onUnauthorized: () => void }) {
     })
   }, [rows, filter, names])
 
-  const bits = formatBits(live?.bits_per_second ?? 0)
+  // Until a reading arrives there is no reading. Rendering zero and a green
+  // "Full · every packet" made a dead capture look like a calm network, which
+  // for a traffic monitor is the worst thing these four tiles can say.
+  const bits = live ? formatBits(live.bits_per_second) : ''
 
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Throughput" value={bits.split(' ')[0]} unit={bits.split(' ')[1]} tone="accent" />
-        <StatTile label="Packets" value={formatPPS(live?.packets_per_second ?? 0).split(' ')[0]} unit="pkt/s" />
+        <StatTile
+          label="Throughput"
+          value={live ? bits.split(' ')[0] : '—'}
+          unit={live ? bits.split(' ')[1] : undefined}
+          tone={live ? 'accent' : undefined}
+          hint={live ? undefined : 'no reading yet'}
+        />
+        <StatTile
+          label="Packets"
+          value={live ? formatPPS(live.packets_per_second).split(' ')[0] : '—'}
+          unit={live ? 'pkt/s' : undefined}
+          hint={live ? undefined : 'no reading yet'}
+        />
         <StatTile label="Live flows" value={formatCount(rows.length)} hint="in view" />
         <StatTile
           label="Capture"
-          value={live?.sampling ? 'Sampling' : 'Full'}
-          tone={live?.sampling ? 'warn' : 'good'}
-          hint={live?.sampling ? `${formatCount(live.observed_pps)} pkt/s observed` : 'every packet'}
+          value={!live ? '—' : live.sampling ? 'Sampling' : 'Full'}
+          tone={!live ? undefined : live.sampling ? 'warn' : 'good'}
+          hint={
+            !live
+              ? 'waiting for the capture stream'
+              : live.sampling
+                ? `${formatCount(live.observed_pps)} pkt/s observed`
+                : 'every packet'
+          }
         />
       </div>
 

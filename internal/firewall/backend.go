@@ -80,6 +80,11 @@ type Backend interface {
 	// an hour ago — and a firewall that reports enforcing over an empty kernel
 	// is the most dangerous thing this product can do.
 	Verify(ctx context.Context) error
+	// SetCounts reports how many elements each set currently holds. Existence
+	// is not enough: the 0.2.1 defect left every set in place and emptied the
+	// ones it should not have touched, so a check that only asks "is the set
+	// there" would not have caught the bug this verification exists for.
+	SetCounts(ctx context.Context) (map[string]int, error)
 	// Name identifies the backend for logs and the system view.
 	Name() string
 }

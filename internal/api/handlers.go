@@ -91,7 +91,9 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 	}
 	res := store.ChooseResolution(to.Sub(from))
 	if v := q.Get("resolution"); v != "" {
-		res = store.Resolution(v)
+		// Clamped, not taken as given: a finer resolution over a wide span is
+		// a denial of service anyone can send at an unauthenticated port.
+		res = store.ClampResolution(store.Resolution(v), to.Sub(from))
 	}
 	series, err := s.deps.Store.Throughput(ctx, from, to, res)
 	if err != nil {

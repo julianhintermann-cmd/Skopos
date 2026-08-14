@@ -20,6 +20,10 @@ func NewNFTablesBackend([]netip.Prefix) Backend { return &unsupportedBackend{} }
 func (unsupportedBackend) Name() string                                           { return "nftables (unsupported)" }
 func (unsupportedBackend) Available() bool                                        { return false }
 func (unsupportedBackend) Verify(context.Context) error                           { return nil }
+
+func (unsupportedBackend) SetCounts(context.Context) (map[string]int, error) {
+	return map[string]int{}, nil
+}
 func (unsupportedBackend) EnsureBase(context.Context) error                       { return nil }
 func (unsupportedBackend) Reconcile(context.Context, []Rule) error                { return nil }
 func (unsupportedBackend) ReconcileCountry(context.Context, []netip.Prefix) error { return nil }

@@ -17,7 +17,12 @@ export function useDeviceNames(onUnauthorized?: () => void): Map<string, string>
         const m = new Map<string, string>()
         for (const d of devices ?? []) {
           const n = deviceName(d)
-          if (d.IP && n) m.set(d.IP, n)
+          // Both families: a dual-stack device talking over IPv6 was showing
+          // as a bare address everywhere a name should have appeared.
+          if (n) {
+            if (d.IP) m.set(d.IP, n)
+            if (d.IP6) m.set(d.IP6, n)
+          }
         }
         setNames(m)
       } catch (e) {

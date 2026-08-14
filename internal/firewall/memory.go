@@ -52,6 +52,46 @@ func (m *MemoryBackend) Available() bool { return m.available }
 // anything outside the process, so it is always consistent with itself.
 func (m *MemoryBackend) Verify(context.Context) error { return nil }
 
+// SetCounts implements Backend by reporting what it is holding, so the
+// service's comparison logic is exercised by the unit tests too.
+func (m *MemoryBackend) SetCounts(context.Context) (map[string]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int{}
+	for _, r := range m.current {
+		if name, ok := setFor(r); ok {
+			out[name]++
+		}
+	}
+	for _, p := range m.country {
+		if p.Addr().Is6() {
+			out[setCountry6]++
+		} else {
+			out[setCountry4]++
+		}
+	}
+	for _, p := range m.protected {
+		if p.Addr().Is6() {
+			out[setProtected6]++
+		} else {
+			out[setProtected4]++
+		}
+	}
+	for _, d := range m.devices {
+		name := setDevQuar4
+		switch {
+		case d.Policy == DeviceLANOnly && d.Addr.Is6():
+			name = setDevLANOnly6
+		case d.Policy == DeviceLANOnly:
+			name = setDevLANOnly4
+		case d.Addr.Is6():
+			name = setDevQuar6
+		}
+		out[name]++
+	}
+	return out, nil
+}
+
 // Name implements Backend.
 func (m *MemoryBackend) Name() string { return "memory" }
 

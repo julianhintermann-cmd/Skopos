@@ -190,7 +190,7 @@ function Banner({ tone, title, children }: { tone: 'warn' | 'crit'; title: strin
 // database is there, so their traffic is dropped before it reaches any
 // service; the reactive detector still catches stragglers on sight.
 function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUnauthorized: () => void }) {
-  const { data, refresh } = useFetch<GeoIPSummary>('/api/geoip/summary?window=1h', { onUnauthorized })
+  const { data, error, refresh } = useFetch<GeoIPSummary>('/api/geoip/summary?window=1h', { onUnauthorized })
   const [input, setInput] = useState('')
   const [err, setErr] = useState('')
   const blocked = data?.blocked ?? []
@@ -222,9 +222,16 @@ function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUn
       />
       <div className="flex flex-col gap-2.5 px-4 pb-4">
         <div className="flex flex-wrap items-center gap-1.5">
-          {blocked.length === 0 && (
-            <span className="text-sm" style={{ color: 'var(--muted)' }}>No countries blocked.</span>
-          )}
+          {blocked.length === 0 &&
+            (error || !data ? (
+              // "No countries blocked" is a claim. Without an answer from the
+              // server we do not get to make it.
+              <span className="text-sm" style={{ color: 'var(--warn)' }}>
+                Could not read the blocked-country list — this is not a confirmed empty list.
+              </span>
+            ) : (
+              <span className="text-sm" style={{ color: 'var(--muted)' }}>No countries blocked.</span>
+            ))}
           {blocked.map((c) => (
             <span
               key={c}

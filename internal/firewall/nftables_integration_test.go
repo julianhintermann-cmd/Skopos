@@ -598,3 +598,74 @@ func TestIntegrationVerifyNoticesAWipedRuleset(t *testing.T) {
 		t.Errorf("the rebuilt ruleset should verify: %v", err)
 	}
 }
+
+// The table surviving is not the same as the rules surviving. The 0.2.1 defect
+// left every set in place and emptied the ones it should not have touched, so
+// a verification that only asks "does the set exist" would pass straight
+// through the exact bug it was written for — and would then launder a repair
+// that quietly dropped country blocking into a healthy report.
+func TestIntegrationVerifyNoticesEmptiedSetsAndRepairsEverything(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+	backend := NewNFTablesBackend([]netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")})
+	svc, _ := newTestService(t, baseConfig(true), backend)
+
+	if err := svc.SetProtected(ctx, []netip.Prefix{netip.MustParsePrefix("192.168.1.1/32")}); err != nil {
+		t.Fatalf("SetProtected: %v", err)
+	}
+	if err := svc.SetCountryPrefixes(ctx, []netip.Prefix{netip.MustParsePrefix("5.0.0.0/8")}); err != nil {
+		t.Fatalf("SetCountryPrefixes: %v", err)
+	}
+	if err := svc.SetDevicePolicies(ctx, []DeviceRule{
+		{Addr: netip.MustParseAddr("192.168.1.50"), Policy: DeviceQuarantine},
+	}); err != nil {
+		t.Fatalf("SetDevicePolicies: %v", err)
+	}
+	if err := svc.ManualBlock(ctx, netip.MustParsePrefix("203.0.113.7/32"), "admin", "test", 0); err != nil {
+		t.Fatalf("ManualBlock: %v", err)
+	}
+	if err := svc.Verify(ctx); err != nil {
+		t.Fatalf("a healthy ruleset should verify: %v", err)
+	}
+
+	// Empty the sets but leave the table and chains standing — the shape the
+	// existence-only check could not see.
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptied := []string{setDrop4, setCountry4, setDevQuar4, setProtected4}
+	for _, tb := range tables {
+		if tb.Name != tableName {
+			continue
+		}
+		for _, name := range emptied {
+			set, err := c.GetSetByName(tb, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.FlushSet(set)
+		}
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify has to notice, and the repair has to bring everything back — not
+	// only the blocks and the allowlist that Restore alone covers.
+	if err := svc.Verify(ctx); err != nil {
+		t.Fatalf("Verify should have repaired the emptied sets: %v", err)
+	}
+	for _, name := range emptied {
+		if n := len(setElements(t, name)); n == 0 {
+			t.Errorf("%s is still empty after the repair", name)
+		}
+	}
+	if h := svc.KernelHealth(); !h.OK {
+		t.Errorf("health should be OK after a successful repair: %+v", h)
+	}
+}

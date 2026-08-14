@@ -100,3 +100,29 @@ func TestSearchFlowsExactAddressUnaffected(t *testing.T) {
 		t.Errorf("got %d flows truncated=%v, want 1 and false", len(got), truncated)
 	}
 }
+
+// One URL parameter used to turn a sub-millisecond request into a 45-second
+// one — measured — by asking for minute buckets across ninety days. Every
+// query shares one database connection, so that also stalls the flow writer
+// and every other page, and the port it arrives on has no authentication.
+func TestClampResolutionRefusesFinerThanTheSpanWarrants(t *testing.T) {
+	day := 24 * time.Hour
+	cases := []struct {
+		span      time.Duration
+		requested Resolution
+		want      Resolution
+	}{
+		{90 * day, Res1m, Res1h}, // the attack
+		{365 * day, Res1m, Res1d},
+		{365 * day, Res1h, Res1d},
+		{time.Hour, Res1m, Res1m},  // a fine resolution over a narrow span is fine
+		{time.Hour, Res1d, Res1d},  // coarser than needed stays allowed
+		{90 * day, Res1d, Res1d},   // ditto
+		{2 * time.Hour, "", Res1m}, // an unknown value is treated as the finest
+	}
+	for _, c := range cases {
+		if got := ClampResolution(c.requested, c.span); got != c.want {
+			t.Errorf("ClampResolution(%q, %s) = %q, want %q", c.requested, c.span, got, c.want)
+		}
+	}
+}

@@ -236,19 +236,19 @@ export function BlockDialog({
           <span className="text-xs" style={{ color: 'var(--text)' }}>
             Discard the note you have typed?
           </span>
-          <Button onClick={onClose} className="pointer-coarse:min-h-11">
+          <Button onClick={onClose}>
             Discard
           </Button>
-          <Button variant="primary" onClick={() => setAsking(false)} className="pointer-coarse:min-h-11">
+          <Button variant="primary" onClick={() => setAsking(false)}>
             Keep editing
           </Button>
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="primary" onClick={save} loading={busy} className="pointer-coarse:min-h-11">
+          <Button variant="primary" onClick={save} loading={busy}>
             {ttl.trim() ? `Block for ${ttl.trim()}` : 'Block permanently'}
           </Button>
-          <Button onClick={close} className="pointer-coarse:min-h-11">
+          <Button onClick={close}>
             Cancel
           </Button>
         </div>

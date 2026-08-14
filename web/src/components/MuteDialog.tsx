@@ -129,19 +129,19 @@ export function MuteDialog({
             <span className="text-xs" style={{ color: 'var(--text)' }}>
               Discard the reason you have typed?
             </span>
-            <Button onClick={onClose} className="pointer-coarse:min-h-11">
+            <Button onClick={onClose}>
               Discard
             </Button>
-            <Button variant="primary" onClick={() => setAsking(false)} className="pointer-coarse:min-h-11">
+            <Button variant="primary" onClick={() => setAsking(false)}>
               Keep editing
             </Button>
           </div>
         ) : (
           <>
-            <Button variant="primary" onClick={save} loading={busy} className="pointer-coarse:min-h-11">
+            <Button variant="primary" onClick={save} loading={busy}>
               Mute
             </Button>
-            <Button onClick={close} className="pointer-coarse:min-h-11">
+            <Button onClick={close}>
               Cancel
             </Button>
           </>

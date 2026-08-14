@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 )
 
@@ -30,3 +31,11 @@ func (unsupportedBackend) ReconcileCountry(context.Context, []netip.Prefix) erro
 func (unsupportedBackend) ReconcileDevices(context.Context, []DeviceRule) error   { return nil }
 
 func (unsupportedBackend) ReconcileProtected(context.Context, []netip.Prefix) error { return nil }
+
+// Dump implements Backend by refusing to describe a kernel it cannot read. An
+// empty snapshot would render as a table that is gone and fourteen sets holding
+// nothing — an alarm, and a false one, on a platform where there was never
+// anything to hold.
+func (unsupportedBackend) Dump(context.Context) (Snapshot, error) {
+	return Snapshot{}, errors.New("there is no nftables on this platform, so nothing can be read back")
+}

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func TestUpdateAppliesAndPersists(t *testing.T) {
 	var got []Runtime
 	m.OnChange(func(r Runtime) { got = append(got, r) })
 
-	if err := m.Update(patch(t, map[string]any{"enforcement": "enforce", "block_ttl": "48h"})); err != nil {
+	if _, err := m.Update(patch(t, map[string]any{"enforcement": "enforce", "block_ttl": "48h"})); err != nil {
 		t.Fatal(err)
 	}
 	cur := m.Current()
@@ -83,7 +84,7 @@ func TestUpdateIsAllOrNothing(t *testing.T) {
 	m.OnChange(func(Runtime) { fired++ })
 
 	// One good field, one that fails validation: nothing may change.
-	err := m.Update(patch(t, map[string]any{
+	_, err := m.Update(patch(t, map[string]any{
 		"enforcement":              "enforce",
 		"rate.max_new_connections": 0,
 	}))
@@ -113,7 +114,7 @@ func TestUpdateRejectsUnknownAndInvalid(t *testing.T) {
 		"bad severity":       {"quiet_hours": QuietHours{MinSeverity: "loud"}},
 	}
 	for name, p := range cases {
-		if err := m.Update(patch(t, p)); err == nil {
+		if _, err := m.Update(patch(t, p)); err == nil {
 			t.Errorf("%s: expected rejection", name)
 		}
 	}
@@ -121,13 +122,13 @@ func TestUpdateRejectsUnknownAndInvalid(t *testing.T) {
 
 func TestDurationAcceptsStringAndNanos(t *testing.T) {
 	m, _ := New(memStore{}, baseline())
-	if err := m.Update(patch(t, map[string]any{"cooldown": "5m"})); err != nil {
+	if _, err := m.Update(patch(t, map[string]any{"cooldown": "5m"})); err != nil {
 		t.Fatal(err)
 	}
 	if m.Current().Cooldown != 5*time.Minute {
 		t.Errorf("string duration = %v", m.Current().Cooldown)
 	}
-	if err := m.Update(patch(t, map[string]any{"cooldown": int64(90 * time.Second)})); err != nil {
+	if _, err := m.Update(patch(t, map[string]any{"cooldown": int64(90 * time.Second)})); err != nil {
 		t.Fatal(err)
 	}
 	if m.Current().Cooldown != 90*time.Second {
@@ -138,12 +139,12 @@ func TestDurationAcceptsStringAndNanos(t *testing.T) {
 func TestResetReturnsToBaseline(t *testing.T) {
 	ks := memStore{}
 	m, _ := New(ks, baseline())
-	if err := m.Update(patch(t, map[string]any{"enforcement": "enforce"})); err != nil {
+	if _, err := m.Update(patch(t, map[string]any{"enforcement": "enforce"})); err != nil {
 		t.Fatal(err)
 	}
 	var last Runtime
 	m.OnChange(func(r Runtime) { last = r })
-	if err := m.Reset(); err != nil {
+	if _, err := m.Reset(); err != nil {
 		t.Fatal(err)
 	}
 	if m.Current().Enforcement != "observe" || len(m.Overridden()) != 0 {
@@ -151,6 +152,43 @@ func TestResetReturnsToBaseline(t *testing.T) {
 	}
 	if last.Enforcement != "observe" {
 		t.Error("reset must notify subscribers with the baseline")
+	}
+}
+
+// A stored setting the subsystems would not take must come back as a refusal.
+// Update used to answer only "did this validate and persist", so the endpoint
+// above it had nothing to report but the intent it had just written down — and
+// reported it as success over a kernel that had declined the change.
+func TestUpdateReportsWhatTheSubscribersRefused(t *testing.T) {
+	m, _ := New(memStore{}, baseline())
+	m.OnApply(func(Runtime) ApplyResult {
+		var res ApplyResult
+		res.Fail("enforcement", errors.New("ensuring base ruleset: operation not permitted"))
+		return res
+	})
+	later := 0
+	m.OnChange(func(Runtime) { later++ })
+
+	res, err := m.Update(patch(t, map[string]any{"enforcement": "enforce"}))
+	if err != nil {
+		t.Fatalf("a valid patch must still be stored: %v", err)
+	}
+	if res.OK() || len(res.Errors) != 1 {
+		t.Fatalf("apply result = %+v, want the refusal", res)
+	}
+	if res.Errors[0].Field != "enforcement" {
+		t.Errorf("field = %q, want the settings path the operator can act on", res.Errors[0].Field)
+	}
+	if m.Current().Enforcement != "enforce" {
+		t.Error("a refused apply must keep the stored intent; the verify loop retries it")
+	}
+	if later != 1 {
+		t.Errorf("subscribers after the refusal ran %d times, want 1", later)
+	}
+	// Going back to the file runs the same subscribers and is reported the
+	// same way.
+	if res, err := m.Reset(); err != nil || res.OK() {
+		t.Errorf("reset = %+v, err %v; want the refusal reported here too", res, err)
 	}
 }
 

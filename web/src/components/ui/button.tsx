@@ -58,7 +58,12 @@ export function Button({
       disabled={disabled || loading}
       aria-label={ariaLabel}
       aria-busy={loading || undefined}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-md border font-medium transition-colors disabled:opacity-50 ${variants[variant]} ${pad} ${className}`}
+      // The 44px touch target belongs here, not at the call sites. Five of them
+      // were carrying `pointer-coarse:min-h-11` by hand, which means the sixth
+      // component to be written is a 30px button on a phone by default. A
+      // coarse pointer is a finger wherever it is — a tablet included — so the
+      // rule is the input device, not the viewport width.
+      className={`inline-flex items-center justify-center gap-1.5 rounded-md border font-medium transition-colors disabled:opacity-50 pointer-coarse:min-h-11 ${variants[variant]} ${pad} ${className}`}
     >
       {/* A spinner beside the unchanged label, rather than swapping the label
           for "Blocking…". The button keeps its width, so the row it sits in

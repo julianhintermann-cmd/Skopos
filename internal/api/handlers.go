@@ -513,21 +513,76 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAudit serves the audit log, filtered by actor, action, target and time
+// window, one page at a time.
+//
+// Everything but limit is new. The endpoint could only hand back the newest
+// entries under a limit, so past one screenful "who blocked this, and when"
+// had no answer — in the one record whose entire value is that it says what
+// happened.
+//
+// A malformed parameter is refused here rather than ignored as the flow
+// endpoints ignore a bad `from`. There a dropped parameter costs a wider
+// chart; here it answers a different question from the one that was asked
+// while looking exactly like the right answer. An operator narrowing to one
+// address would be shown the whole log, and a cursor that failed to parse
+// would hand them the newest entries labelled as the continuation of the page
+// they were reading.
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()
-	limit := 200
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
-		}
+
+	q := r.URL.Query()
+	f := store.AuditFilter{
+		Actor:  strings.TrimSpace(q.Get("actor")),
+		Action: strings.TrimSpace(q.Get("action")),
+		Target: strings.TrimSpace(q.Get("target")),
 	}
-	entries, err := s.deps.Store.ListAudit(ctx, limit)
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid limit: "+v)
+			return
+		}
+		f.Limit = n
+	}
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid from: expected an RFC3339 time, got "+v)
+			return
+		}
+		f.Since = t
+	}
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid to: expected an RFC3339 time, got "+v)
+			return
+		}
+		f.Until = t
+	}
+	if v := q.Get("cursor"); v != "" {
+		c, err := store.ParseAuditCursor(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		f.Before = c
+	}
+
+	page, err := s.deps.Store.ListAuditPage(ctx, f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"audit": entries})
+	// next_cursor is always present, empty when this page reaches the end of
+	// the log: "there is no more" is a fact worth stating, and a client should
+	// not have to infer it from a missing field.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"audit":       page.Entries,
+		"next_cursor": page.Next.String(),
+	})
 }
 
 func (s *Server) handleValidateConfig(w http.ResponseWriter, r *http.Request) {

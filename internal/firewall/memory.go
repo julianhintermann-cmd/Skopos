@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"sort"
 	"sync"
+	"time"
 )
 
 // MemoryBackend is an in-memory Backend for tests and dry runs. It records the
@@ -90,6 +91,67 @@ func (m *MemoryBackend) SetCounts(context.Context) (map[string]int, error) {
 		out[name]++
 	}
 	return out, nil
+}
+
+// Dump implements Backend by reporting what the memory backend is holding, so
+// the inspector's callers are exercised by the unit tests too.
+//
+// It says plainly that it has no chains rather than describing three healthy
+// ones. A fake that answers like a working kernel would let the inspector's
+// tests pass straight over the hole the inspector exists to find. The counts
+// are one per stored rule: there is no interval encoding here to imitate, and
+// imitating one would be theatre.
+func (m *MemoryBackend) Dump(context.Context) (Snapshot, error) {
+	snap := Snapshot{ReadAt: time.Now(), Table: true}
+	for _, name := range []string{chainIn, chainFwd, chainOut} {
+		snap.Chains = append(snap.Chains, ChainSnapshot{
+			Name: name,
+			Err:  "the memory backend keeps no chains",
+		})
+	}
+	held := m.held()
+	for _, name := range allSets {
+		views := held[name]
+		n := len(views)
+		snap.Sets = append(snap.Sets, SetSnapshot{
+			Name: name, Present: true, Elements: &n, Ranges: views,
+		})
+	}
+	return snap, nil
+}
+
+// held renders everything the backend is holding, grouped by set, in one pass
+// under the lock so the counts and the ranges cannot describe two different
+// moments.
+func (m *MemoryBackend) held() map[string][]RangeView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := map[string][]RangeView{}
+	add := func(name string, p netip.Prefix, expires *time.Time) {
+		if v, ok := prefixView(p, expires); ok {
+			out[name] = append(out[name], v)
+		}
+	}
+	for _, r := range m.current {
+		if name, ok := setFor(r); ok {
+			add(name, r.Prefix, r.Expires)
+		}
+	}
+	for _, p := range m.country {
+		add(pick(p.Addr().Is6(), setCountry6, setCountry4), p, nil)
+	}
+	for _, p := range m.protected {
+		add(pick(p.Addr().Is6(), setProtected6, setProtected4), p, nil)
+	}
+	for _, d := range m.devices {
+		name := pick(d.Addr.Is6(), setDevQuar6, setDevQuar4)
+		if d.Policy == DeviceLANOnly {
+			name = pick(d.Addr.Is6(), setDevLANOnly6, setDevLANOnly4)
+		}
+		add(name, netip.PrefixFrom(d.Addr, d.Addr.BitLen()), nil)
+	}
+	return out
 }
 
 // Name implements Backend.

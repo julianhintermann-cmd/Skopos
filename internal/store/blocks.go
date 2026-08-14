@@ -25,22 +25,32 @@ func (s *Store) AddBlock(ctx context.Context, b model.Block) (model.Block, error
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	actor, evidence, alertID, incidentID := provenanceCols(b.Provenance)
+
 	var existingID int64
 	err = tx.QueryRowContext(ctx,
 		`SELECT id FROM blocks WHERE prefix = ? AND active = 1`, b.Prefix.String()).Scan(&existingID)
 	switch err {
 	case nil:
+		// Provenance is replaced along with the rest, not merged: re-blocking an
+		// address is a new decision by whoever made it, and leaving the previous
+		// actor in place would attribute it to the wrong person.
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE blocks SET origin=?, reason=?, expires_ms=? WHERE id=?`,
-			string(b.Origin), b.Reason, nullableMs(b.Expires), existingID); err != nil {
+			UPDATE blocks SET origin=?, reason=?, expires_ms=?,
+			                  actor=?, evidence=?, alert_id=?, incident_id=?
+			WHERE id=?`,
+			string(b.Origin), b.Reason, nullableMs(b.Expires),
+			actor, evidence, alertID, incidentID, existingID); err != nil {
 			return model.Block{}, err
 		}
 		b.ID = existingID
 	case sql.ErrNoRows:
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO blocks (prefix, origin, reason, created_ms, expires_ms, active)
-			VALUES (?,?,?,?,?,1)`,
-			b.Prefix.String(), string(b.Origin), b.Reason, toMs(b.Created), nullableMs(b.Expires))
+			INSERT INTO blocks (prefix, origin, reason, created_ms, expires_ms, active,
+			                    actor, evidence, alert_id, incident_id)
+			VALUES (?,?,?,?,?,1,?,?,?,?)`,
+			b.Prefix.String(), string(b.Origin), b.Reason, toMs(b.Created), nullableMs(b.Expires),
+			actor, evidence, alertID, incidentID)
 		if err != nil {
 			return model.Block{}, err
 		}
@@ -55,13 +65,19 @@ func (s *Store) AddBlock(ctx context.Context, b model.Block) (model.Block, error
 	return b, nil
 }
 
+// blockCols is the column list every block read shares. One list, one scan:
+// a column added to one query and missed by another is how a block comes back
+// carrying half its provenance.
+const blockCols = `id, prefix, origin, reason, created_ms, expires_ms, active, removed_ms,
+	actor, evidence, alert_id, incident_id`
+
 // ActiveBlockFor returns the active block for a prefix, if there is one. The
 // firewall service reads it before it writes, so that a block whose kernel
 // apply fails can be rolled back to exactly what was there before instead of
 // leaving a row that claims an address is blocked when it is not.
 func (s *Store) ActiveBlockFor(ctx context.Context, prefix netip.Prefix) (model.Block, bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, prefix, origin, reason, created_ms, expires_ms, active, removed_ms
+		SELECT `+blockCols+`
 		FROM blocks WHERE prefix = ? AND active = 1 LIMIT 1`, prefix.String())
 	if err != nil {
 		return model.Block{}, false, err
@@ -94,7 +110,7 @@ func (s *Store) RemoveBlock(ctx context.Context, prefix netip.Prefix) (bool, err
 // the firewall reconciler drives the kernel toward.
 func (s *Store) ActiveBlocks(ctx context.Context) ([]model.Block, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, prefix, origin, reason, created_ms, expires_ms, active, removed_ms
+		SELECT `+blockCols+`
 		FROM blocks WHERE active = 1 ORDER BY created_ms DESC`)
 	if err != nil {
 		return nil, err
@@ -117,7 +133,7 @@ func (s *Store) ActiveBlocks(ctx context.Context) ([]model.Block, error) {
 func (s *Store) ExpireBlocks(ctx context.Context) ([]model.Block, error) {
 	now := s.now()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, prefix, origin, reason, created_ms, expires_ms, active, removed_ms
+		SELECT `+blockCols+`
 		FROM blocks WHERE active = 1 AND expires_ms IS NOT NULL AND expires_ms <= ?`,
 		toMs(now))
 	if err != nil {
@@ -150,8 +166,10 @@ func scanBlock(rows *sql.Rows) (model.Block, error) {
 	var b model.Block
 	var prefix, origin string
 	var created int64
-	var expires, removed sql.NullInt64
-	if err := rows.Scan(&b.ID, &prefix, &origin, &b.Reason, &created, &expires, &b.Active, &removed); err != nil {
+	var expires, removed, alertID, incidentID sql.NullInt64
+	var actor, evidence sql.NullString
+	if err := rows.Scan(&b.ID, &prefix, &origin, &b.Reason, &created, &expires, &b.Active, &removed,
+		&actor, &evidence, &alertID, &incidentID); err != nil {
 		return model.Block{}, err
 	}
 	b.Prefix, _ = netip.ParsePrefix(prefix)
@@ -165,7 +183,37 @@ func scanBlock(rows *sql.Rows) (model.Block, error) {
 		t := fromMs(removed.Int64)
 		b.RemovedAt = &t
 	}
+	// A NULL actor is a block recorded before migration 0012, when nothing was
+	// kept about who placed it. It gets no provenance record at all rather than
+	// an empty one: an empty actor beside a real evidence field reads as a
+	// block someone declined to sign, which is a different claim.
+	if actor.Valid {
+		b.Provenance = &model.BlockProvenance{
+			Actor:      actor.String,
+			Evidence:   evidence.String,
+			AlertID:    alertID.Int64,
+			IncidentID: incidentID.Int64,
+		}
+	}
 	return b, nil
+}
+
+// provenanceCols renders a provenance for storage. Nil writes four NULLs — the
+// row says nothing about who placed the block, which is the truth for a caller
+// that supplied nothing. Zero ids are NULL too, so "no alert was recorded" and
+// "alert 0" cannot be confused.
+func provenanceCols(p *model.BlockProvenance) (actor, evidence, alertID, incidentID any) {
+	if p == nil {
+		return nil, nil, nil, nil
+	}
+	return p.Actor, p.Evidence, nullableID(p.AlertID), nullableID(p.IncidentID)
+}
+
+func nullableID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
 }
 
 // nullableMs renders a *time.Time as Unix ms or SQL NULL.

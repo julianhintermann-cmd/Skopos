@@ -29,7 +29,21 @@ type nftBackend struct {
 	// during normal operation — which makes them an exact check that the
 	// chains have not been flushed or had a rule deleted out from under us.
 	ruleCounts map[string]int
+
+	// dumpMu guards the reused snapshot below. It is deliberately not mu: mu
+	// is held across netlink writes, and a read-only inspection must never
+	// wait behind a reconcile.
+	dumpMu   sync.Mutex
+	lastDump Snapshot
 }
+
+// dumpMinInterval is how often the kernel is actually re-read for an
+// inspection. One dump is fourteen set reads plus three rule reads, and a
+// single blocked country is tens of thousands of elements, so a caller
+// refreshing faster than this costs more than the answer can possibly have
+// changed. A reused snapshot is never passed off as a fresh one: ReadAt carries
+// the age it really has.
+const dumpMinInterval = 30 * time.Second
 
 // NewNFTablesBackend creates the nftables backend. lanRanges are the private
 // ranges per-device policies compare against. It does not touch the kernel
@@ -158,6 +172,149 @@ func (b *nftBackend) SetCounts(context.Context) (map[string]int, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("the %s table is gone from the kernel", tableName)
+}
+
+// Dump reads the kernel back and reports what it holds.
+//
+// It is strictly read-only: like SetCounts it opens its own connection, and it
+// never calls Flush, so nothing it does can alter what it is describing.
+//
+// Nothing here turns a failed read into a number. A set that could not be read
+// carries the reason and no count, and a missing table is reported as a missing
+// table rather than as fourteen empty sets — "the firewall holds nothing" is
+// precisely the finding this exists to be able to report, which is why it must
+// never be invented.
+func (b *nftBackend) Dump(context.Context) (Snapshot, error) {
+	b.dumpMu.Lock()
+	last := b.lastDump
+	b.dumpMu.Unlock()
+	if !last.ReadAt.IsZero() && time.Since(last.ReadAt) < dumpMinInterval {
+		return last, nil
+	}
+
+	// Failing to open netlink or to list the tables is a failure of the read
+	// itself, not a finding about the kernel, so it comes back as an error and
+	// no snapshot at all.
+	c, err := nftables.New()
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("opening netlink: %w", err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("listing tables: %w", err)
+	}
+
+	var table *nftables.Table
+	for _, t := range tables {
+		if t.Name == tableName && t.Family == nftables.TableFamilyINet {
+			table = t
+			break
+		}
+	}
+
+	snap := Snapshot{ReadAt: time.Now(), Table: table != nil}
+	snap.Chains = b.dumpChains(c, table)
+	snap.Sets = dumpSets(c, table, snap.ReadAt)
+
+	b.dumpMu.Lock()
+	b.lastDump = snap
+	b.dumpMu.Unlock()
+	return snap, nil
+}
+
+// dumpChains reads the three chains one at a time, so a chain that cannot be
+// read costs its own row and not the whole dump.
+func (b *nftBackend) dumpChains(c *nftables.Conn, table *nftables.Table) []ChainSnapshot {
+	b.mu.Lock()
+	want := b.ruleCounts
+	b.mu.Unlock()
+
+	present := map[string]bool{}
+	var listErr string
+	if table != nil {
+		chains, err := c.ListChainsOfTableFamily(nftables.TableFamilyINet)
+		if err != nil {
+			listErr = fmt.Sprintf("listing chains: %v", err)
+		}
+		for _, ch := range chains {
+			if ch.Table != nil && ch.Table.Name == tableName {
+				present[ch.Name] = true
+			}
+		}
+	}
+
+	out := make([]ChainSnapshot, 0, 3)
+	for _, name := range []string{chainIn, chainFwd, chainOut} {
+		row := ChainSnapshot{Name: name, Present: present[name], Err: listErr}
+		if n, ok := want[name]; ok {
+			row.Expected = &n
+		}
+		if !row.Present {
+			out = append(out, row)
+			continue
+		}
+		rules, err := c.GetRules(table, &nftables.Chain{Name: name, Table: table})
+		if err != nil {
+			row.Err = fmt.Sprintf("reading the rules of chain %s: %v", name, err)
+			out = append(out, row)
+			continue
+		}
+		n := len(rules)
+		row.Rules = &n
+		out = append(out, row)
+	}
+	return out
+}
+
+// dumpSets reads every set Skopos creates.
+func dumpSets(c *nftables.Conn, table *nftables.Table, now time.Time) []SetSnapshot {
+	out := make([]SetSnapshot, 0, len(allSets))
+	for _, name := range allSets {
+		// With no table there is no set, so the count stays nil rather than
+		// becoming a zero that would read as "present and empty".
+		row := SetSnapshot{Name: name}
+		if table == nil {
+			out = append(out, row)
+			continue
+		}
+		set, err := c.GetSetByName(table, name)
+		if err != nil {
+			row.Err = fmt.Sprintf("reading set %s: %v", name, err)
+			out = append(out, row)
+			continue
+		}
+		row.Present = true
+		els, err := c.GetSetElements(set)
+		if err != nil {
+			row.Err = fmt.Sprintf("reading elements of %s: %v", name, err)
+			out = append(out, row)
+			continue
+		}
+		n := len(els)
+		row.Elements = &n
+		row.Ranges, row.Truncated = decodeRanges(setBounds(els, now), set.Interval)
+		out = append(out, row)
+	}
+	return out
+}
+
+// setBounds lifts the kernel's elements back into bounds. It is the inverse of
+// spanElements: the timeout rides on the inclusive start, and what comes back
+// out is the life the element has left rather than the life it was given.
+func setBounds(els []nftables.SetElement, now time.Time) []elemBound {
+	out := make([]elemBound, 0, len(els))
+	for _, el := range els {
+		b := elemBound{bound: startBound(el.Key), end: el.IntervalEnd}
+		if el.IntervalEnd {
+			b.bound = endBound(el.Key)
+		}
+		if el.Timeout > 0 || el.Expires > 0 {
+			t := now.Add(el.Expires)
+			b.expires = &t
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // EnsureBase creates the table, sets and chains with their static match rules.

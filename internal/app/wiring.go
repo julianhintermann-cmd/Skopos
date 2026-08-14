@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync/atomic"
 	"time"
@@ -56,6 +57,53 @@ func (o *observerSet) Observe(p flow.Packet) {
 	for _, obs := range o.all {
 		obs.Observe(p)
 	}
+}
+
+// Shed reports what each bounded detector has had to give up since start,
+// keyed by the name the API and the scrape label it with. Suitable as an
+// api.Deps accessor: it reads atomics behind each detector's own lock and is
+// safe to call from an HTTP handler.
+//
+// It walks the fan-out instead of a list of fields on purpose. Detectors are
+// added to the set from more than one place — the country-block detector is
+// built by the caller, after this file is done — and a detector that is
+// bounded but unreported is the exact failure these counters exist to end.
+// Anything that grows a Shed method is picked up here without a second edit.
+//
+// A detector that was not built is absent from the map rather than present
+// with zeros: "shed nothing" and "not running" must not read alike.
+func (o *observerSet) Shed() map[string]detect.ShedStats {
+	type reporter interface{ Shed() detect.ShedStats }
+	stats := make(map[string]detect.ShedStats, len(o.all))
+	for _, obs := range o.all {
+		// Gated detectors sit behind their gate. One switched off still
+		// carries what it shed while it was on, which is a real number and
+		// stays reported.
+		if g, ok := obs.(*gate); ok {
+			obs = g.obs
+		}
+		if r, ok := obs.(reporter); ok {
+			stats[detectorName(obs)] = r.Shed()
+		}
+	}
+	return stats
+}
+
+// detectorName is the label a detector is reported under. An unrecognised one
+// falls back to its Go type rather than being dropped: an ugly label is
+// something an operator can ask about, a missing detector is not.
+func detectorName(obs flow.Observer) string {
+	switch obs.(type) {
+	case *detect.Portscan:
+		return "portscan"
+	case *detect.Rate:
+		return "rate"
+	case *detect.Baseline:
+		return "baseline"
+	case *detect.CountryBlock:
+		return "country_block"
+	}
+	return fmt.Sprintf("%T", obs)
 }
 
 // buildObservers assembles the detector fan-out from configuration.

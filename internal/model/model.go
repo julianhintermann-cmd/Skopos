@@ -146,6 +146,28 @@ const (
 	OriginStatic   BlockOrigin = "static" // from firewall.blocklist in config
 )
 
+// BlockProvenance is the trail behind a block: who placed it, what was
+// observed, and the record it can be followed back to. Reason says why in
+// words; this says where that sentence came from.
+type BlockProvenance struct {
+	// Actor is who placed the block, as the call site could attest to it: an
+	// operator's username, "detector", "config" for the static blocklist,
+	// "notification" for a notification button. It is never inferred from the
+	// origin or the reason — an actor guessed from context reads exactly like
+	// one that was recorded.
+	Actor string
+	// Evidence is the observation the block rests on, in a form that can be
+	// checked afterwards. Empty means none was recorded, not that none
+	// existed: most paths have only the reason sentence, and repeating it here
+	// would dress a sentence up as evidence.
+	Evidence string
+	// AlertID and IncidentID link to the records that caused the block. Zero
+	// means no link was recorded. A non-zero id whose row is gone means the
+	// alert aged out of retention, which is a different answer again.
+	AlertID    int64
+	IncidentID int64
+}
+
 // Block is an active or historical firewall block of an address or CIDR.
 type Block struct {
 	ID        int64
@@ -156,6 +178,12 @@ type Block struct {
 	Expires   *time.Time // nil = permanent
 	Active    bool
 	RemovedAt *time.Time
+	// Provenance is where this block came from. Nil means the row was written
+	// before Skopos recorded provenance at all (migration 0012) and is silent
+	// on who placed it — which is what it must say. Filling those rows in with
+	// a plausible actor would put a fabricated attribution in the one record an
+	// operator opens to answer "why is this blocked, and who did it".
+	Provenance *BlockProvenance
 }
 
 // Expired reports whether the block's TTL has passed at time now.

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useFetch } from '../lib/useFetch'
 import { api, countryFlag, countryName, type Block, type GeoIPSummary } from '../lib/api'
-import type { BlocksPayload, EnforcementState } from '../lib/contracts'
+import { verdictNow, type BlocksPayload, type EnforcementState } from '../lib/contracts'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput, ScrollArea } from '../components/ui'
 import { SegmentedControl } from '../components/RangeControl'
 import { EntityLink } from '../components/entity'
@@ -300,7 +300,11 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                       one carries a timestamp. */}
                   {blocks.length} recorded ·{' '}
                   <KernelStatusLine state={kernel} prefix="kernel:" />
-                  {mode === 'enforce' && (
+                  {/* Only where the tally above says "Dropped". Next to "not
+                      verified" this sentence would imply packets are being
+                      dropped, which is the claim the column just declined to
+                      make. */}
+                  {kernel && verdictNow(kernel, now) === 'enforcing' && (
                     <>
                       {' '}
                       · blocked packets stay visible to the monitor: capture taps the wire before the firewall
@@ -395,7 +399,10 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                             <button
                               onClick={() => unblock(b)}
                               aria-label={`Unblock ${b.Prefix}`}
-                              className="rounded-md px-2 py-1 text-xs font-medium"
+                              // Measured at 25px on a coarse pointer: the most
+                              // destructive control in the row was the smallest
+                              // thing on the page to aim at.
+                              className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-3"
                               style={{ color: 'var(--crit)' }}
                             >
                               Unblock

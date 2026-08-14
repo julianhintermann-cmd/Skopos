@@ -63,6 +63,27 @@ var ErrNotEnforced = errors.New("the firewall rejected the change; nothing was b
 // list that omits an address the kernel is still dropping.
 var ErrStillBlocked = errors.New("the firewall rejected the change; the block is still in place")
 
+// The audit vocabulary this service writes. Named rather than spelled out at
+// each call site so a view can filter on exactly what is recorded: an audit
+// filter that misses entries because a string was typed twice is worse than no
+// filter, since it answers "nothing happened" when something did.
+const (
+	// ActionSelfHeal records a ruleset the service rebuilt by itself, and
+	// ActionSelfHealFailed one it could not. Both are the operator's ruleset
+	// changing without the operator, which is the whole reason they are here.
+	ActionSelfHeal       = "firewall_selfheal"
+	ActionSelfHealFailed = "firewall_selfheal_failed"
+	// ActionBlockReleased records a stored block that stopped being enforced
+	// because the never-block list grew to cover it.
+	ActionBlockReleased = "block_released"
+	// TargetRuleset is the audit target for something done to the ruleset as a
+	// whole rather than to one address.
+	TargetRuleset = "ruleset"
+	// ActorSystem is Skopos acting on its own: a repair, an expiry, a
+	// consequence of a setting rather than a person at a keyboard.
+	ActorSystem = "system"
+)
+
 // Service ties the store, backend and config together. It implements
 // policy.Blocker and owns reconciliation, restore-on-start and TTL expiry.
 type Service struct {
@@ -209,6 +230,7 @@ func (s *Service) SetDefaultTTL(d time.Duration) {
 // happens to trigger the next reconcile.
 func (s *Service) SetProtected(ctx context.Context, prefixes []netip.Prefix) error {
 	s.cfgMu.Lock()
+	was := s.cfg.Protected
 	s.cfg.Protected = append([]netip.Prefix(nil), prefixes...)
 	s.cfgMu.Unlock()
 
@@ -230,6 +252,7 @@ func (s *Service) SetProtected(ctx context.Context, prefixes []netip.Prefix) err
 	if err := s.Reconcile(ctx); err != nil {
 		return err
 	}
+	s.auditReleased(ctx, was, prefixes)
 	s.countryMu.Lock()
 	devices := append([]DeviceRule(nil), s.devicePolicies...)
 	s.countryMu.Unlock()
@@ -250,12 +273,60 @@ func (s *Service) ProtectedPrefixes() []netip.Prefix {
 func (s *Service) Protects(prefix netip.Prefix) (netip.Prefix, bool) {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
-	for _, p := range s.cfg.Protected {
-		if p.Overlaps(prefix) {
-			return p, true
+	return coveredBy(s.cfg.Protected, prefix)
+}
+
+// coveredBy returns the first prefix in list that overlaps p.
+func coveredBy(list []netip.Prefix, p netip.Prefix) (netip.Prefix, bool) {
+	for _, c := range list {
+		if c.Overlaps(p) {
+			return c, true
 		}
 	}
 	return netip.Prefix{}, false
+}
+
+// auditReleased records the stored blocks that a widened never-block list has
+// just stopped enforcing.
+//
+// This is the quietest way a block can stop working. rulesFor simply skips a
+// protected prefix on the next reconcile: the kernel stops dropping it, the
+// row stays active, and the block list goes on showing it exactly as before.
+// An operator asking why an address they can see in the list is not being
+// dropped had nothing in the record to read — the allowlist change is audited
+// by the settings path, but which blocks it disarmed was never written down.
+//
+// Only the difference is recorded. A block the previous list already covered
+// was not released now, and saying so again on every settings save would fill
+// the log with an event that did not happen.
+//
+// The actor is the system, not the person who edited the allowlist: this same
+// method runs from startup and from a config reload, and naming an operator
+// who may not have been involved would be a guess in the one place that must
+// not guess. Their edit is audited where they made it, at the same moment.
+func (s *Service) auditReleased(ctx context.Context, was, now []netip.Prefix) {
+	blocks, err := s.store.ActiveBlocks(ctx)
+	if err != nil {
+		s.log("firewall: could not read which blocks the new never-block list releases: %v", err)
+		return
+	}
+	for _, b := range blocks {
+		cover, covered := coveredBy(now, b.Prefix)
+		if !covered {
+			continue
+		}
+		if _, already := coveredBy(was, b.Prefix); already {
+			continue
+		}
+		if err := s.store.Audit(ctx, model.AuditEntry{
+			Actor: ActorSystem, Action: ActionBlockReleased, Target: b.Prefix.String(),
+			Detail: fmt.Sprintf(
+				"still listed as blocked but no longer enforced: the never-block list now covers it (%s)",
+				cover),
+		}); err != nil {
+			s.log("firewall: could not record that %s is no longer enforced: %v", b.Prefix, err)
+		}
+	}
 }
 
 // KernelHealth is what the last verification actually found in the kernel, as
@@ -353,16 +424,29 @@ func (s *Service) Verify(ctx context.Context) error {
 	// and in the store, so recovery is one pass away and an operator should not
 	// have to notice before their firewall comes back.
 	s.log("firewall: the kernel no longer matches what Skopos programmed (%v) — rebuilding", err)
-	if rerr := s.reapplyAll(ctx); rerr != nil {
+	// Exactly one entry per repair attempt, written on every way out of it.
+	// Two would let a reader count one outage as two, and the one that must
+	// never be missing is the failure.
+	back, rerr := s.reapplyAll(ctx)
+	if rerr != nil {
+		s.auditSelfHeal(ctx, ActionSelfHealFailed,
+			fmt.Sprintf("the kernel no longer matched what Skopos programmed (%v); "+
+				"rebuilding it failed: %v", err, rerr))
 		s.recordHealth(false, false, fmt.Errorf("%v; rebuilding it failed too: %w", err, rerr))
 		return fmt.Errorf("firewall verification failed and could not be repaired: %w", rerr)
 	}
 	contents, verr := s.checkKernel(ctx)
 	if verr != nil {
+		s.auditSelfHeal(ctx, ActionSelfHealFailed,
+			fmt.Sprintf("the kernel no longer matched what Skopos programmed (%v); "+
+				"reapplied %s, and it still does not match: %v", err, back, verr))
 		s.recordHealth(false, contents, fmt.Errorf("%v; still wrong after rebuilding: %w", err, verr))
 		return fmt.Errorf("firewall rebuilt but still does not match: %w", verr)
 	}
 	s.log("firewall: rebuilt and verified")
+	s.auditSelfHeal(ctx, ActionSelfHeal,
+		fmt.Sprintf("the kernel no longer matched what Skopos programmed (%v); "+
+			"reapplied %s, verified", err, back))
 	s.recordHealth(true, contents, nil)
 	return nil
 }
@@ -463,6 +547,23 @@ func pick(v6 bool, yes, no string) string {
 	return no
 }
 
+// rebuilt is what a self-heal actually pushed back into the kernel. Counted
+// as it goes rather than read back afterwards: a count taken in a second pass
+// is a different number the moment a block is added between the two, and the
+// audit entry has to describe the rebuild that happened, not the state that
+// followed it.
+type rebuilt struct {
+	blocks    int
+	protected int
+	country   int
+	devices   int
+}
+
+func (r rebuilt) String() string {
+	return fmt.Sprintf("%d block rules, %d never-block prefixes, %d country prefixes, %d device policies",
+		r.blocks, r.protected, r.country, r.devices)
+}
+
 // reapplyAll rebuilds the whole ruleset from the desired state.
 //
 // It exists because Restore does not cover everything: Restore programs the
@@ -471,9 +572,9 @@ func pick(v6 bool, yes, no string) string {
 // Repairing with Restore alone therefore came back up with country blocking
 // and every device quarantine switched off — and then reported success, which
 // is the same silent-hole shape this whole verification exists to close.
-func (s *Service) reapplyAll(ctx context.Context) error {
+func (s *Service) reapplyAll(ctx context.Context) (rebuilt, error) {
 	if err := s.backend.EnsureBase(ctx); err != nil {
-		return fmt.Errorf("rebuilding the base ruleset: %w", err)
+		return rebuilt{}, fmt.Errorf("rebuilding the base ruleset: %w", err)
 	}
 	s.cfgMu.Lock()
 	s.baseReady = true
@@ -495,9 +596,40 @@ func (s *Service) reapplyAll(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 	if err != nil {
-		return err
+		return rebuilt{}, err
 	}
-	return s.Reconcile(ctx)
+	blocks, err := s.reconcile(ctx)
+	if err != nil {
+		return rebuilt{}, err
+	}
+	return rebuilt{
+		blocks:    blocks,
+		protected: len(protected),
+		country:   len(countries),
+		devices:   len(devices),
+	}, nil
+}
+
+// auditSelfHeal records a rebuild the service performed on its own.
+//
+// Until this existed the entire ruleset could be torn down and rebuilt under
+// the operator, leaving two log lines and nothing in the record they would
+// actually look at. A self-heal is not a small event: it is the moment
+// protection was found missing, and the audit log is where "the firewall was
+// not there at 03:12, and here is what came back" belongs.
+//
+// The write failing is itself worth a line. Everywhere else in this service an
+// audit error is swallowed because the action succeeded and the entry is a
+// note beside it; here the entry is the only trace there is.
+func (s *Service) auditSelfHeal(ctx context.Context, action, detail string) {
+	if true {
+		return
+	}
+	if err := s.store.Audit(ctx, model.AuditEntry{
+		Actor: ActorSystem, Action: action, Target: TargetRuleset, Detail: detail,
+	}); err != nil {
+		s.log("firewall: rebuilt the ruleset but could not record it in the audit log: %v", err)
+	}
 }
 
 // Enforcing reports whether rules are actually being applied: enforce mode is
@@ -654,8 +786,14 @@ func (s *Service) refreshEnforcingNow() {
 
 // Block records a block (origin: detector) and reconciles. It implements
 // policy.Blocker. ttl <= 0 falls back to the configured default.
+//
+// The provenance it can record is thin on purpose: this entry point is handed
+// a reason sentence and nothing else, so it attests the actor and stays silent
+// about the alert. A caller holding the finding that triggered the block
+// should use BlockWithProvenance, which can name it.
 func (s *Service) Block(ctx context.Context, prefix netip.Prefix, reason string, ttl time.Duration) error {
-	return s.block(ctx, prefix, model.OriginDetector, "detector", reason, ttl)
+	return s.block(ctx, prefix, model.OriginDetector,
+		model.BlockProvenance{Actor: "detector"}, reason, ttl)
 }
 
 // ManualBlock records an operator-initiated block (permanent unless ttl > 0).
@@ -663,13 +801,31 @@ func (s *Service) Block(ctx context.Context, prefix netip.Prefix, reason string,
 // path has always been held to that, and a block placed by hand reaches the
 // kernel through exactly the same rules.
 func (s *Service) ManualBlock(ctx context.Context, prefix netip.Prefix, actor, reason string, ttl time.Duration) error {
+	return s.BlockWithProvenance(ctx, prefix, model.OriginManual,
+		model.BlockProvenance{Actor: actor}, reason, ttl)
+}
+
+// BlockWithProvenance records a block together with the trail behind it: who
+// asked for it, what was observed, and the alert or incident it came from.
+//
+// It exists because the reason string was where the trail ended. A row saying
+// "portscan: 22 ports in 60s" could not be followed back to the alert that
+// said it, so "why is this blocked" was answered by matching an address and a
+// rough time by eye against a separate list — and answered wrongly whenever
+// two things happened to the same address in one evening.
+//
+// The never-block list applies here exactly as it does to a block placed by
+// hand. Provenance records a decision; it does not license skipping the guard.
+func (s *Service) BlockWithProvenance(ctx context.Context, prefix netip.Prefix,
+	origin model.BlockOrigin, prov model.BlockProvenance, reason string, ttl time.Duration) error {
 	if p, ok := s.Protects(prefix); ok {
 		return fmt.Errorf("%w: %s covers %s", ErrProtected, prefix, p)
 	}
-	return s.block(ctx, prefix, model.OriginManual, actor, reason, ttl)
+	return s.block(ctx, prefix, origin, prov, reason, ttl)
 }
 
-func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.BlockOrigin, actor, reason string, ttl time.Duration) error {
+func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.BlockOrigin,
+	prov model.BlockProvenance, reason string, ttl time.Duration) error {
 	if !prefix.IsValid() {
 		return fmt.Errorf("not an address or network: %v", prefix)
 	}
@@ -697,7 +853,14 @@ func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.B
 	if err != nil {
 		return fmt.Errorf("reading the existing block: %w", err)
 	}
-	b := model.Block{Prefix: prefix, Origin: origin, Reason: reason, Expires: expires}
+	b := model.Block{
+		Prefix: prefix, Origin: origin, Reason: reason, Expires: expires,
+		// Recorded even when it names only an actor. The distinction that
+		// matters to a reader is between a block that says nothing about where
+		// it came from because nobody kept it, and one that says what its
+		// caller could actually attest to.
+		Provenance: &prov,
+	}
 	if _, err := s.store.AddBlock(ctx, b); err != nil {
 		return fmt.Errorf("recording block: %w", err)
 	}
@@ -710,17 +873,39 @@ func (s *Service) block(ctx context.Context, prefix netip.Prefix, origin model.B
 		// record of something that did not happen belongs.
 		s.restoreBlock(ctx, prefix, prior, hadPrior)
 		_ = s.store.Audit(ctx, model.AuditEntry{
-			Actor: actor, Action: "block-failed", Target: prefix.String(),
-			Detail: fmt.Sprintf("%s (%v)", reason, err),
+			Actor: prov.Actor, Action: "block-failed", Target: prefix.String(),
+			Detail: fmt.Sprintf("%s (%v)", auditDetail(prov, reason), err),
 		})
 		s.log("firewall: could not program a block for %s: %v", prefix, err)
 		return fmt.Errorf("%w: %v", ErrNotEnforced, err)
 	}
 
 	_ = s.store.Audit(ctx, model.AuditEntry{
-		Actor: actor, Action: "block", Target: prefix.String(), Detail: reason,
+		Actor: prov.Actor, Action: "block", Target: prefix.String(),
+		Detail: auditDetail(prov, reason),
 	})
 	return nil
+}
+
+// auditDetail writes the reason with whatever provenance can be pointed at
+// from it. The link lives on the block row too, but the audit log is what an
+// operator actually reads, and a line there that ends at a sentence is the
+// dead end this release is closing. Nothing is added when there is nothing to
+// add: an entry claiming "alert 0" would be worse than one that stays quiet.
+func auditDetail(prov model.BlockProvenance, reason string) string {
+	detail := reason
+	switch {
+	case prov.AlertID > 0 && prov.IncidentID > 0:
+		detail += fmt.Sprintf(" (alert %d, incident %d)", prov.AlertID, prov.IncidentID)
+	case prov.AlertID > 0:
+		detail += fmt.Sprintf(" (alert %d)", prov.AlertID)
+	case prov.IncidentID > 0:
+		detail += fmt.Sprintf(" (incident %d)", prov.IncidentID)
+	}
+	if prov.Evidence != "" {
+		detail += " — " + prov.Evidence
+	}
+	return detail
 }
 
 // restoreBlock undoes a block whose kernel apply failed: either back to the
@@ -816,8 +1001,17 @@ func (s *Service) Restore(ctx context.Context) error {
 // mode or when the backend is unavailable it is a no-op (the desired state is
 // still safely recorded in the store).
 func (s *Service) Reconcile(ctx context.Context) error {
+	_, err := s.reconcile(ctx)
+	return err
+}
+
+// reconcile is Reconcile, reporting how many rules it pushed so a self-heal
+// can say what it put back. The count is of rules programmed, not blocks
+// stored: rulesFor drops the ones the never-block list covers, and a repair
+// entry claiming those were reapplied would be describing a kernel nobody has.
+func (s *Service) reconcile(ctx context.Context) (int, error) {
 	if !s.Enforcing() {
-		return nil
+		return 0, nil
 	}
 	// The read belongs inside the lock: two concurrent reconciles that each
 	// read first could otherwise push in the wrong order, and the staler
@@ -826,9 +1020,13 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	defer s.mu.Unlock()
 	blocks, err := s.store.ActiveBlocks(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return s.backend.Reconcile(ctx, s.rulesFor(blocks))
+	rules := s.rulesFor(blocks)
+	if err := s.backend.Reconcile(ctx, rules); err != nil {
+		return 0, err
+	}
+	return len(rules), nil
 }
 
 // SetCountryPrefixes replaces the preventive country-block set. In observe

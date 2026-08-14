@@ -42,7 +42,9 @@ export function RangeControl({
           onClick={() => setRange(r)}
           title={RANGE_HINT[r]}
           aria-pressed={r === range}
-          className="rounded-md px-3 py-1 text-xs font-medium"
+          // 32px was under the thumb on every coarse pointer that gets this
+          // branch rather than the sheet — a tablet, and a phone in landscape.
+          className="inline-flex items-center rounded-md px-3 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-4"
           style={
             r === range
               ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
@@ -83,7 +85,9 @@ export function SegmentedControl<T extends string>({
           onClick={() => onChange(o.value)}
           title={o.hint}
           aria-pressed={o.value === value}
-          className="rounded-md px-3 py-1 text-xs font-medium"
+          // 32px was under the thumb on every coarse pointer that gets this
+          // branch rather than the sheet — a tablet, and a phone in landscape.
+          className="inline-flex items-center rounded-md px-3 py-1 text-xs font-medium pointer-coarse:min-h-11 pointer-coarse:px-4"
           style={
             o.value === value
               ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }

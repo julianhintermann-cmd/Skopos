@@ -198,6 +198,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/devices/{mac}/detail", s.requireRead(http.HandlerFunc(s.handleDeviceDetail)))
 	s.mux.Handle("GET /api/alerts", s.requireRead(http.HandlerFunc(s.handleAlerts)))
 	s.mux.Handle("GET /api/blocks", s.requireRead(http.HandlerFunc(s.handleListBlocks)))
+	s.mux.Handle("GET /api/firewall/kernel", s.requireRead(http.HandlerFunc(s.handleKernelDump)))
 	s.mux.Handle("GET /api/rules", s.requireRead(http.HandlerFunc(s.handleRules)))
 	s.mux.Handle("GET /api/audit", s.requireRead(http.HandlerFunc(s.handleAudit)))
 	s.mux.Handle("GET /api/me", s.requireRead(http.HandlerFunc(s.handleMe)))

@@ -21,11 +21,16 @@ in a single container configured by a single YAML file.
 
 - **Traffic monitoring** — live packet capture on the host's interfaces
   (AF_PACKET), aggregated into flows, with a LAN device inventory and readable
-  names from DNS/SNI. Time-series that stay fast for months via rolled-up
-  aggregates.
-- **Live view** — every conversation as it completes, with throughput updating
-  once a second over a push stream (no busy-polling), device names resolved
-  inline. Watch your whole network in real time.
+  names from DNS/SNI, split by upload and download. Months of history via
+  rolled-up aggregates. Every bucket records what the capture was doing while
+  it was filled, so a chart breaks where nothing was measured instead of
+  drawing a line across it, and a sampled reading is labelled as the floor it
+  is.
+- **Live traffic** — every conversation as it completes, with throughput
+  updating once a second over a push stream (no busy-polling), device names
+  resolved inline. "Live" is the leftmost position on the Traffic page's time
+  control, so the same filters apply whether you are watching the last minute
+  or the last month.
 - **Name your devices** — give any host on the network a friendly name straight
   from the dashboard; it sticks across sightings and takes precedence over the
   discovered hostname everywhere.
@@ -35,24 +40,31 @@ in a single container configured by a single YAML file.
   the NAS.
 - **Firewall management** — block and unblock IPs and CIDRs through a dedicated
   nftables table with in-kernel TTL expiry. State is declarative and restored on
-  every start, so reboots and updates never drop your protection. Ships in
-  **`observe` mode** — nothing is blocked until you deliberately arm it.
+  every start, so reboots and updates never drop your protection. Skopos reads
+  the kernel back every two minutes and reports one verdict —
+  `observing`, `enforcing`, `partial`, `degraded`, `unverified` or `unable` —
+  so a screen can say "unconfirmed since 09:14" rather than painting rows green
+  on the strength of a configuration file. Ships in **`observe` mode** —
+  nothing is blocked until you deliberately arm it.
 - **Detection** — port scans (vertical & horizontal), connection-rate spikes,
   blocklist-feed hits (FireHOL L1, Spamhaus DROP, or any URL) and new-device
   alerts. Thresholds are yours in YAML; a per-source cooldown means one scan is
   one notification, not five hundred.
 - **ntfy alerts** — push to your self-hosted ntfy or ntfy.sh, with severity
   mapped to priority, tap-through to the alert, and a generic webhook too.
-- **Web dashboard** — overview, a real-time Live view, traffic explorer,
-  devices, firewall, alert history, Cloudflare, settings and system health.
-  Light and dark, English UI.
+- **Web dashboard** — eight pages in three groups: *Watch* (Now, Traffic,
+  Devices, Cloudflare), *Protect* (Alerts, Firewall) and *Skopos* (System,
+  Settings). Every alert and incident has its own page, so a push notification
+  opens on the thing it was about. Filters and time ranges live in the URL, so
+  a view reloads, shares and goes back. Light, dark or your operating system's
+  choice; English UI.
 - **One YAML file** — every path, interface, threshold, topic and credential
   comes from `config.yaml`. Nothing about your environment is hardcoded. The one
   deliberate exception is the Cloudflare token, which you connect in the UI and
   Skopos stores encrypted — secrets like that never belong in a config file.
 
 <div align="center">
-<img src="docs/screenshots/live.png" alt="Live view — every conversation in real time" width="49%">
+<img src="docs/screenshots/live.png" alt="Live traffic — every conversation in real time" width="49%">
 <img src="docs/screenshots/cloudflare.png" alt="Cloudflare zone analytics" width="49%">
 <img src="docs/screenshots/alerts.png" alt="Alerts" width="49%">
 <img src="docs/screenshots/traffic-light.png" alt="Traffic (light)" width="49%">
@@ -90,7 +102,7 @@ services:
     volumes:
       - /volume1/docker/skopos/config:/config   # SSD — config.yaml
       - /volume1/docker/skopos/data:/data       # SSD (hot) — database, runtime state
-      - /mnt/nas/skopos/archive:/archive        # HDD/NAS (cold) — archives, logs, backups
+      - /mnt/nas/skopos/archive:/archive        # HDD/NAS (cold) — backups and logs
     mem_limit: 512m
     cpus: 2.0
 ```
@@ -111,8 +123,15 @@ Skopos keeps two independent volumes, both fully configurable:
 
 | Volume | Mount | Put it on | Holds |
 | ------ | ----- | --------- | ----- |
-| **Hot** | `/data` | SSD (fast, small) | SQLite database and runtime state. Capped (`storage.hot_max_size`, default 5 GiB) — oldest raw flows are dropped first, aggregates kept. |
-| **Cold** | `/archive` | HDD / NAS share (large, cheap) | Daily database backups. If it goes offline the backup is skipped and Skopos says so; capture never stops. |
+| **Hot** | `/data` | SSD (small) | SQLite database and runtime state. Capped (`storage.hot_max_size`, default 5 GiB) — oldest raw flows are dropped first, aggregates kept. |
+| **Cold** | `/archive` | HDD / NAS share (large, cheap) | Daily database backups, and JSON logs under `logs/` while `logging.file` is on. If it goes offline the backup is skipped and Skopos says so; capture never stops. |
+
+Retention is per table and set in `storage.retention`: raw flows, the three
+rollups and their capture-coverage records, and — new in 0.4.0 — alerts and
+the incidents grouping them (`storage.retention.alerts`, default 365d, `0` to
+keep forever). Rows past their retention are deleted, not exported:
+`storage.archive_at` is accepted and inert, and the daily backup is the
+durable copy.
 
 ## Configuration
 
@@ -177,8 +196,18 @@ interfaces → capture (AF_PACKET) → flow aggregator ┬→ detectors → poli
 A single Go binary runs the whole pipeline; the React dashboard is embedded
 into it, so the image is one self-contained file. Packet **headers** and
 DNS/SNI **names** are processed — raw packets are never written to disk. The
-flow sink is teed so every completed flow both persists and streams to the Live
+flow sink is teed so every completed flow both persists and streams to the live
 view; throughput is pushed once a second so open dashboards never busy-poll.
+
+Reading DNS queries and TLS server names out of a household's traffic is the
+most revealing thing Skopos does, so `capture.dns` and `capture.sni` gate it at
+the parser: with either off, those names are never lifted out of the packet in
+the first place, and there is no filtered copy anywhere to leak later. Turning
+off `dns` also gives up mDNS device hostnames — a printer announcing itself is
+filed by address and MAC instead. Turning off `sni` also ends the JA4 client
+fingerprint, which comes out of the same handshake. **Before 0.4.0 both
+switches were read by nothing and both parsers ran regardless**; if you set
+either to `false` on an older version, it takes effect now.
 
 - **Backend:** Go (native AF_PACKET capture and nftables via netlink; a small,
   static, multi-arch image).
@@ -234,6 +263,13 @@ and constrains them tightly: host networking plus exactly two capabilities
 read-only root filesystem, and `no-new-privileges`. The gateway and your
 allowlist can never be blocked. See **[SECURITY.md](SECURITY.md)** for the full
 threat model and the derivation of every privilege.
+
+**Behind a reverse proxy**, list the proxy's networks under
+`server.trusted_proxies` (CIDR form, empty by default). The login rate limiter
+counts failed attempts per client address; `X-Forwarded-For` costs nothing to
+forge, so it is honoured only for connections coming from a network you named,
+and everything else is identified by the address it actually came from. A
+malformed entry refuses to start rather than being silently dropped.
 
 ## CLI
 

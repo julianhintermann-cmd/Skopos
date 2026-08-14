@@ -85,14 +85,19 @@ export function SelectBox({
   onToggle: (extend: boolean) => void
 }) {
   return (
-    <input
-      type="checkbox"
-      checked={checked}
-      readOnly
-      aria-label={label}
-      onClick={(e) => onToggle(e.shiftKey)}
-      className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)] pointer-coarse:h-5 pointer-coarse:w-5"
-    />
+    // The padded label is the tap target, and the negative margin gives the
+    // space back to the layout: a 20px checkbox in a table row becomes a 44px
+    // target on a finger without the row growing by 24px.
+    <label className="inline-flex shrink-0 items-center justify-center pointer-coarse:-m-3 pointer-coarse:p-3">
+      <input
+        type="checkbox"
+        checked={checked}
+        readOnly
+        aria-label={label}
+        onClick={(e) => onToggle(e.shiftKey)}
+        className="h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)] pointer-coarse:h-5 pointer-coarse:w-5"
+      />
+    </label>
   )
 }
 

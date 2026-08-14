@@ -71,6 +71,38 @@ type Runtime struct {
 	Rate        Rate          `json:"rate"`
 }
 
+// ApplyError is one subsystem refusing a setting that has already been stored.
+// Field is the settings path the operator can act on — "enforcement",
+// "allowlist" — not the internal call that failed.
+type ApplyError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// ApplyResult is what the live subsystems made of a stored change.
+//
+// Storing a setting and putting it into effect are two separate events, and
+// only the first one used to be reported: a kernel that refused to arm the
+// firewall was logged and the endpoint still answered ok, so the operator was
+// told the network was protected while nothing was being dropped. Subscribers
+// run synchronously inside Update, so the second event is already known by the
+// time the caller gets its response — this is how it travels back to it.
+type ApplyResult struct {
+	Errors []ApplyError `json:"errors,omitempty"`
+}
+
+// OK reports whether every subsystem took the change.
+func (r ApplyResult) OK() bool { return len(r.Errors) == 0 }
+
+// Fail records one subsystem's refusal against the settings field behind it.
+// A nil error records nothing, so callers need no branch of their own.
+func (r *ApplyResult) Fail(field string, err error) {
+	if err == nil {
+		return
+	}
+	r.Errors = append(r.Errors, ApplyError{Field: field, Message: err.Error()})
+}
+
 // Manager owns the effective settings and notifies subscribers on change.
 type Manager struct {
 	ks   KeyStore
@@ -79,7 +111,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	current   Runtime
 	overrides map[string]json.RawMessage
-	subs      []func(Runtime)
+	subs      []func(Runtime) ApplyResult
 }
 
 // New loads any stored overrides and layers them onto the YAML baseline.
@@ -123,9 +155,19 @@ func (m *Manager) Overridden() []string {
 // Base returns the YAML baseline, so the UI can offer "reset to file".
 func (m *Manager) Base() Runtime { return m.base }
 
-// OnChange registers a subscriber. Called synchronously on every update, in
-// registration order, with the new effective settings.
+// OnChange registers a subscriber with nothing to report back — an auditor, a
+// logger. Called synchronously on every update, in registration order, with
+// the new effective settings.
 func (m *Manager) OnChange(f func(Runtime)) {
+	m.OnApply(func(r Runtime) ApplyResult { f(r); return ApplyResult{} })
+}
+
+// OnApply registers a subscriber that says what it managed to do. Every
+// subscriber's result is merged into the value Update and Reset return, so the
+// endpoint that requested the change can answer with the outcome instead of
+// with the intent it just persisted. Same contract as OnChange otherwise:
+// synchronous, in registration order.
+func (m *Manager) OnApply(f func(Runtime) ApplyResult) {
 	m.mu.Lock()
 	m.subs = append(m.subs, f)
 	m.mu.Unlock()
@@ -135,7 +177,12 @@ func (m *Manager) OnChange(f func(Runtime)) {
 // "portscan.external.ports") to the override layer, validates the result,
 // persists it and notifies subscribers. It is all-or-nothing: an invalid
 // patch changes nothing.
-func (m *Manager) Update(patch map[string]json.RawMessage) error {
+//
+// The error means the patch was refused and nothing was stored. The
+// ApplyResult means it was stored and says what the subsystems then did with
+// it; the two are separate answers because "we wrote it down" and "it is in
+// effect" are separate facts.
+func (m *Manager) Update(patch map[string]json.RawMessage) (ApplyResult, error) {
 	m.mu.Lock()
 	next := make(map[string]json.RawMessage, len(m.overrides)+len(patch))
 	for k, v := range m.overrides {
@@ -144,56 +191,64 @@ func (m *Manager) Update(patch map[string]json.RawMessage) error {
 	for k, v := range patch {
 		if !editable[k] {
 			m.mu.Unlock()
-			return fmt.Errorf("settings: %q is not editable at runtime", k)
+			return ApplyResult{}, fmt.Errorf("settings: %q is not editable at runtime", k)
 		}
 		next[k] = v
 	}
 	candidate, err := applyTo(m.base, next)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return ApplyResult{}, err
 	}
 	if err := Validate(candidate); err != nil {
 		m.mu.Unlock()
-		return err
+		return ApplyResult{}, err
 	}
 	raw, err := json.Marshal(next)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return ApplyResult{}, err
 	}
 	if err := m.ks.SetMeta(overridesKey, string(raw)); err != nil {
 		m.mu.Unlock()
-		return err
+		return ApplyResult{}, err
 	}
 	m.overrides = next
 	m.current = candidate
-	subs := append([]func(Runtime){}, m.subs...)
+	subs := append([]func(Runtime) ApplyResult{}, m.subs...)
 	m.mu.Unlock()
 
-	for _, f := range subs {
-		f(candidate)
-	}
-	return nil
+	return notify(subs, candidate), nil
 }
 
-// Reset drops every override, returning to the YAML baseline.
-func (m *Manager) Reset() error {
+// Reset drops every override, returning to the YAML baseline. It reports the
+// apply outcome exactly as Update does: going back to the file is a kernel
+// change too, and it can be refused the same way.
+func (m *Manager) Reset() (ApplyResult, error) {
 	m.mu.Lock()
 	if err := m.ks.SetMeta(overridesKey, ""); err != nil {
 		m.mu.Unlock()
-		return err
+		return ApplyResult{}, err
 	}
 	m.overrides = map[string]json.RawMessage{}
 	m.current = m.base
-	subs := append([]func(Runtime){}, m.subs...)
+	subs := append([]func(Runtime) ApplyResult{}, m.subs...)
 	base := m.base
 	m.mu.Unlock()
 
+	return notify(subs, base), nil
+}
+
+// notify runs every subscriber and collects what each one reported. All of
+// them run even after one fails: the subsystems are independent, and stopping
+// at the first refusal would leave the rest of the settings unapplied with
+// nothing said about them.
+func notify(subs []func(Runtime) ApplyResult, r Runtime) ApplyResult {
+	var out ApplyResult
 	for _, f := range subs {
-		f(base)
+		out.Errors = append(out.Errors, f(r).Errors...)
 	}
-	return nil
+	return out
 }
 
 // applyOverrides layers the stored overrides onto the baseline; callers hold

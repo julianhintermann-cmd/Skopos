@@ -29,7 +29,22 @@ export function EntityLink({
   const href = entityHref(value, index)
   if (!href) return <span className={cls}>{text}</span>
   return (
-    <Link to={href} className={`${cls} hover:underline`} style={{ color: 'var(--accent-strong)' }} title={value}>
+    <Link
+      to={href}
+      // A 15px-tall tap target, and it is the link that opens the dossier for
+      // an address. The padding grows the hit box without moving anything:
+      // vertical padding on an inline box does not change the line height, and
+      // the negative horizontal margin gives the text back its own width.
+      //
+      // Deliberately not the full 44px. These sit in card lists with 4-8px
+      // between lines, so a 44px box would overlap the line above and below and
+      // a thumb aimed at one address would open another. Trading a small target
+      // for a wrong target is not an improvement. Where a link is alone on its
+      // own row, the row should pass a `pointer-coarse:min-h-11` className.
+      className={`${cls} hover:underline pointer-coarse:-mx-1 pointer-coarse:px-1 pointer-coarse:py-1.5`}
+      style={{ color: 'var(--accent-strong)' }}
+      title={value}
+    >
       {text}
     </Link>
   )

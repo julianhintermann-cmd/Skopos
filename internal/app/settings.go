@@ -51,12 +51,25 @@ func runtimeBaseline(cfg *config.Config) settings.Runtime {
 // subsystems. Called once at startup and again on every change, so startup
 // and runtime take exactly the same path — there is no second code path that
 // could drift.
+//
+// It returns what the subsystems refused rather than only logging it. These
+// two errors used to go to the log and no further, which is how POST
+// /api/settings came to answer ok:true over a kernel that had just declined to
+// arm the firewall: the operator armed it, the page said armed, and nothing
+// was being dropped. A log line is not an answer to the caller who asked.
+//
+// Every step still runs after a failure. The settings are independent, and
+// abandoning the detectors because the kernel refused enforcement would turn
+// one refusal into several.
 func (a *App) applySettings(ctx context.Context, r settings.Runtime,
-	fw *firewall.Service, pol *policy.Engine, obs *observerSet, st *store.Store) {
+	fw *firewall.Service, pol *policy.Engine, obs *observerSet, st *store.Store) settings.ApplyResult {
+
+	var res settings.ApplyResult
 
 	// Firewall: enforcement first, since it is the one with kernel effects.
 	if err := fw.SetEnforce(ctx, r.Enforcement == "enforce"); err != nil {
 		a.log.Error("applying enforcement", "err", err)
+		res.Fail("enforcement", err)
 	}
 	fw.SetDefaultTTL(r.BlockTTL)
 
@@ -82,6 +95,9 @@ func (a *App) applySettings(ctx context.Context, r settings.Runtime,
 	}, allow)
 	if err := fw.SetProtected(ctx, pol.ProtectedPrefixes()); err != nil {
 		a.log.Error("applying the never-block list", "err", err)
+		// Reported against "allowlist": that is the field the operator edited
+		// and the one they can fix, not the internal call that failed.
+		res.Fail("allowlist", err)
 	}
 
 	// Detectors.
@@ -96,6 +112,7 @@ func (a *App) applySettings(ctx context.Context, r settings.Runtime,
 		obs.rate.SetLimits(r.Rate.Window, r.Rate.MaxNewConnections, r.Rate.MaxPacketsPerSecond, r.Rate.Block)
 		obs.rateGate.on.Store(r.Rate.Enabled)
 	}
+	return res
 }
 
 // severityOr falls back when the stored value is empty.
@@ -108,13 +125,19 @@ func severityOr(s, fallback string) model.Severity {
 
 // settingsAuditor records every change in the audit log, so "who armed the
 // firewall at 3am" has an answer.
+//
+// The detail is worded as a request because that is all this subscriber knows.
+// It runs alongside the apply, not after it, so it cannot see whether the
+// kernel took the change; reading "enforcement=enforce" here as proof of
+// enforcement is the same mistake the endpoint used to make. The outcome is
+// audited separately as settings_apply_failed by the handler that has it.
 func settingsAuditor(st *store.Store, clock func() time.Time) func(settings.Runtime) {
 	return func(r settings.Runtime) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = st.Audit(ctx, model.AuditEntry{
 			Time: clock(), Actor: "settings", Action: "settings_applied",
-			Detail: "enforcement=" + r.Enforcement,
+			Detail: "requested enforcement=" + r.Enforcement,
 		})
 	}
 }

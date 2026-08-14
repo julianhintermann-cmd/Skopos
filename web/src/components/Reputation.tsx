@@ -75,7 +75,7 @@ export function Reputation({ ip }: { ip: string }) {
         </div>
       )}
 
-      <div className="mt-1 flex flex-wrap gap-x-3" style={{ color: 'var(--muted)' }}>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3" style={{ color: 'var(--muted)' }}>
         <span>Look up elsewhere:</span>
         <Lookup href={`https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`}>AbuseIPDB</Lookup>
         <Lookup href={`https://www.shodan.io/host/${encodeURIComponent(ip)}`}>Shodan</Lookup>
@@ -89,7 +89,15 @@ export function Reputation({ ip }: { ip: string }) {
 // until the operator clicks: these are plain links, not background requests.
 function Lookup({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <a href={href} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--accent-strong)' }}>
+    // 17px on a phone, on its own row: this one can take the full target
+    // without colliding with anything, because the row holds nothing else.
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center underline pointer-coarse:min-h-11"
+      style={{ color: 'var(--accent-strong)' }}
+    >
       {children}
     </a>
   )

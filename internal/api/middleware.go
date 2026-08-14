@@ -167,10 +167,17 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	id, _ := identityFrom(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"username":  id.name,
-		"scope":     id.scope,
-		"auth":      !s.authOff,
-		"enforcing": s.deps.Firewall.Enforcing(),
+		"username": id.name,
+		"scope":    id.scope,
+		"auth":     !s.authOff,
+		// enforcing is the configuration's intention and stays for older
+		// clients. enforcement is what the kernel was last found to hold, and
+		// it is here because the header badge reads this endpoint: it was
+		// sourced from intent, fetched once at mount, and so kept saying
+		// "Enforcing" after the firewall had been switched off — the same
+		// sentence on every page, from a fact nobody had rechecked.
+		"enforcing":   s.deps.Firewall.Enforcing(),
+		"enforcement": s.deps.Firewall.State(),
 	})
 }
 

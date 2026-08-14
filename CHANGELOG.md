@@ -7,6 +7,326 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Three hours with the capture down came out of the throughput chart as a clean
+straight line. `store/query.go` said in its own doc comment that empty buckets
+are omitted and "the caller fills gaps for charting". No caller ever did, and
+the chart joins consecutive points, so the most confident-looking thing on the
+page was the part nobody had measured.
+
+Underneath it sat a second untruth. Adaptive sampling drops packets before the
+aggregator and the aggregator summed what reached it, so at keep rate 0.1 every
+stored byte was a tenth of the traffic, written into the rollups as a total and
+kept there for as long as the rollups are. Sampling engages during a flood, so
+an attack rendered as a dip — the numbers were least reliable at the moment
+they were worth reading.
+
+Most of this release is the work of letting a screen say "I do not know".
+Buckets now record what the capture was doing while they were filled, so a
+quiet network and a dead one stop leaving identical rows. Charts break the line
+where nothing was measured. Tiles and endpoints omit a figure they could not
+fetch instead of printing a zero. Enforcement is reported from what the kernel
+was last found to hold rather than from the configuration that asked for it,
+and that reading now expires — the check added in 0.3.3 recorded a pass and
+kept it forever, so a verify goroutine that died left every screen reporting
+protection from a reading days old.
+
+Two things a stranger could reach are closed. Later IPv4 fragments were read as
+though they carried a transport header, so anyone able to send fragments to
+this host chose which addresses appeared to be opening connections — and a
+detector finding carries a block suggestion. And `X-Forwarded-For` was believed
+no matter who sent it, which let one attacker present a new address on every
+request and kept the login rate limiter from ever counting to two.
+
+### Added
+
+- **Buckets record what the capture was doing, not just what it saw.**
+  Migration 0010 adds coverage tables beside the three rollups: how many
+  capture sources were configured and how many were up, how many seconds of the
+  bucket a heartbeat covered, and the packet count before and after sampling.
+  Coverage is written on a heartbeat rather than on arrival, which is the whole
+  point — a record that appears only when packets do cannot tell silence from
+  absence. Capture status is asserted by the goroutines owning the sources
+  (`starting`, `up`, `partial`, `down`), never inferred from a quiet minute.
+- **Every chart point now says what its numbers mean.** A bucket is `measured`
+  (capture up, nothing sampled, the figures are exact), `sampled` (a keep rate
+  below 1, an interface missing, or only part of the bucket covered — the byte
+  counts are a floor and the keep rate says what fraction they came from),
+  `down` (capture not running, no measurement exists), `nodata` (outside
+  recorded history) or `unverified` (recorded before this release: numbers
+  present, completeness unstated). Series are dense rather than sparse, and a
+  per-series summary counts each state so a view can say "27 of 877 minutes not
+  captured" without walking the array.
+- **Sampled buckets are drawn as two lines and a band.** Solid is what was
+  counted, exact as a lower bound; dashed is measured divided by the keep rate,
+  which is an estimate and not a ceiling; the space between them is the part
+  nobody can resolve. The stored value is never scaled up — an estimate shaped
+  like a measurement is the thing this release exists to stop — and the tooltip
+  says "1 in 10 packets kept" rather than leaving the reader to infer it. Bucket
+  packet
+  totals are exact even under sampling, because the sampler counts before it
+  drops.
+- **Upload and download are separate numbers.** Every raw flow has carried
+  `out_bytes` since the first migration; the writer added the two halves
+  together, so the split survived only as long as the seven-day raw window and
+  no screen could tell a camera uploading four gigabytes overnight from an
+  evening of streaming. Migration 0011 adds the column to all three rollups.
+  On a device series the two halves always sum to the total; on the
+  network-wide series traffic that never crossed the boundary belongs to
+  neither half and the remainder is that local and transit traffic, not a
+  rounding error.
+- **One verdict for whether this machine is protected.** `Service.State()`
+  returns exactly one of `observing`, `enforcing`, `partial`, `degraded`,
+  `unverified` or `unable`, and every screen, endpoint and metric derives from
+  it instead of reading the health flag directly. The order is deliberate:
+  observe mode first, because it is a setting and not a fault; then whether the
+  backend can enforce at all; then whether anyone has looked, and whether they
+  looked recently enough. A passing verification stops counting as evidence
+  three verify intervals after it was taken.
+- **Alerts have a retention bound.** `storage.retention.alerts` defaults to
+  365d and is pruned hourly. It was the last table growing without one, on a
+  box whose disk is also the household's storage. An incident is deleted with
+  the last of its alerts and never before, so the view cannot offer an episode
+  whose events are gone. The three new coverage tables age out with the rollup
+  each one qualifies, never before it.
+- **`logging.file` writes a log file.** It defaulted to true and produced
+  nothing, so after an incident there was nothing to read — container stdout
+  dies with the container, which is exactly when you want it. JSON lines now go
+  to `<cold>/logs/skopos.log`, rotating at `logging.max_size` and keeping
+  `logging.max_backups` files, `0750` on the directory and `0640` on the file
+  because these lines name household hosts. Unmounted cold storage warns once
+  and keeps monitoring rather than refusing to start.
+- **`server.trusted_proxies`** names the networks, in CIDR form, whose
+  `X-Forwarded-For` header Skopos will believe. It defaults to empty. A
+  malformed entry refuses to start rather than being dropped, since a silently
+  ignored one leaves an operator believing in protection they do not have.
+- **The notification lands on the alert it woke you for.** ntfy sends you to
+  `/alerts/<id>`; the route existed and never read its parameter, so a tap at
+  three in the morning arrived at an unfiltered list of two hundred rows.
+  There are now `/alerts/:id` and `/incidents/:id` pages carrying severity,
+  source with its device name, detectors, first and last seen, reputation, the
+  event list and the three actions. An id outside the current page says so and
+  links out rather than quietly showing the list.
+- **The URL carries the view.** Time range, filters and search now live in the
+  address bar, so reloading keeps the context, a view can be sent to someone
+  else, and the back button undoes the filter instead of leaving the page.
+  Absolute timestamps deliberately never enter the URL — the window is resolved
+  at fetch time.
+- **A status strip on every page** states capture, enforcement and outstanding
+  alerts with four states each. Unknown is grey and names the endpoint it could
+  not reach, rather than being drawn as either good or bad.
+- **New metrics.** `skopos_capture_keep_rate`, `skopos_capture_sources_up`,
+  `skopos_capture_sources_total`, `skopos_capture_up`,
+  `skopos_capture_last_packet_timestamp_seconds`,
+  `skopos_firewall_kernel_verified`, `skopos_firewall_kernel_sets_checked`,
+  `skopos_firewall_kernel_checked_timestamp_seconds` and
+  `skopos_firewall_kernel_failing_since_seconds`. The two timestamps are absent
+  rather than zero when the kernel has never been read: a zero timestamp is
+  1970, and an alert on "checked more than ten minutes ago" would then fire
+  forever on a monitor-only install.
+
+### Changed
+
+- **Ten navigation entries became eight.** Overview is now Now; Live is the
+  leftmost position on Traffic's time control rather than a separate page, with
+  the same five filters either side of it; Domains is a lens on Traffic. Nothing
+  was deleted — two pages stopped presenting themselves as destinations — and
+  the search palette still matches "overview", "live" and "domains" to the pages
+  they became. The eight are grouped as Watch, Protect and Skopos. On a phone
+  four of them are tabs and the rest sit behind More.
+- **The theme defaults to `system` instead of always-dark.** Anyone who never
+  touched the toggle will see the dashboard follow their operating system on
+  first load after upgrading. An explicit choice is unaffected. Both palettes
+  are separately tuned and held to the same contrast thresholds.
+- **The primary button's label is readable.** White on the accent measured
+  2.30:1 in dark, which was the default theme, so every confirming action in
+  the product — Block, Save, Apply — carried a label close to unreadable, and
+  had since the palette was written. It is 7.55:1 in dark and 6.38:1 in light
+  now, from a single token that is the only source of text on accent.
+- **Endpoint shapes.** `/api/blocks` carries the full enforcement verdict where
+  its `kernel` field used to carry the narrower kernel-health object; that
+  object's `contents_checked` is now `sets_checked`. `/api/overview` and
+  `/api/health` gain an `enforcement` object beside the existing `enforcing`
+  boolean. `/api/overview` and `/api/flows` return dense series with a `state`
+  discriminator, a `coverage` summary and `bucket_seconds`. Live throughput
+  fields are omitted when there is no reading rather than sent as zero. Old
+  fields keep their old meanings: `enforcing` is still the configuration's
+  intention and `skopos_firewall_enforcing` still scrapes as it always has,
+  because silently changing what an existing signal means would leave a
+  dashboard telling a different story with nobody having touched it.
+- **Prometheus throughput gauges are absent when the capture is not running**,
+  so a scrape renders a gap rather than a floor of zero that looks exactly like
+  a quiet network.
+- **A response omits what it could not fetch.** Overview, device detail and the
+  traffic series list the keys they failed to answer in an `unavailable` array
+  instead of filling in a zero. "Unacked alerts 0", in green, was what an
+  unreachable database used to look like.
+- **Detector state is bounded and the bounds report themselves.** The country
+  throttle no longer sweeps its whole memo on every SYN, the port-scan detector
+  maintains its distinct-port and distinct-target counts as attempts enter and
+  leave rather than rebuilding two maps over 4096 attempts, and the policy
+  cooldown and behavioural baseline are capped and aged like their neighbours.
+  Measured here: the country-block distinct-source path went from 366,088 to
+  872 ns/op and the port-scan SYN-flood path from 170,664 to 428 ns/op. No
+  threshold or semantic changed below any cap. Above one, entries shed to stay
+  inside the bound are counted per detector rather than discarded quietly —
+  silent discarding is how the baseline detector went deaf in the first place —
+  though those counters are not yet exposed on `/metrics`.
+- **`capture.rdns` and `capture.flow_idle_timeout` are documented as inert.**
+  Both are still accepted so existing files keep loading. No address is looked
+  up in reverse today, and every open flow is flushed on the `flow_flush` tick
+  whether it has been silent or not. `storage.archive_at` is inert in the same
+  way, and its comment no longer describes an export that does not happen.
+- **The 0.3.3 notes overstated the kernel self-check.** They said it reads the
+  contents of all fourteen sets. It confirms every set exists and that no set
+  Skopos holds rules for sits empty — an emptiness invariant, not a comparison.
+  A set filled with entirely the wrong addresses is not empty and passes. That
+  is the right check: coalescing merges ranges and interval sets store two
+  elements per range, so exact comparison would flag healthy kernels, and a
+  check that cries wolf gets ignored. The implementation was never in question.
+
+### Fixed
+
+- **A stranger could choose which addresses the firewall proposed to block.**
+  Only the first fragment of an IPv4 datagram carries the transport header;
+  every later one is payload. The parser never looked at the fragment offset,
+  so it read payload bytes as ports and TCP flags and manufactured apparent SYNs
+  from whatever was being transferred, under whatever source address the outer
+  header claimed. Those reached the rate, port-scan and country detectors, and a
+  detector finding carries a block suggestion — so a resolver, an update server
+  or anything else could be picked out for blocking by someone who could send
+  fragments to this host. Later fragments now keep their addresses and protocol
+  and report no ports and no flags, the shape ICMP already had. Their bytes stay
+  counted, because they are real. First fragments are untouched.
+- **`X-Forwarded-For` was believed from any source.** The header was read
+  before anything looked at who sent it, and its only caller is the login rate
+  limiter, which counts failed attempts per client — so a fresh value on each
+  request made every attempt a first offence and the count never reached the
+  threshold. It is now read only for connections from a network named in
+  `server.trusted_proxies`. Configuration parsing moved ahead of opening the
+  database, so a bad value costs nothing to find.
+- **The privacy switches switched nothing.** `capture.dns` and `capture.sni`
+  were documented, defaulted to on and read by no one: the parser lifted DNS
+  names and TLS server names out of every packet regardless, so someone who
+  set `dns: false` to stop recording which sites their household visits was
+  recording them anyway. The gates now sit in the parser rather than downstream
+  of it, so with a switch off the names are never read out of the packet and
+  there is no filtered copy to leak later. Turning off `dns` also gives up mDNS
+  device hostnames; turning off `sni` also ends the JA4 client fingerprint,
+  which comes out of the same handshake. Removing the switches was the other
+  option and it was the wrong one.
+- **Charts draw the gap instead of a line across it**, and the tooltip
+  distinguishes "capture down" from "not recorded", because those are different
+  admissions. The densifier is shared rather than reimplemented per view, since
+  a second implementation is a second chance to reintroduce this.
+- **Three subsystems read a firewall flag computed once at startup.** Switch
+  the firewall to observe at noon and until the process restarted the live view
+  went on marking flows "dropped" that nothing was dropping, country coverage
+  went on reporting addresses as blocked that the kernel had stopped holding,
+  and the policy engine went on suppressing alerts about those sources on the
+  grounds that the firewall was handling them. The last is the worst: the other
+  two show something wrong, that one shows nothing at all, silently, for exactly
+  the sources someone had decided were worth watching. All three now ask the
+  kernel verdict, which is conservative by construction — anything short of a
+  fresh confirmed pass reads as false.
+- **A recorded verification never expired.** If the verify goroutine died,
+  panicked or was never started, the pass stayed recorded for the life of the
+  process and every screen went on reporting protection from a reading that
+  could be days old. Three verify intervals past the last reading the verdict
+  demotes to unverified.
+- **The dashboard could show old numbers as current.** The API client had no
+  timeout, and `fetch` imposes none, so a NAS that accepts the connection and
+  then stops answering left the promise pending forever — nothing rejected, so
+  nothing marked the data stale, and the page sat there showing figures from
+  before the trouble. Requests now abort at twenty seconds and a timeout is
+  raised as status 0, "never reached the server", because an unanswered request
+  may still have been applied and the caller has to be able to branch on that.
+  Staleness is derived from the clock as well as from errors — three missed
+  polls, never under ten seconds — because an error is visible and silence is
+  not. Polling became a chained timeout with one request in flight: an interval
+  keeps firing while a request is still running, so a NAS slower than the poll
+  period accumulates overlapping requests against the single database
+  connection they are all queued behind, and the load rises because the load is
+  high.
+- **Four actions failed silently.** Unblock, acknowledging an alert,
+  acknowledging an incident and unmuting were awaited without a catch, so a
+  rejection did nothing visible: the click appeared to work, the list
+  refreshed, and the operator walked away with a belief that may have been
+  wrong. Unblock is the dangerous one — the server answers that the firewall
+  rejected the change and the block is still in place, and nobody saw it. The
+  toast host had been built and never mounted; it is mounted above the routes
+  now, so an outcome survives the navigation that produced it. Server errors
+  are translated into what happened and, more importantly, what is true now:
+  nothing was changed, or the block is still in place, or the entry was rolled
+  back. The kernel's own wording — "file exists" — no longer reaches anyone. A
+  5xx declines to guess, and says to reload and look.
+- **The Cloudflare tiles reported "Threats 0" in green after a failed fetch.**
+  They take null now and say Cloudflare did not answer, and a cache hit rate
+  over zero requests is undefined rather than 0%.
+- **Device detail dropped five query errors on the floor**, producing a page of
+  confident empties — no destinations, no ports, a flat chart — whenever the
+  database could not answer. It names what it could not fetch, and the volume
+  tile says how many buckets were never captured instead of folding them into
+  the total as zeroes.
+- **Traffic froze its time window at page open** and polled that same pair
+  forever, so "last hour" meant a day ago after a day.
+- **A 404 rendered the dashboard**, which made a broken link look like a
+  working one.
+- **The System audit log hid roughly half of every row on a phone.** At 390px
+  the table put the Detail column — the one that says what happened — past the
+  right edge, with no scrollbar and no other sign there was more. It renders as
+  cards now. An audit log that hides half of each entry is worse than none,
+  because it looks complete.
+- **A caller-supplied `limit` on the alerts and audit endpoints is clamped at
+  1000**, matching incidents. One request could previously materialise the
+  table and stall the single database connection every other query shares.
+
+### Upgrading
+
+- **Two migrations run on the first start after upgrading: 0010 (capture
+  coverage) and 0011 (rollup direction).** Both are additive. 0010 creates
+  three tables; 0011 adds a nullable column with no default, which rewrites no
+  rows. There is no 0012 — the slot reserved for it went unused, and the loader
+  requires contiguous versions.
+- **Rolling the image back is refused, not attempted.** A database written by a
+  newer build makes an older one exit with the two version numbers rather than
+  starting against a schema it does not know. Take a backup before upgrading if
+  you want a way back.
+- **History from before the upgrade is marked as not recorded, and that is
+  deliberate.** Buckets predating migration 0010 have no coverage record, so
+  they render as `unverified`: the byte counts are shown, because a rollup row
+  exists only where flows were flushed into it, but nothing says whether
+  sampling was active or an interface was down. Buckets predating 0011 have no
+  upload/download split and show none — `DEFAULT 0` would have asserted that
+  every byte of the last three months was inbound, a fabricated measurement in
+  the right units across tables kept for 90 and 730 days. Both states shrink to
+  zero as that history ages out of the rollups. Charts say so in words, because
+  a missing band cannot say it for itself.
+- **The theme default changes from dark to system.** If you never touched the
+  toggle, the dashboard will follow your operating system after this upgrade.
+  Set it explicitly in Settings to pin it.
+- **`storage.retention.alerts` is new and defaults to 365d.** If you have alert
+  history older than a year it will be pruned on the next hourly pass, together
+  with the incidents whose last alert falls before the cutoff. Set it to `0` to
+  keep everything.
+- **`logging.file` starts writing.** It defaulted to true and did nothing, so
+  after upgrading a box that never changed it, JSON logs will begin
+  accumulating under `<cold>/logs` up to `max_size` × (`max_backups` + 1). Set
+  `logging.file: false` if you do not want them.
+- **`capture.dns: false` and `capture.sni: false` start taking effect.** If you
+  set either expecting it to work, it now does: DNS-derived and SNI-derived
+  names stop being recorded from that point, mDNS device hostnames go with
+  `dns`, and JA4 fingerprints go with `sni`. Existing stored names are not
+  removed.
+- **API consumers:** `/api/blocks`'s `kernel` field changed shape and its
+  `contents_checked` key is now `sets_checked`. Throughput series are dense and
+  their `bytes`, `packets` and `flows` are null on `down` and `nodata` buckets,
+  so a client that assumed numbers are always present needs to handle null.
+  Live throughput fields are omitted rather than zero when there is no reading.
+  Prometheus throughput gauges are absent from the scrape while the capture is
+  not running. `enforcing` and `skopos_firewall_enforcing` are unchanged.
+
 ## [0.3.3] - 2026-08-14
 
 An eleven-person review round, and the one thing worth saying up front: the
@@ -525,7 +845,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.4.0
 [0.3.3]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.3
 [0.3.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.2
 [0.3.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.1

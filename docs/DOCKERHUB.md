@@ -28,11 +28,12 @@ Then open <http://localhost:8686>.
 
 | | |
 | --- | --- |
-| **Traffic monitoring** | Live capture on the host's interfaces (AF_PACKET), aggregated into flows, with a LAN device inventory and readable names from DNS/SNI. Rolled-up aggregates keep queries fast for months of history. |
-| **Firewall management** | Block IPs and CIDRs through a dedicated nftables table with in-kernel TTL expiry. State is declarative and restored on every start, so reboots and updates never drop protection. |
+| **Traffic monitoring** | Live capture on the host's interfaces (AF_PACKET), aggregated into flows, split by upload and download, with a LAN device inventory and readable names from DNS/SNI. Rolled-up aggregates hold months of history. Each bucket records what the capture was doing while it was filled, so a chart breaks where nothing was measured instead of drawing a line across the gap. |
+| **Firewall management** | Block IPs and CIDRs through a dedicated nftables table with in-kernel TTL expiry. State is declarative and restored on every start, so reboots and updates never drop protection. The kernel is read back every two minutes and the dashboard reports what it found, not what the config asked for. |
 | **Detection** | Port scans (vertical & horizontal), connection-rate spikes, blocklist-feed hits (FireHOL L1, Spamhaus DROP, or any URL) and new-device alerts — thresholds all yours in YAML. |
-| **ntfy alerts** | Push to a self-hosted ntfy or ntfy.sh, severity mapped to priority, tap-through to the alert. A generic JSON webhook too. |
-| **Web dashboard** | Live throughput, traffic explorer, devices, firewall, alerts, system health. Light and dark. Embedded in the binary — no second container. |
+| **ntfy alerts** | Push to a self-hosted ntfy or ntfy.sh, severity mapped to priority, tapping through to the page for that alert. A generic JSON webhook too. |
+| **Web dashboard** | Eight pages: Now, Traffic, Devices, Cloudflare, Alerts, Firewall, System, Settings. Light, dark, or your OS's choice. Embedded in the binary — no second container. |
+| **Privacy switches that work** | `capture.dns` and `capture.sni` gate name extraction at the parser: with either off, DNS queries and TLS server names are never read out of the packet. |
 | **One YAML file** | Every path, interface, threshold, topic and credential. Nothing about your environment is hardcoded. |
 
 **Safe by default:** the firewall ships in `observe` mode. Skopos logs what it
@@ -46,7 +47,7 @@ and your allowlist can never be blocked.
 | Tag | Meaning |
 | --- | --- |
 | `latest` | Newest stable release |
-| `0.1.0`, `0.1`, `0` | Specific version — pin one of these in production |
+| `0.4.0`, `0.4`, `0` | Specific version — pin one of these in production |
 | `edge` | Built from `main` on every push. Useful, but unreleased |
 
 Architectures: **linux/amd64** and **linux/arm64**. The image is a distroless
@@ -76,7 +77,7 @@ services:
     volumes:
       - /volume1/docker/skopos/config:/config   # SSD  — config.yaml
       - /volume1/docker/skopos/data:/data       # SSD  — database, runtime state
-      - /mnt/nas/skopos/archive:/archive        # HDD  — archives, logs, backups
+      - /mnt/nas/skopos/archive:/archive        # HDD  — backups and logs
 
     mem_limit: 512m
     cpus: 2.0
@@ -93,8 +94,10 @@ Two independent volumes, both fully configurable:
   Size-capped; the oldest raw flows are dropped first while aggregates are
   kept, so it can never fill your disk.
 - **Cold** (`/archive`, put it on your HDD or NAS share) — daily database
-  backups. If it goes offline the backup is skipped and Skopos says so;
-  capture never stops.
+  backups, and JSON logs under `logs/` while `logging.file` is on. If it goes
+  offline the backup is skipped and Skopos says so; capture never stops.
+  Nothing is exported here: `storage.archive_at` is accepted and inert, and
+  rows past their retention are deleted rather than archived.
 
 ---
 
@@ -146,7 +149,7 @@ The entrypoint is the `skopos` binary:
 
 ## Screenshots
 
-| Live view | Cloudflare |
+| Live traffic | Cloudflare |
 | --- | --- |
 | ![Live](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/live.png) | ![Cloudflare](https://raw.githubusercontent.com/julianhintermann-cmd/Skopos/main/docs/screenshots/cloudflare.png) |
 

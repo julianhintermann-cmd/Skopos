@@ -62,10 +62,10 @@ export function ConfirmDialog({
         </ul>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button variant="danger" onClick={onConfirm} loading={busy} className="pointer-coarse:min-h-11">
+        <Button variant="danger" onClick={onConfirm} loading={busy}>
           {confirmLabel}
         </Button>
-        <Button onClick={onCancel} className="pointer-coarse:min-h-11">
+        <Button onClick={onCancel}>
           Cancel
         </Button>
       </div>

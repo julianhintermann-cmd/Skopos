@@ -420,6 +420,13 @@ func (a *App) Run(ctx context.Context) error {
 	httpSrv := &http.Server{
 		Addr:    net.JoinHostPort(a.cfg.Server.Bind, itoa(a.cfg.Server.Port)),
 		Handler: srv.Handler(),
+		// Without these a connection that opens and then trickles — or says
+		// nothing at all — holds a goroutine indefinitely. On a port that is
+		// forwarded to the internet that is enough to take the dashboard down
+		// with no request ever completing. No read deadline on the body: the
+		// SSE streams are long-lived by design and would be cut by one.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	serveErr := make(chan error, 1)
 	go func() {

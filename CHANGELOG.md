@@ -79,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repeated their own tables' primary keys — measured at roughly half the file
   on a year of traffic. Dropped, which gives that space back to the retention
   cap.
+- **A stalled connection can no longer take the dashboard down.** The HTTP
+  server had no header or idle timeout, so a connection that opened and then
+  said nothing held a goroutine indefinitely — enough, on a port forwarded to
+  the internet, to exhaust the server without a single request completing.
+- **CSV exports cannot smuggle a spreadsheet formula.** Device labels and the
+  hostnames learned from mDNS are not necessarily chosen by a human, and a
+  value beginning with =, +, - or @ runs as a formula when the file is opened
+  in Excel or Sheets. Those cells are quoted as text now.
 - **The never-block allowlist now holds on every path.** Blocks placed by
   hand went straight to the kernel without consulting it, and so did
   per-device policies — the worse of the two, because device rules sit ahead

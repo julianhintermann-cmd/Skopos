@@ -14,6 +14,24 @@ import (
 	"github.com/julianhintermann-cmd/skopos/internal/wol"
 )
 
+// csvText defuses a spreadsheet formula.
+//
+// A cell beginning with =, +, - or @ is executed as a formula when the file
+// is opened in Excel or Sheets. Device labels are operator-set but hostnames
+// are learned from whatever a device announces over mDNS, so a value here is
+// not necessarily something a human chose — and with authentication off, the
+// labels are not either. Prefixing an apostrophe makes the cell text.
+func csvText(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
 // addrText prints an address, or nothing at all when the device has none of
 // that family. netip's zero value stringifies as "invalid IP", which is a
 // confusing thing to find in a spreadsheet column.
@@ -92,7 +110,8 @@ func (s *Server) handleExportDevices(w http.ResponseWriter, r *http.Request) {
 	_ = cw.Write([]string{"name", "label", "hostname", "ip", "ip6", "mac", "vendor", "first_seen", "last_seen"})
 	for _, d := range devices {
 		_ = cw.Write([]string{
-			d.Name(), d.Label, d.Hostname, addrText(d.IP), addrText(d.IP6), d.MAC, d.Vendor,
+			csvText(d.Name()), csvText(d.Label), csvText(d.Hostname),
+			addrText(d.IP), addrText(d.IP6), d.MAC, csvText(d.Vendor),
 			d.FirstSeen.UTC().Format(time.RFC3339), d.LastSeen.UTC().Format(time.RFC3339),
 		})
 	}
@@ -116,7 +135,7 @@ func (s *Server) handleExportAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = cw.Write([]string{
 			strconv.FormatInt(a.ID, 10), a.Time.UTC().Format(time.RFC3339),
-			a.Detector, string(a.Severity), src, a.Title, a.Detail,
+			a.Detector, string(a.Severity), src, csvText(a.Title), csvText(a.Detail),
 			strconv.Itoa(a.Count), strconv.FormatBool(a.Ack),
 		})
 	}

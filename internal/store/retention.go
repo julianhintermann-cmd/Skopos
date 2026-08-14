@@ -32,6 +32,14 @@ func (s *Store) ApplyRetention(ctx context.Context, p RetentionPolicy) (int64, e
 		{"rollup_1m", "bucket_ms", p.Rollup1m},
 		{"rollup_1h", "bucket_ms", p.Rollup1h},
 		{"rollup_1d", "bucket_ms", p.Rollup1d},
+		// Coverage ages out with the rollup it qualifies, never before it. A
+		// bucket whose throughput outlived its coverage record falls off the
+		// horizon and reads as unverified — the numbers survive, the certainty
+		// does not — which is a worse answer than either table alone would
+		// give, and it would arrive silently as history slid past a boundary.
+		{"coverage_1m", "bucket_ms", p.Rollup1m},
+		{"coverage_1h", "bucket_ms", p.Rollup1h},
+		{"coverage_1d", "bucket_ms", p.Rollup1d},
 	}
 	for _, j := range jobs {
 		if j.age <= 0 {

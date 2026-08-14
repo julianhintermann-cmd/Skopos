@@ -109,13 +109,29 @@ const (
 	// StateNoData is outside recorded history: before Skopos recorded
 	// coverage, or pruned by retention.
 	StateNoData PointState = "nodata"
+	// StateUnverified is a bucket recorded before this release, which stored
+	// throughput without recording whether the capture was complete.
+	//
+	// The numbers are present because they were measured — a rollup row exists
+	// only because flows were flushed into it — but nothing says whether
+	// sampling was active or an interface was down, and before 0.4.0 sampling
+	// undercounted silently. So the bytes are a floor of unknown tightness:
+	// more than nodata, which claims nothing, and less than measured, which
+	// claims exactness.
+	//
+	// Drawing these as a gap would have been the tidier rule and it was wrong.
+	// Refusing to show a number that was genuinely observed, because a second
+	// fact about it is missing, discards evidence and reads to an operator as
+	// data loss on upgrade.
+	StateUnverified PointState = "unverified"
 )
 
 // Point is one bucket of a dense series.
 type Point struct {
 	Time  time.Time  `json:"time"`
 	State PointState `json:"state"`
-	// Bytes, Packets and Flows are nil exactly when State is down or nodata.
+	// Bytes, Packets and Flows are nil exactly when State is down or nodata —
+	// unverified carries real numbers whose completeness is unknown.
 	// Under sampling they are what was measured — a floor — and are never
 	// scaled by 1/keep_rate here: scaling would replace the one thing that was
 	// observed with an inference indistinguishable from a measurement. The
@@ -152,6 +168,9 @@ type CoverageCounts struct {
 	Sampled  int `json:"sampled"`
 	Down     int `json:"down"`
 	NoData   int `json:"nodata"`
+	// Unverified is history from before coverage was recorded: numbers exist,
+	// their completeness does not. It shrinks to zero as that history ages out.
+	Unverified int `json:"unverified"`
 }
 
 // Series is a dense throughput series: exactly one point per bucket in the
@@ -225,6 +244,8 @@ func (s *Store) Throughput(ctx context.Context, from, to time.Time, res Resoluti
 			out.Coverage.Down++
 		case StateNoData:
 			out.Coverage.NoData++
+		case StateUnverified:
+			out.Coverage.Unverified++
 		}
 		out.Points = append(out.Points, p)
 	}
@@ -251,9 +272,20 @@ func classify(t time.Time, ms int64, totals map[int64]TimePoint, cov map[int64]c
 		return p
 	}
 	if ms < horizon {
-		// Older than the first coverage record. Nothing is known about whether
-		// the capture was running, and assuming it was would promote history
-		// to verified-complete on the strength of nothing.
+		// Older than the first coverage record. Whether the capture was
+		// complete is unknown, and assuming it was would promote history to
+		// verified on the strength of nothing.
+		//
+		// But a rollup row is itself evidence: it exists only because flows
+		// were flushed into it, so those bytes were observed. Dropping them
+		// for want of a second fact would discard a real measurement and blank
+		// every chart the moment an operator upgrades — data loss in
+		// appearance, and an untruth in its own right. Unverified says both
+		// halves: here is what was seen, nobody recorded how much was missed.
+		if measured {
+			p.State = StateUnverified
+			p.Bytes, p.Packets, p.Flows = &total.Bytes, &total.Packets, &total.Flows
+		}
 		return p
 	}
 	c, ok := cov[ms]

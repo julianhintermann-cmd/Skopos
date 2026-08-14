@@ -257,3 +257,51 @@ func TestPruneAlertsKeepsEverythingWhenRetentionIsOff(t *testing.T) {
 		t.Errorf("deleted = %d with %d alerts left, want 0 and 1", deleted, countRows(t, s, "alerts"))
 	}
 }
+
+// Coverage must age out with the rollup it qualifies, never before it. A
+// throughput bucket that outlives its coverage record falls off the horizon
+// and reads as unverified: the numbers survive but the certainty does not,
+// which is a worse answer than either table alone would have given — and it
+// would arrive silently, as history slid past a boundary nobody set.
+func TestRetentionAgesCoverageWithItsRollup(t *testing.T) {
+	s, base := testStore(t)
+	ctx := context.Background()
+
+	old := base.Add(-48 * time.Hour)
+	if err := s.WriteFlows([]model.Flow{mkFlow(old, "192.168.1.10", "9.9.9.9", 443, 1000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteCoverage([]model.Coverage{fullMinute(old), fullMinute(base)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.ApplyRetention(ctx, RetentionPolicy{Rollup1m: 24 * time.Hour}); err != nil {
+		t.Fatalf("ApplyRetention: %v", err)
+	}
+
+	var coverageRows, rollupRows int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM coverage_1m WHERE bucket_ms < ?`, toMs(base.Add(-24*time.Hour)),
+	).Scan(&coverageRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM rollup_1m WHERE bucket_ms < ?`, toMs(base.Add(-24*time.Hour)),
+	).Scan(&rollupRows); err != nil {
+		t.Fatal(err)
+	}
+	if coverageRows != 0 || rollupRows != 0 {
+		t.Errorf("past the cutoff: %d coverage rows and %d rollup rows survived, want none of either",
+			coverageRows, rollupRows)
+	}
+
+	// The recent coverage record is untouched — the sweep is bounded by age,
+	// not by table.
+	var recent int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM coverage_1m`).Scan(&recent); err != nil {
+		t.Fatal(err)
+	}
+	if recent != 1 {
+		t.Errorf("coverage rows inside the window = %d, want 1", recent)
+	}
+}

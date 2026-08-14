@@ -135,9 +135,10 @@ func TestQuietMinuteIsNotACaptureGap(t *testing.T) {
 	}
 }
 
-// Buckets older than the first coverage record are outside recorded history.
-// Back-filling them as complete would promote an assumption to a measurement.
-func TestHistoryBeforeCoverageReadsAsNoData(t *testing.T) {
+// Buckets older than the first coverage record kept their throughput but not
+// the proof that it was complete. Calling them measured would promote an
+// assumption to a fact; calling them nodata would throw away a real one.
+func TestHistoryBeforeCoverageKeepsItsNumbersButNotItsCertainty(t *testing.T) {
 	s, base := testStore(t)
 	ctx := context.Background()
 
@@ -153,8 +154,15 @@ func TestHistoryBeforeCoverageReadsAsNoData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Throughput: %v", err)
 	}
-	if p := pointAt(t, series, old); p.State != StateNoData || p.Bytes != nil {
-		t.Errorf("pre-coverage bucket = %q with bytes %v, want %q and a gap", p.State, p.Bytes, StateNoData)
+	// The bytes survive. A rollup row exists only because flows were flushed
+	// into it, so that traffic was observed; what nobody recorded is whether
+	// the capture was complete while it happened. Dropping a measurement for
+	// want of a second fact about it would blank every chart on upgrade, which
+	// is data loss in appearance and an untruth of its own.
+	if p := pointAt(t, series, old); p.State != StateUnverified {
+		t.Errorf("pre-coverage bucket = %q, want %q", p.State, StateUnverified)
+	} else if p.Bytes == nil || *p.Bytes == 0 {
+		t.Errorf("pre-coverage bucket lost its measured bytes: %v", p.Bytes)
 	}
 	if p := pointAt(t, series, base); p.State != StateMeasured {
 		t.Errorf("covered bucket = %q, want %q", p.State, StateMeasured)

@@ -17,9 +17,9 @@ type unsupportedBackend struct{}
 // compiles against the same call site.
 func NewNFTablesBackend([]netip.Prefix) Backend { return &unsupportedBackend{} }
 
-func (unsupportedBackend) Name() string                                           { return "nftables (unsupported)" }
-func (unsupportedBackend) Available() bool                                        { return false }
-func (unsupportedBackend) Verify(context.Context) error                           { return nil }
+func (unsupportedBackend) Name() string                 { return "nftables (unsupported)" }
+func (unsupportedBackend) Available() bool              { return false }
+func (unsupportedBackend) Verify(context.Context) error { return nil }
 
 func (unsupportedBackend) SetCounts(context.Context) (map[string]int, error) {
 	return map[string]int{}, nil

@@ -84,6 +84,30 @@ request and kept the login rate limiter from ever counting to two.
   backend can enforce at all; then whether anyone has looked, and whether they
   looked recently enough. A passing verification stops counting as evidence
   three verify intervals after it was taken.
+- **"Why is this blocked?" has an answer.** A block recorded a free-text
+  reason and nothing else — no actor, no evidence, no link to the alert that
+  caused it — and past the audit log's fifty-row window the question had no
+  answer at all. Blocks now carry provenance, and the audit log takes a filter
+  on actor, action, target and time window. Rows written before this release
+  have no actor rather than a plausible one: silence, not attribution. Paging
+  is keyset rather than offset, because a log still being written shifts under
+  an offset and pages then repeat or drop entries, which in an audit log means
+  answering "nothing happened" when something did.
+- **Skopos records what it does to itself.** A self-heal rebuilds the whole
+  ruleset without the operator; it used to leave two log lines and nothing in
+  the place they would actually look. That, and a block released because the
+  allowlist grew to cover it, now write audit entries.
+- **A read-only view of what the kernel actually holds.** `GET
+  /api/firewall/kernel` reads the fourteen sets and three chains back, with the
+  ranges each set contains. An unknown count is null and never zero, and a dump
+  that failed outright answers 503 with no snapshot rather than an empty one —
+  "the firewall holds nothing" is the alarming answer this exists to be able to
+  give, so it must only ever give it when it is true.
+- **`GET /api/config` says which file is in force.** A mistyped mount means
+  Skopos never read the configuration, runs on defaults, and looks entirely
+  normal while showing settings that are not the operator's. The endpoint
+  reports the path tried, whether it was found, and which keys in that file are
+  inert, each with the reason. No secret is included.
 - **Alerts have a retention bound.** `storage.retention.alerts` defaults to
   365d and is pruned hourly. It was the last table growing without one, on a
   box whose disk is also the household's storage. An incident is deleted with
@@ -284,11 +308,10 @@ request and kept the login rate limiter from ever counting to two.
 
 ### Upgrading
 
-- **Two migrations run on the first start after upgrading: 0010 (capture
-  coverage) and 0011 (rollup direction).** Both are additive. 0010 creates
-  three tables; 0011 adds a nullable column with no default, which rewrites no
-  rows. There is no 0012 — the slot reserved for it went unused, and the loader
-  requires contiguous versions.
+- **Three migrations run on the first start after upgrading: 0010 (capture
+  coverage), 0011 (rollup direction) and 0012 (block provenance).** All are
+  additive and none rewrites a row: 0010 creates three tables, 0011 and 0012
+  add nullable columns with no default, and 0012 adds two audit indexes.
 - **Rolling the image back is refused, not attempted.** A database written by a
   newer build makes an older one exit with the two version numbers rather than
   starting against a schema it does not know. Take a backup before upgrading if

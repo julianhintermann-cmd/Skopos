@@ -7,6 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+An eleven-person review round, and the one thing worth saying up front: the
+operator reported an error message, and the error message was the honest part.
+Blocking an address from an alert showed "file exists" and created the entry
+anyway. The entry was the lie.
+
+The kernel refuses overlapping ranges inside a set, and Skopos pushes the whole
+block list in one atomic batch. So a single overlapping pair — an address
+blocked from an alert, plus the network around it blocked from the same dialog
+a day later — failed that batch, and because the batch is atomic and the list
+is rebuilt from scratch every time, **every subsequent block, unblock and
+expiry silently stopped reaching the kernel**, for every address. After a
+restart it was worse: the firewall enforced nothing at all while the dashboard
+listed every block as active.
+
+The same defect sat in the never-block list, and there it needed no mistake at
+all. The allowlist gets the default gateway appended to it, so allowlisting
+your own LAN — exactly what the example configuration suggests — produced an
+overlapping pair on a clean install, and startup aborted before it programmed a
+single rule. A box configured that way had been enforcing nothing since its
+first boot, and saying otherwise on every screen.
+
+Behind that sat the reason none of it was visible: enforcement was reported
+from intent. The configuration said enforce, netlink opened, so the dashboard
+said enforcing. Nothing ever asked the kernel.
+
+### Added
+
+- **The firewall checks itself, against the kernel.** Every two minutes Skopos
+  reads back what the kernel actually holds — the table, all three chains,
+  their rule counts, and the contents of all fourteen sets — and rebuilds from
+  the stored state when any of it is missing. It detects a wiped ruleset, a
+  deleted or flushed chain, a single deleted rule, and an emptied set, and it
+  repairs all of them without waiting for anyone to notice. What it found and
+  when is reported as it happened, so a view can say "unconfirmed since 09:14"
+  instead of painting rows green on the strength of a configuration file.
+  This is the thing that would have caught the 0.2.1 defect, this round's, and
+  the next one.
+
+### Fixed
+
+- **Overlapping blocks no longer wedge the firewall.** Ranges are cut into
+  non-overlapping pieces before the kernel sees them. Merging alone would not
+  do: a permanent /24 absorbing a one-hour /32 really is one permanent range,
+  but a one-hour /24 containing a permanent /32 is not — collapsing that to the
+  longer expiry would hold 255 uninvolved addresses blocked forever. Each piece
+  takes the right deadline, and pieces rejoin only when their deadlines agree.
+  Existing installations repair themselves on the next pass.
+- **The never-block list loads even when it overlaps itself**, so an allowlist
+  containing its own gateway no longer stops the firewall coming up.
+- **A block that the kernel refuses leaves nothing behind.** The stored row is
+  rolled back and the attempt goes to the audit log, where a record of
+  something that did not happen belongs. Unblocking works the same way in
+  reverse: if the kernel will not lift it, the row stays and you are told the
+  block is still in place. Neither door shows you the kernel's own wording any
+  more.
+- **Enforcement status comes from the kernel.** It used to check the
+  configuration and whether netlink opened — never whether the rules existed —
+  so a failed startup left the dashboard, the health endpoint and the metrics
+  all green over an empty kernel.
+- **Blocking a whole address family is refused.** On IPv4 it wedged the
+  reconciler; on IPv6 it was accepted, dropped every packet in all three
+  chains, and returned success. Ranges that genuinely reach the top of an
+  address family — 255.255.255.0/24, 240.0.0.0/4 — work correctly instead of
+  being silently discarded.
+- **The throughput chart was 60x too high** on every range longer than twelve
+  hours, and on every window of the device page. The server picks a coarser
+  bucket as the range grows and says which it used; the chart divided by a
+  fixed sixty regardless, and labelled the result "average bits per second".
+- **History search answered investigations with a false negative.** A subnet
+  search applied its row limit before the address filter, so it fetched the
+  newest few hundred flows regardless of address, discarded the ones outside
+  the range, and reported "Nothing matched" while the matches sat just past the
+  cut. It also now says when there are more matches than fit, rather than
+  presenting a capped page as the whole answer.
+- **One query parameter was a denial of service.** Asking for minute buckets
+  across ninety days took forty-five seconds where the same range at the right
+  resolution took a third of a millisecond — and every query in Skopos shares
+  one database connection, so it stalled traffic recording and every other page
+  along with it. The requested resolution is now clamped to what the span
+  warrants.
+- **The reputation card stopped reading silence as a clean result.** The
+  regression caught in 0.3.0 was still there, inside the code written to fix
+  it: any well-formed reply, including a rate-limit notice, decoded to "no
+  reports" and was cached for a day. blocklist.de reported a confident zero
+  from a half-parsed reply, and stayed silent entirely when it could not answer
+  at all. And "not on your blocklists" was stated as fact when no blocklist had
+  loaded.
+- **The device tracker no longer dies on its first write error** — it used to
+  end permanently and without a single log line, taking new-device alerts and
+  presence tracking with it, and then freezing last-seen timestamps so the
+  presence watcher announced that devices had left when they had not. Both it
+  and the flow writer now report degradation and recovery through the
+  notification channel, once each, rather than into a log file.
+- **The detectors no longer go deaf.** Port-scan and rate detection kept
+  per-source state that was never reclaimed; past 8192 distinct addresses they
+  stopped tracking anything new, permanently. On a box with a forwarded port
+  that ceiling arrives in days, and it arrives with the table full of addresses
+  last heard from weeks earlier while the one attacking right now is ignored.
+  Sources silent for several detection windows are now reclaimed; active ones
+  never are, because evicting those is exactly what a flood of spoofed
+  addresses would be trying to achieve.
+- **The rate detector no longer cuts off your own network.** A backup or an
+  rsync opens hundreds of connections in seconds — ordinary on a LAN — and the
+  threshold tuned for a flood from the internet auto-blocked the machine doing
+  it, mid-transfer. LAN sources are held to a proportionally higher bar and are
+  never proposed for an automatic block.
+- **Acknowledging an alert no longer undoes itself.** A poll already in flight
+  could land after the acknowledgement and put the row back, with no error and
+  nothing to click — on the one screen where "did that register" is the whole
+  question.
+- **The live tiles admit when they have no reading.** A green "Full · every
+  packet" and 0 bit/s before the first measurement made a dead capture look
+  like a calm network. The settings card read enforcement from the
+  configuration string, so it could show a green pill while the firewall view
+  showed the degraded banner — the app contradicting itself about one fact.
+  An unreadable country list no longer renders as "No countries blocked", and
+  device names now resolve for IPv6 as well as IPv4.
+- **The documentation stopped promising a spool buffer** that does not exist.
+  The correction in 0.3.2 reached the README and the configuration reference
+  and missed seven other places, including the page strangers read first.
+
 ## [0.3.2] - 2026-08-14
 
 Seven reviewers went through the codebase together. What they found was

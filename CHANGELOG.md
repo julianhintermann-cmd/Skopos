@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-14
+
 An eleven-person review round, and the one thing worth saying up front: the
 operator reported an error message, and the error message was the honest part.
 Blocking an address from an alert showed "file exists" and created the entry
@@ -522,7 +524,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.3
 [0.3.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.2
 [0.3.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.1
 [0.3.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.0

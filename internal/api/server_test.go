@@ -284,3 +284,45 @@ func TestTrustedProxiesRefusesAMalformedRange(t *testing.T) {
 		t.Fatal("expected a malformed trusted_proxies entry to be refused")
 	}
 }
+
+// A failing kernel check must be reported without turning /api/health red.
+//
+// That endpoint drives the container healthcheck, and a 503 restarts the
+// container. EnsureBase commits its teardown separately from its rebuild, so
+// every restart widens the window in which the firewall table does not exist:
+// wiring the kernel verdict into OK would answer a firewall that is not
+// enforcing with a loop of restarts, each one leaving it not enforcing for
+// longer. The check reports; reapplyAll repairs.
+func TestHealthReportsKernelTroubleWithoutGoingUnhealthy(t *testing.T) {
+	srv, _ := newTestServer(t, "none")
+	srv.deps.Health = func() Health {
+		return Health{
+			OK:        true,
+			Version:   "test",
+			Enforcing: true,
+			Enforcement: &firewall.EnforcementState{
+				Mode:    "enforce",
+				Verdict: firewall.VerdictDegraded,
+				Error:   "the blocks4 set is empty in the kernel",
+			},
+		}
+	}
+
+	resp := do(t, srv.Handler(), "GET", "/api/health", "", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a degraded kernel must not restart the container", resp.StatusCode)
+	}
+	var got Health
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Enforcement == nil {
+		t.Fatal("the kernel verdict is missing: reporting it is the whole point")
+	}
+	if got.Enforcement.Verdict != firewall.VerdictDegraded {
+		t.Errorf("verdict = %q, want %q", got.Enforcement.Verdict, firewall.VerdictDegraded)
+	}
+	if !got.OK {
+		t.Error("ok = false: this is the restart loop the separation exists to prevent")
+	}
+}

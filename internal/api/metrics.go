@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/julianhintermann-cmd/skopos/internal/firewall"
 	"github.com/julianhintermann-cmd/skopos/internal/version"
 )
 
@@ -57,8 +58,35 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			float64(live.LastPacketAt.UnixNano())/1e9)
 	}
 
+	// Unchanged in meaning: the configuration's intention. Anything scraping it
+	// keeps getting what it has always got.
 	metric("skopos_firewall_enforcing", "1 when blocks are applied to the kernel.", "gauge",
 		boolValue(s.deps.Firewall.Enforcing()))
+
+	// What the kernel was last found to hold, which is a different question.
+	// Added beside the old gauge rather than redefining it: a dashboard built
+	// on the old meaning would otherwise change what it says without anyone
+	// touching it, which is its own kind of dishonesty.
+	fwState := s.deps.Firewall.State()
+	metric("skopos_firewall_kernel_verified",
+		"1 when the kernel was read back and held what Skopos programmed.", "gauge",
+		boolValue(fwState.Verdict == firewall.VerdictEnforcing))
+	metric("skopos_firewall_kernel_sets_checked",
+		"1 when the last check could also confirm no rule set sits empty.", "gauge",
+		boolValue(fwState.SetsChecked))
+	// Absent rather than zero when the kernel has never been read: a zero
+	// timestamp is 1970, and an alert on "older than 10 minutes" would fire
+	// forever on a monitor-only install instead of staying quiet.
+	if !fwState.CheckedAt.IsZero() {
+		metric("skopos_firewall_kernel_checked_timestamp_seconds",
+			"When the kernel was last read back, in seconds since the epoch.", "gauge",
+			float64(fwState.CheckedAt.UnixNano())/1e9)
+	}
+	if !fwState.FailingSince.IsZero() {
+		metric("skopos_firewall_kernel_failing_since_seconds",
+			"When the kernel first stopped matching, in seconds since the epoch.", "gauge",
+			float64(fwState.FailingSince.UnixNano())/1e9)
+	}
 
 	// Findings the policy worker could not keep up with. Dropping them beats
 	// stalling packet capture, but it is not something to keep quiet about:

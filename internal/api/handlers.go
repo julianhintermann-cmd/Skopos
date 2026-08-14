@@ -31,6 +31,17 @@ type Health struct {
 	// still acts only on traffic passing this machine.
 	Mirror bool   `json:"mirror"`
 	Detail string `json:"detail,omitempty"`
+	// Enforcement is what the kernel was last found to hold. It is added
+	// alongside Enforcing rather than replacing it, and it deliberately does
+	// not feed OK.
+	//
+	// OK drives the container healthcheck, and a 503 there restarts the
+	// container. EnsureBase commits its teardown separately from its rebuild,
+	// so every restart widens the window in which the table does not exist —
+	// a failing kernel check that forced restarts would leave the firewall off
+	// for longer than the failure it was reacting to, in a loop. The check
+	// reports; the repair is reapplyAll's job, and it already runs.
+	Enforcement *firewall.EnforcementState `json:"enforcement,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +78,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
 		"live":       s.liveSnapshot(),
 		"resolution": res,
-		"enforcing":  s.deps.Firewall.Enforcing(),
+		// enforcing is the configuration's intention and stays for older
+		// clients. enforcement is what the kernel was last found to hold, and
+		// is what a view should render — the two disagree exactly when it
+		// matters, and only the second one can say "unconfirmed since 09:14".
+		"enforcing":   s.deps.Firewall.Enforcing(),
+		"enforcement": s.deps.Firewall.State(),
 	}
 	if series, err := s.deps.Store.Throughput(ctx, from, now, res); err == nil {
 		// bucket_seconds ships alongside the resolution: the chart turns bucket
@@ -387,7 +403,7 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 		// What the kernel was last actually found to hold, so the view can say
 		// "unconfirmed since 09:14" instead of painting every row green on the
 		// strength of a configuration file.
-		"kernel": s.deps.Firewall.KernelHealth(),
+		"kernel": s.deps.Firewall.State(),
 	})
 }
 

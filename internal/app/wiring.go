@@ -160,6 +160,10 @@ func clockToTime(c config.ClockTime) time.Time {
 func (a *App) healthFunc(st *store.Store, backend firewall.Backend, fw *firewall.Service) func() api.Health {
 	return func() api.Health {
 		h := api.Health{OK: true, Enforcing: fw.Enforcing(), Version: version.Version}
+		// Reported, never folded into OK — see the field's comment for why a
+		// failing kernel check must not restart the container.
+		kernel := fw.State()
+		h.Enforcement = &kernel
 		if a.demo {
 			h.Capture = "demo"
 		} else {

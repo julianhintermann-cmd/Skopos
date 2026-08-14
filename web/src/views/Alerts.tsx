@@ -1,285 +1,89 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useFetch } from '../lib/useFetch'
-import {
-  api,
-  countryFlag,
-  countryName,
-  coveredByProtected,
-  networkPrefix,
-  type Alert,
-  type BlocksResponse,
-  type Incident,
-  type MuteRule,
-  type ReputationInfo,
-} from '../lib/api'
+import { api, type Alert, type Incident, type MuteRule } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill } from '../components/ui'
-import { useDeviceNames } from '../lib/deviceNames'
+import { BlockDialog } from '../components/BlockDialog'
+import { MuteDialog } from '../components/MuteDialog'
+import { SegmentedControl } from '../components/RangeControl'
+import { EntityLink } from '../components/entity'
+import { PageTitle } from '../components/PageTitle'
+import { useDeviceIndex } from '../lib/links'
+import { useUrlState } from '../lib/useUrlState'
 import { formatTime } from '../lib/format'
 
-// isPublic filters out addresses a WHOIS lookup cannot say anything about.
-function isPublic(ip: string): boolean {
-  return !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|fe80:|fc|fd)/i.test(ip)
-}
+// What Skopos noticed, grouped into episodes, and whether it has been dealt
+// with.
+//
+// The lens and the filter both live in the URL, so /alerts?unacked=1 is a real
+// address someone can bookmark — and the rows are links to pages rather than
+// in-place expanders, because the detail of an alert is a place you can be
+// sent to from a push notification.
 
-// Reputation loads and renders who an external address belongs to.
-function Reputation({ ip }: { ip: string }) {
-  const [info, setInfo] = useState<ReputationInfo | null>(null)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    let stop = false
-    api
-      .get<ReputationInfo>(`/api/reputation?ip=${encodeURIComponent(ip)}`)
-      .then((i) => !stop && setInfo(i))
-      .catch((e) => !stop && setErr((e as Error).message))
-    return () => {
-      stop = true
-    }
-  }, [ip])
-
-  if (err) return <div className="text-xs" style={{ color: 'var(--crit)' }}>Lookup failed: {err}</div>
-  if (!info) return <div className="text-xs" style={{ color: 'var(--muted)' }}>Looking up {ip}…</div>
-
-  const score = info.abuse_score
-  const signals = info.signals ?? []
-  const reports = info.abuse_reports ?? 0
-  return (
-    <div className="rounded-md px-3 py-2 text-xs" style={{ background: 'var(--surface-2)' }}>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        {info.org && <span><span style={{ color: 'var(--muted)' }}>Owner</span> {info.org}{info.handle ? ` (${info.handle})` : ''}</span>}
-        {info.country && (
-          <span>
-            <span style={{ color: 'var(--muted)' }}>
-              {info.country_source === 'registry' ? 'Registered in' : 'Country'}
-            </span>{' '}
-            {countryFlag(info.country)} {countryName(info.country)}
-          </span>
-        )}
-        {info.isp && <span><span style={{ color: 'var(--muted)' }}>ISP</span> {info.isp}</span>}
-        {info.usage_type && <span><span style={{ color: 'var(--muted)' }}>Type</span> {info.usage_type}</span>}
-        {score !== undefined ? (
-          <span
-            className="rounded-full px-2 py-0.5 font-medium"
-            style={
-              score >= 50
-                ? { background: 'var(--crit-tint)', color: 'var(--crit)' }
-                : { background: 'var(--warn-tint)', color: 'var(--warn)' }
-            }
-          >
-            Abuse {score}%{reports > 0 ? ` · ${reports} reports` : ''}
-          </span>
-        ) : (
-          // Never green. No free source having data on an address does not
-          // make it safe — it makes it unknown, and this card sits next to an
-          // alert that fired for a reason.
-          <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: 'var(--surface)', color: 'var(--muted)' }}>
-            No reports — unknown, not cleared
-          </span>
-        )}
-      </div>
-
-      {signals.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5" style={{ color: 'var(--muted)' }}>
-          {signals.map((s) => (
-            <span key={s.source}>
-              {s.source}: {s.detail}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-1 flex flex-wrap gap-x-3" style={{ color: 'var(--muted)' }}>
-        <span>Look up elsewhere:</span>
-        <Lookup href={`https://www.abuseipdb.com/check/${encodeURIComponent(ip)}`}>AbuseIPDB</Lookup>
-        <Lookup href={`https://www.shodan.io/host/${encodeURIComponent(ip)}`}>Shodan</Lookup>
-        <Lookup href={`https://www.virustotal.com/gui/ip-address/${encodeURIComponent(ip)}`}>VirusTotal</Lookup>
-      </div>
-    </div>
-  )
-}
-
-// Lookup opens a third-party report on the address. Nothing is sent anywhere
-// until the operator clicks: these are plain links, not background requests.
-function Lookup({ href, children }: { href: string; children: React.ReactNode }) {
-  return (
-    <a href={href} target="_blank" rel="noreferrer" className="underline" style={{ color: 'var(--accent-strong)' }}>
-      {children}
-    </a>
-  )
-}
+const VIEWS = ['incidents', 'events'] as const
+type View = (typeof VIEWS)[number]
 
 export function Alerts({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
-  const [unackedOnly, setUnackedOnly] = useState(false)
-  const [grouped, setGrouped] = useState(true)
-  const path = `/api/alerts?limit=200${unackedOnly ? '&unacked=true' : ''}`
-  const { data, loading, error, refresh } = useFetch<{ alerts: Alert[] | null }>(path, {
-    pollMs: grouped ? 0 : 5000,
-    onUnauthorized,
-  })
-  const names = useDeviceNames(onUnauthorized)
-
-  const alerts = data?.alerts ?? []
-  const [expanded, setExpanded] = useState<number | null>(null)
-  const [blockFor, setBlockFor] = useState<Alert | null>(null)
-
-  const ack = async (id: number) => {
-    await api.post(`/api/alerts/${id}/ack`)
-    refresh()
-  }
-
-  if (grouped) {
-    return (
-      <Incidents
-        onUnauthorized={onUnauthorized}
-        canWrite={canWrite}
-        unackedOnly={unackedOnly}
-        setUnackedOnly={setUnackedOnly}
-        onUngroup={() => setGrouped(false)}
-      />
-    )
-  }
+  const [view, setView] = useUrlState<View>('view', 'incidents', { valid: VIEWS, history: 'push' })
+  const [unacked, setUnacked] = useUrlState('unacked', '', { valid: ['', '1'] as const, history: 'push' })
+  const onlyUnacked = unacked === '1'
 
   return (
     <div className="flex flex-col gap-4">
-      {blockFor?.Source && (
-        // Keyed on the target: without it React reuses the instance when the
-        // operator opens the dialog on one alert and then another, and the
-        // note typed for the first would be saved against the second.
-        <BlockDialog
-          key={blockFor.ID}
-          source={blockFor.Source}
-          detector={blockFor.Detector}
-          onClose={() => setBlockFor(null)}
-          onDone={() => {
-            setBlockFor(null)
-            refresh()
-          }}
-          onUnauthorized={onUnauthorized}
+      <PageTitle title="Alerts">
+        {onlyUnacked ? 'showing only what has not been acknowledged' : 'everything Skopos has noticed'}
+      </PageTitle>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <SegmentedControl
+          value={view}
+          label="View"
+          onChange={setView}
+          options={[
+            { value: 'incidents', label: 'Episodes', hint: 'Grouped by source' },
+            { value: 'events', label: 'Every alert', hint: 'One row per alert' },
+          ]}
         />
-      )}
-      <Card>
-      <CardHeader
-        title="Alerts"
-        sub={`${alerts.length} shown · every event individually`}
-        right={
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setGrouped(true)}
-              className="rounded-md px-2.5 py-1 text-xs font-medium"
-              style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
-            >
-              Group by source
-            </button>
-            <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--muted)' }}>
-              <input type="checkbox" checked={unackedOnly} onChange={(e) => setUnackedOnly(e.target.checked)} />
-              Unacknowledged only
-            </label>
-            <a
-              href="/api/export/alerts.csv"
-              download
-              className="rounded-md px-2.5 py-1 text-xs font-medium"
-              style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
-            >
-              Export CSV
-            </a>
-          </div>
-        }
-      />
-      {loading && !data ? (
-        <Spinner />
-      ) : error ? (
-        <EmptyState>Could not load alerts: {error}</EmptyState>
-      ) : alerts.length === 0 ? (
-        <EmptyState>No alerts. All quiet.</EmptyState>
+        <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--muted)' }}>
+          <input type="checkbox" checked={onlyUnacked} onChange={(e) => setUnacked(e.target.checked ? '1' : '')} />
+          Unacknowledged only
+        </label>
+        <a
+          href="/api/export/alerts.csv"
+          download
+          className="ml-auto rounded-md px-2.5 py-1 text-xs font-medium"
+          style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
+        >
+          Export CSV
+        </a>
+      </div>
+
+      {view === 'incidents' ? (
+        <Incidents onUnauthorized={onUnauthorized} canWrite={canWrite} onlyUnacked={onlyUnacked} />
       ) : (
-        <ul>
-          {alerts.map((a) => (
-            <li
-              key={a.ID}
-              className="flex items-start gap-3 px-4 py-3"
-              style={{ borderTop: '1px solid var(--border)', opacity: a.Ack ? 0.55 : 1 }}
-            >
-              <div className="pt-0.5">
-                <SeverityBadge severity={a.Severity} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{a.Title}</span>
-                  {a.Count > 1 && <Pill>{a.Count}×</Pill>}
-                  {a.Ack && <Pill tone="good">acked</Pill>}
-                </div>
-                <div className="text-xs" style={{ color: 'var(--muted)' }}>
-                  {a.Detail}
-                  {a.Source && (
-                    <span className="font-mono">
-                      {' · '}
-                      {a.Source}
-                      {names.get(a.Source) && <span className="font-sans"> ({names.get(a.Source)})</span>}
-                    </span>
-                  )}
-                  {a.Source && isPublic(a.Source) && (
-                    <button
-                      onClick={() => setExpanded(expanded === a.ID ? null : a.ID)}
-                      className="ml-2 rounded px-1.5 py-0.5 font-medium"
-                      style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
-                    >
-                      {expanded === a.ID ? 'hide' : 'who is this?'}
-                    </button>
-                  )}
-                </div>
-                {expanded === a.ID && a.Source && (
-                  <div className="mt-2">
-                    <Reputation ip={a.Source} />
-                  </div>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="font-mono text-xs" style={{ color: 'var(--muted)' }}>
-                  {formatTime(a.Time)}
-                </span>
-                {canWrite && a.Source && (
-                  <Button onClick={() => setBlockFor(a)} className="!px-2 !py-1 !text-xs">
-                    Block
-                  </Button>
-                )}
-                {canWrite && !a.Ack && (
-                  <Button onClick={() => ack(a.ID)} className="!px-2 !py-1 !text-xs">
-                    Ack
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <Events onUnauthorized={onUnauthorized} canWrite={canWrite} onlyUnacked={onlyUnacked} />
       )}
-      </Card>
     </div>
   )
 }
 
-// Incidents is the grouped view: one row per source per episode. The flat
-// list is still one click away — grouping is a lens, not a replacement, and
-// a burst of forty scans from one address should read as one event.
+// Incidents is the default lens: one row per source per episode. A burst of
+// forty scans from one address should read as one event.
 function Incidents({
   onUnauthorized,
   canWrite,
-  unackedOnly,
-  setUnackedOnly,
-  onUngroup,
+  onlyUnacked,
 }: {
   onUnauthorized: () => void
   canWrite: boolean
-  unackedOnly: boolean
-  setUnackedOnly: (v: boolean) => void
-  onUngroup: () => void
+  onlyUnacked: boolean
 }) {
-  const path = `/api/incidents?limit=200${unackedOnly ? '&unacked=true' : ''}`
-  const { data, loading, error, refresh } = useFetch<{ incidents: Incident[] | null }>(path, {
+  const path = `/api/incidents?limit=200${onlyUnacked ? '&unacked=true' : ''}`
+  const { data, loading, error, stale, refresh } = useFetch<{ incidents: Incident[] | null }>(path, {
     pollMs: 5000,
     onUnauthorized,
   })
-  const names = useDeviceNames(onUnauthorized)
-  const [open, setOpen] = useState<number | null>(null)
+  const index = useDeviceIndex(onUnauthorized)
   const [muteFor, setMuteFor] = useState<Incident | null>(null)
   const [blockFor, setBlockFor] = useState<Incident | null>(null)
 
@@ -319,38 +123,16 @@ function Incidents({
 
       <Card>
         <CardHeader
-          title="Incidents"
+          title="Episodes"
           sub={`${incidents.length} shown · alerts grouped by source and episode`}
-          right={
-            <div className="flex items-center gap-3">
-              <button
-                onClick={onUngroup}
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
-                style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
-              >
-                Show every alert
-              </button>
-              <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--muted)' }}>
-                <input type="checkbox" checked={unackedOnly} onChange={(e) => setUnackedOnly(e.target.checked)} />
-                Unacknowledged only
-              </label>
-              <a
-                href="/api/export/alerts.csv"
-                download
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
-                style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
-              >
-                Export CSV
-              </a>
-            </div>
-          }
+          right={stale ? <Pill tone="warn">last refresh failed</Pill> : undefined}
         />
         {loading && !data ? (
           <Spinner />
-        ) : error ? (
-          <EmptyState>Could not load incidents: {error}</EmptyState>
+        ) : !data ? (
+          <EmptyState>Could not load incidents{error ? `: ${error}` : ''}.</EmptyState>
         ) : incidents.length === 0 ? (
-          <EmptyState>No incidents. All quiet.</EmptyState>
+          <EmptyState>{onlyUnacked ? 'Nothing is waiting for you.' : 'No incidents recorded.'}</EmptyState>
         ) : (
           <ul>
             {incidents.map((inc) => (
@@ -359,13 +141,15 @@ function Incidents({
                 className="px-4 py-3"
                 style={{ borderTop: '1px solid var(--border)', opacity: inc.ack ? 0.55 : 1 }}
               >
-                <div className="flex items-start gap-3">
+                <div className="flex flex-wrap items-start gap-3">
                   <div className="pt-0.5">
                     <SeverityBadge severity={inc.severity as Alert['Severity']} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{inc.title}</span>
+                      <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline">
+                        {inc.title}
+                      </Link>
                       {inc.alert_count > 1 && <Pill>{inc.alert_count} events</Pill>}
                       {inc.detectors?.map((d) => (
                         <Pill key={d} tone="neutral">
@@ -375,51 +159,33 @@ function Incidents({
                       {inc.ack && <Pill tone="good">acked</Pill>}
                     </div>
                     <div className="mt-0.5 text-xs" style={{ color: 'var(--muted)' }}>
-                      <span className="font-mono">{inc.source}</span>
-                      {names.get(inc.source) && <span> ({names.get(inc.source)})</span>}
+                      <EntityLink value={inc.source} index={index} />
+                      {index.names.get(inc.source) && <span> ({index.names.get(inc.source)})</span>}
                       {' · '}
                       {formatTime(inc.first_seen)} → {formatTime(inc.last_seen)}
-                      <button
-                        onClick={() => setOpen(open === inc.id ? null : inc.id)}
-                        className="ml-2 rounded px-1.5 py-0.5 font-medium"
-                        style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
-                      >
-                        {open === inc.id ? 'hide events' : 'events'}
-                      </button>
-                      {isPublic(inc.source) && (
-                        <button
-                          onClick={() => setOpen(open === -inc.id ? null : -inc.id)}
-                          className="ml-2 rounded px-1.5 py-0.5 font-medium"
-                          style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
-                        >
-                          {open === -inc.id ? 'hide' : 'who is this?'}
-                        </button>
-                      )}
+                      {' · '}
+                      <Link to={`/incidents/${inc.id}`} className="font-medium hover:underline" style={{ color: 'var(--accent-strong)' }}>
+                        open
+                      </Link>
                     </div>
-                    {open === -inc.id && (
-                      <div className="mt-2">
-                        <Reputation ip={inc.source} />
-                      </div>
-                    )}
-                    {open === inc.id && <IncidentEvents id={inc.id} />}
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {canWrite && inc.source && (
-                      <Button onClick={() => setBlockFor(inc)} className="!px-2 !py-1 !text-xs">
-                        Block
-                      </Button>
-                    )}
-                    {canWrite && (
+                  {canWrite && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      {inc.source && (
+                        <Button onClick={() => setBlockFor(inc)} className="!px-2 !py-1 !text-xs">
+                          Block
+                        </Button>
+                      )}
                       <Button onClick={() => setMuteFor(inc)} className="!px-2 !py-1 !text-xs">
                         Mute
                       </Button>
-                    )}
-                    {canWrite && !inc.ack && (
-                      <Button onClick={() => ack(inc.id)} className="!px-2 !py-1 !text-xs">
-                        Ack
-                      </Button>
-                    )}
-                  </div>
+                      {!inc.ack && (
+                        <Button onClick={() => ack(inc.id)} className="!px-2 !py-1 !text-xs">
+                          Ack
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </li>
             ))}
@@ -432,284 +198,113 @@ function Incidents({
   )
 }
 
-// IncidentEvents lists the alerts inside one episode.
-function IncidentEvents({ id }: { id: number }) {
-  const { data } = useFetch<Incident>(`/api/incidents/${id}`, {})
-  const alerts = data?.alerts ?? []
-  if (alerts.length === 0) return null
-  return (
-    <ul className="mt-2 flex flex-col gap-1 rounded-md px-3 py-2" style={{ background: 'var(--surface-2)' }}>
-      {alerts.map((a) => (
-        <li key={a.ID} className="flex items-baseline gap-2 text-xs">
-          <span className="font-mono" style={{ color: 'var(--muted)' }}>
-            {formatTime(a.Time)}
-          </span>
-          <span className="font-medium">{a.Detector}</span>
-          <span style={{ color: 'var(--muted)' }}>{a.Detail}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-// BlockDialog blocks the address an alert came from.
-//
-// Three things decide whether this is safe to put one tap away: it says how
-// far the block reaches, it says whether the block will actually drop
-// anything (in observe mode it will not), and it refuses the addresses that
-// would lock the operator out. The note is not decoration — in a month, "why
-// is this blocked?" is the only question that matters, and the audit log and
-// the Firewall view both carry the answer through.
-function BlockDialog({
-  source,
-  detector,
-  onClose,
-  onDone,
+// Events is the flat lens: every alert individually, each row a link to its
+// own page — the page ntfy sends people to.
+function Events({
   onUnauthorized,
+  canWrite,
+  onlyUnacked,
 }: {
-  source: string
-  detector: string
-  onClose: () => void
-  onDone: () => void
   onUnauthorized: () => void
+  canWrite: boolean
+  onlyUnacked: boolean
 }) {
-  const { data } = useFetch<BlocksResponse>('/api/blocks', { pollMs: 0, onUnauthorized })
-  const [scope, setScope] = useState<'address' | 'network'>('address')
-  const [ttl, setTtl] = useState('24h')
-  const [note, setNote] = useState(detector ? `${detector} alert` : '')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
+  const path = `/api/alerts?limit=200${onlyUnacked ? '&unacked=true' : ''}`
+  const { data, loading, error, stale, refresh } = useFetch<{ alerts: Alert[] | null }>(path, {
+    pollMs: 5000,
+    onUnauthorized,
+  })
+  const index = useDeviceIndex(onUnauthorized)
+  const [blockFor, setBlockFor] = useState<Alert | null>(null)
 
-  const prefix = scope === 'network' ? networkPrefix(source) : source
-  const enforcing = data?.enforcing ?? false
-  const existing = (data?.blocks ?? []).find((b) => b.Prefix === prefix || b.Prefix === `${source}/32` || b.Prefix === `${source}/128`)
-  const clash = coveredByProtected(source, scope, data?.protected ?? [])
+  const alerts = data?.alerts ?? []
 
-  const save = async () => {
-    setBusy(true)
-    setErr('')
-    try {
-      await api.post('/api/blocks', { prefix, reason: note.trim(), ttl: ttl.trim() })
-      onDone()
-    } catch (e) {
-      if ((e as { status?: number }).status === 401) return onUnauthorized()
-      setErr((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
+  const ack = async (id: number) => {
+    await api.post(`/api/alerts/${id}/ack`)
+    refresh()
   }
 
   return (
-    <Card className="px-4 py-3.5">
-      <CardHeader
-        title={`Block ${source}`}
-        sub={
-          enforcing
-            ? 'dropped in the kernel on the machine running Skopos — traffic that does not pass this machine is unaffected'
-            : 'enforcement is off: this will be recorded and counted, but nothing will actually be dropped'
-        }
-      />
-
-      {!enforcing && (
-        <p className="mt-1 rounded-md px-3 py-2 text-xs" style={{ background: 'var(--warn-tint)', color: 'var(--text)' }}>
-          Skopos is in observe mode. The block is saved and the Firewall view will count what it would have
-          dropped, but the packets keep arriving. Turn enforcement on in Settings to make it real.
-        </p>
-      )}
-      {existing && (
-        <p className="mt-1 rounded-md px-3 py-2 text-xs" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}>
-          {existing.Prefix} is already blocked
-          {existing.Expires ? ` until ${formatTime(existing.Expires)}` : ' permanently'}. Blocking again replaces it.
-        </p>
-      )}
-      {clash && (
-        <p className="mt-1 rounded-md px-3 py-2 text-xs" style={{ background: 'var(--crit-tint)', color: 'var(--crit)' }}>
-          This covers {clash}, which is on the never-block list. Skopos will refuse it — remove it from the
-          allowlist in Settings first if you really mean it.
-        </p>
-      )}
-
-      <div className="mt-2 flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
-          <FieldLabel>Scope</FieldLabel>
-          <div className="flex items-center gap-1.5">
-            {([
-              ['address', source],
-              ['network', networkPrefix(source)],
-            ] as const).map(([v, label]) => (
-              <button
-                key={v}
-                onClick={() => setScope(v)}
-                className="rounded-md px-2.5 py-1 font-mono text-xs font-medium"
-                style={
-                  scope === v
-                    ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <FieldLabel>For</FieldLabel>
-          <div className="flex items-center gap-1.5">
-            {['1h', '24h', '7d', ''].map((v) => (
-              <button
-                key={v || 'forever'}
-                onClick={() => setTtl(v)}
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
-                style={
-                  ttl === v
-                    ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
-                }
-              >
-                {v || 'permanent'}
-              </button>
-            ))}
-            <input
-              value={ttl}
-              onChange={(e) => setTtl(e.target.value)}
-              placeholder="blank = permanent"
-              className="w-36 rounded-md border px-2.5 py-1.5 font-mono text-sm"
-              style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
-            />
-          </div>
-        </div>
-      </div>
-
-      <label className="mt-3 flex flex-col gap-1">
-        <FieldLabel>Note</FieldLabel>
-        <input
-          autoFocus
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !busy) save()
-            if (e.key === 'Escape') onClose()
+    <div className="flex flex-col gap-4">
+      {blockFor?.Source && (
+        // Keyed on the target: without it React reuses the instance when the
+        // operator opens the dialog on one alert and then another, and the
+        // note typed for the first would be saved against the second.
+        <BlockDialog
+          key={blockFor.ID}
+          source={blockFor.Source}
+          detector={blockFor.Detector}
+          onClose={() => setBlockFor(null)}
+          onDone={() => {
+            setBlockFor(null)
+            refresh()
           }}
-          placeholder="why — you will read this in a month and want to know"
-          className="rounded-md border px-2.5 py-1.5 text-sm"
-          style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          onUnauthorized={onUnauthorized}
         />
-      </label>
-
-      <div className="mt-3 flex items-center gap-2">
-        <Button variant="primary" onClick={save} disabled={busy}>
-          {busy ? 'Blocking…' : ttl.trim() ? `Block for ${ttl.trim()}` : 'Block permanently'}
-        </Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </div>
-      {err && <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
-    </Card>
-  )
-}
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
-      {children}
-    </span>
-  )
-}
-
-// MuteDialog creates a suppression rule prefilled from an incident.
-function MuteDialog({
-  incident,
-  onClose,
-  onDone,
-}: {
-  incident: Incident
-  onClose: () => void
-  onDone: () => void
-}) {
-  const [scope, setScope] = useState<'source' | 'detector' | 'both'>('both')
-  const [ttl, setTtl] = useState('')
-  const [reason, setReason] = useState('')
-  const [err, setErr] = useState('')
-  const detector = incident.detectors?.[0] ?? ''
-
-  const save = async () => {
-    setErr('')
-    try {
-      await api.post('/api/mutes', {
-        prefix: scope === 'detector' ? '' : incident.source,
-        detector: scope === 'source' ? '' : detector,
-        ttl,
-        reason,
-      })
-      onDone()
-    } catch (e) {
-      setErr((e as Error).message)
-    }
-  }
-
-  return (
-    <Card className="px-4 py-3.5">
-      <CardHeader
-        title="Mute these alerts"
-        sub="stops the alert and the notification — blocking is unaffected, so protection stays exactly as it is"
-      />
-      <div className="mt-2 flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
-          <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
-            Scope
-          </span>
-          <div className="flex items-center gap-1.5">
-            {([
-              ['both', `${detector} from ${incident.source}`],
-              ['source', `anything from ${incident.source}`],
-              ['detector', `${detector} from anywhere`],
-            ] as const).map(([v, label]) => (
-              <button
-                key={v}
-                onClick={() => setScope(v)}
-                className="rounded-md px-2.5 py-1 text-xs font-medium"
-                style={
-                  scope === v
-                    ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                    : { background: 'var(--surface-2)', color: 'var(--muted)' }
-                }
+      )}
+      <Card>
+        <CardHeader
+          title="Every alert"
+          sub={`${alerts.length} shown · one row per event`}
+          right={stale ? <Pill tone="warn">last refresh failed</Pill> : undefined}
+        />
+        {loading && !data ? (
+          <Spinner />
+        ) : !data ? (
+          <EmptyState>Could not load alerts{error ? `: ${error}` : ''}.</EmptyState>
+        ) : alerts.length === 0 ? (
+          <EmptyState>{onlyUnacked ? 'Nothing is waiting for you.' : 'No alerts recorded.'}</EmptyState>
+        ) : (
+          <ul>
+            {alerts.map((a) => (
+              <li
+                key={a.ID}
+                className="flex flex-wrap items-start gap-3 px-4 py-3"
+                style={{ borderTop: '1px solid var(--border)', opacity: a.Ack ? 0.55 : 1 }}
               >
-                {label}
-              </button>
+                <div className="pt-0.5">
+                  <SeverityBadge severity={a.Severity} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link to={`/alerts/${a.ID}`} className="font-medium hover:underline">
+                      {a.Title}
+                    </Link>
+                    {a.Count > 1 && <Pill>{a.Count}×</Pill>}
+                    {a.Ack && <Pill tone="good">acked</Pill>}
+                  </div>
+                  <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                    {a.Detail}
+                    {a.Source && (
+                      <>
+                        {' · '}
+                        <EntityLink value={a.Source} index={index} />
+                        {index.names.get(a.Source) && <span> ({index.names.get(a.Source)})</span>}
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs" style={{ color: 'var(--muted)' }}>
+                    {formatTime(a.Time)}
+                  </span>
+                  {canWrite && a.Source && (
+                    <Button onClick={() => setBlockFor(a)} className="!px-2 !py-1 !text-xs">
+                      Block
+                    </Button>
+                  )}
+                  {canWrite && !a.Ack && (
+                    <Button onClick={() => ack(a.ID)} className="!px-2 !py-1 !text-xs">
+                      Ack
+                    </Button>
+                  )}
+                </div>
+              </li>
             ))}
-          </div>
-        </div>
-        <label className="flex w-32 flex-col gap-1">
-          <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
-            For
-          </span>
-          <input
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
-            placeholder="24h · blank = forever"
-            className="rounded-md border px-2.5 py-1.5 font-mono text-sm"
-            style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          />
-        </label>
-        <label className="flex w-48 flex-col gap-1">
-          <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.1em]" style={{ color: 'var(--muted)' }}>
-            Reason
-          </span>
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="optional note"
-            className="rounded-md border px-2.5 py-1.5 text-sm"
-            style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          />
-        </label>
-        <Button variant="primary" onClick={save}>
-          Mute
-        </Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </div>
-      {err && <p className="mt-2 text-xs" style={{ color: 'var(--crit)' }}>{err}</p>}
-    </Card>
+          </ul>
+        )}
+      </Card>
+    </div>
   )
 }
 

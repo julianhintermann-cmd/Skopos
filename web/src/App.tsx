@@ -3,17 +3,20 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { api, APIError, type Me } from './lib/api'
 import { Layout } from './components/Layout'
 import { Login } from './views/Login'
-import { Overview } from './views/Overview'
-import { Live } from './views/Live'
+import { Now } from './views/Now'
 import { DeviceDetail } from './views/DeviceDetail'
-import { Domains } from './views/Domains'
 import { Traffic } from './views/Traffic'
 import { Devices } from './views/Devices'
 import { Firewall } from './views/Firewall'
 import { Alerts } from './views/Alerts'
+import { AlertDetail } from './views/AlertDetail'
+import { IncidentDetail } from './views/IncidentDetail'
+import { IPDossier } from './views/IPDossier'
+import { DomainDetail } from './views/DomainDetail'
 import { Cloudflare } from './views/Cloudflare'
 import { Settings } from './views/Settings'
 import { System } from './views/System'
+import { NotFound } from './views/NotFound'
 
 type AuthState = 'loading' | 'authenticated' | 'anonymous'
 
@@ -61,23 +64,29 @@ export default function App() {
 
   const canWrite = !me?.auth || me?.scope === 'write'
 
+  // Eight destinations and five entity routes. /live and /domains are gone as
+  // pages — they are a position on Traffic's time control and a lens on it —
+  // and `*` is a real 404 rather than the dashboard wearing someone else's
+  // address.
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Layout me={me} onLogout={logout} />}>
-          <Route index element={<Overview onUnauthorized={onUnauthorized} />} />
-          <Route path="live" element={<Live onUnauthorized={onUnauthorized} />} />
+        <Route element={<Layout me={me} onLogout={logout} onUnauthorized={onUnauthorized} />}>
+          <Route index element={<Now onUnauthorized={onUnauthorized} />} />
           <Route path="traffic" element={<Traffic onUnauthorized={onUnauthorized} />} />
-          <Route path="domains" element={<Domains onUnauthorized={onUnauthorized} />} />
           <Route path="devices" element={<Devices onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="devices/:mac" element={<DeviceDetail onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
-          <Route path="firewall" element={<Firewall onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
-          <Route path="alerts" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
           <Route path="cloudflare" element={<Cloudflare onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
-          <Route path="settings" element={<Settings onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="alerts" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          {/* The ntfy landing target: every push links here. */}
+          <Route path="alerts/:id" element={<AlertDetail onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="incidents/:id" element={<IncidentDetail onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="firewall" element={<Firewall onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="ip/:addr" element={<IPDossier onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="domain/:name" element={<DomainDetail onUnauthorized={onUnauthorized} />} />
           <Route path="system" element={<System onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
-          <Route path="alerts/:id" element={<Alerts onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
-          <Route path="*" element={<Overview onUnauthorized={onUnauthorized} />} />
+          <Route path="settings" element={<Settings onUnauthorized={onUnauthorized} canWrite={canWrite} />} />
+          <Route path="*" element={<NotFound onUnauthorized={onUnauthorized} />} />
         </Route>
       </Routes>
     </BrowserRouter>

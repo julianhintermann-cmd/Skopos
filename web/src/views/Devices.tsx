@@ -4,6 +4,7 @@ import { useFetch } from '../lib/useFetch'
 import { api, deviceName, randomizedMAC, type Device } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button } from '../components/ui'
 import { useIsMobile } from '../lib/useIsMobile'
+import { useUrlState, useUrlText } from '../lib/useUrlState'
 import { formatRelative } from '../lib/format'
 
 // noiseThreshold is how many inventory entries have to share one address
@@ -48,8 +49,12 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
     pollMs: 10000,
     onUnauthorized,
   })
-  const [query, setQuery] = useState('')
-  const [onlyNoise, setOnlyNoise] = useState(false)
+  // Both filters live in the URL: a filtered device list is a thing people
+  // send each other, and Back should undo the filter rather than leave the
+  // page with it still applied.
+  const [queryDraft, setQueryDraft, query] = useUrlText('q')
+  const [only, setOnly] = useUrlState('only', '', { valid: ['', 'noise'] as const, history: 'push' })
+  const onlyNoise = only === 'noise'
 
   const devices = useMemo(() => data?.devices ?? [], [data])
   const noise = useMemo(() => noiseMACs(devices), [devices])
@@ -78,8 +83,8 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
       {devices.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
           <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={queryDraft}
+            onChange={(e) => setQueryDraft(e.target.value)}
             placeholder="Search name, address, MAC…"
             className="min-w-0 flex-1 rounded-md border px-2.5 py-1.5 text-sm outline-none sm:max-w-xs"
             style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
@@ -96,9 +101,9 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
         <NoiseBanner
           macs={[...noise]}
           reviewing={onlyNoise}
-          onReview={() => setOnlyNoise((v) => !v)}
+          onReview={() => setOnly(onlyNoise ? '' : 'noise')}
           onDone={() => {
-            setOnlyNoise(false)
+            setOnly('')
             refresh()
           }}
           onUnauthorized={onUnauthorized}

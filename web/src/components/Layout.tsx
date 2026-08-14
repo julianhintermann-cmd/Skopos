@@ -1,52 +1,66 @@
+import { useCallback, useState, type ReactNode } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
-import type { ReactNode } from 'react'
 import { Logo } from './Logo'
 import { ThemeToggle } from './ThemeToggle'
 import { MobileShell } from './mobile'
+import { StatusStrip } from './StatusStrip'
+import { EntityPalette } from './EntityPalette'
+import { NAV, SECTIONS, SearchIcon } from './nav'
 import { useIsMobile } from '../lib/useIsMobile'
+import { StatusContext, useStatusValue } from '../lib/status'
+import { CHORDS, useShortcuts } from '../lib/shortcuts'
 import { t } from '../lib/i18n'
 import type { Me } from '../lib/api'
 
-type NavItem = { to: string; key: Parameters<typeof t>[0]; icon: () => ReactNode; end?: boolean }
-
-const sections: { title: Parameters<typeof t>[0]; items: NavItem[] }[] = [
-  {
-    title: 'section.monitor',
-    items: [
-      { to: '/', key: 'nav.overview', icon: PulseIcon, end: true },
-      { to: '/live', key: 'nav.live', icon: BroadcastIcon },
-      { to: '/traffic', key: 'nav.traffic', icon: WaveIcon },
-      { to: '/domains', key: 'nav.domains', icon: GlobeIcon },
-      { to: '/devices', key: 'nav.devices', icon: GridIcon },
-    ],
-  },
-  {
-    title: 'section.protect',
-    items: [
-      { to: '/firewall', key: 'nav.firewall', icon: ShieldIcon },
-      { to: '/alerts', key: 'nav.alerts', icon: BellIcon },
-    ],
-  },
-  {
-    title: 'section.manage',
-    items: [
-      { to: '/cloudflare', key: 'nav.cloudflare', icon: CloudIcon },
-      { to: '/settings', key: 'nav.settings', icon: SlidersIcon },
-      { to: '/system', key: 'nav.system', icon: GearIcon },
-    ],
-  },
-]
-
-export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () => void; banner?: ReactNode }) {
+export function Layout({
+  me,
+  onLogout,
+  onUnauthorized,
+  banner,
+}: {
+  me: Me | null
+  onLogout: () => void
+  onUnauthorized?: () => void
+  banner?: ReactNode
+}) {
   const isMobile = useIsMobile()
-  if (isMobile) {
-    // Phones get their own shell: bottom tabs, sheets, card layouts — not a
-    // squeezed sidebar.
-    return <MobileShell me={me} onLogout={onLogout} banner={banner} />
-  }
+  // The strip and Now's verdict read the same three answers, so the shell does
+  // the polling once and publishes it.
+  const status = useStatusValue(onUnauthorized)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const openPalette = useCallback(() => setPaletteOpen(true), [])
+  const toggleHelp = useCallback(() => setHelpOpen((v) => !v), [])
+  useShortcuts({ onPalette: openPalette, onHelp: toggleHelp })
+
+  return (
+    <StatusContext.Provider value={status}>
+      {isMobile ? (
+        // Phones get their own shell: bottom tabs, sheets, card layouts — not
+        // a squeezed sidebar.
+        <MobileShell me={me} onLogout={onLogout} banner={banner} onSearch={openPalette} />
+      ) : (
+        <DesktopShell me={me} onLogout={onLogout} banner={banner} onSearch={openPalette} />
+      )}
+      <EntityPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUnauthorized={onUnauthorized} />
+      {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
+    </StatusContext.Provider>
+  )
+}
+
+function DesktopShell({
+  me,
+  onLogout,
+  banner,
+  onSearch,
+}: {
+  me: Me | null
+  onLogout: () => void
+  banner?: ReactNode
+  onSearch: () => void
+}) {
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar */}
       <aside
         className="flex w-56 shrink-0 flex-col border-r"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
@@ -56,15 +70,15 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
           <div className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">Skopos</div>
         </div>
         <nav className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-2">
-          {sections.map((section) => (
-            <div key={section.title} className="flex flex-col gap-0.5">
+          {SECTIONS.map((section) => (
+            <div key={section.id} className="flex flex-col gap-0.5">
               <div
                 className="px-2.5 pb-1 pt-1 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.18em]"
                 style={{ color: 'var(--muted)' }}
               >
-                {t(section.title)}
+                {section.title}
               </div>
-              {section.items.map((item) => (
+              {NAV.filter((i) => i.section === section.id).map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
@@ -77,7 +91,7 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
                   }
                 >
                   <item.icon />
-                  {t(item.key)}
+                  {item.label}
                 </NavLink>
               ))}
             </div>
@@ -89,30 +103,24 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
         </div>
       </aside>
 
-      {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header
           className="flex items-center justify-between gap-3 border-b px-6 py-2.5"
           style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
         >
-          <div />
+          <button
+            type="button"
+            onClick={onSearch}
+            className="flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs"
+            style={{ background: 'var(--surface-2)', borderColor: 'var(--border)', color: 'var(--muted)' }}
+            aria-label="Search Skopos"
+          >
+            <SearchIcon />
+            Search
+            <kbd className="font-mono text-[0.62rem] opacity-70">⌘K</kbd>
+          </button>
           <div className="flex items-center gap-3">
-            {me?.enforcing !== undefined && (
-              <span
-                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
-                style={
-                  me.enforcing
-                    ? { color: 'var(--good)', background: 'var(--good-tint)' }
-                    : { color: 'var(--muted)', background: 'var(--surface-2)' }
-                }
-              >
-                <span
-                  className="inline-block h-1.5 w-1.5 rounded-full"
-                  style={{ background: me.enforcing ? 'var(--good)' : 'var(--muted)' }}
-                />
-                {me.enforcing ? t('label.enforcing') : t('label.observing')}
-              </span>
-            )}
+            <StatusStrip />
             <ThemeToggle />
             {me?.auth && (
               <button
@@ -136,21 +144,35 @@ export function Layout({ me, onLogout, banner }: { me: Me | null; onLogout: () =
   )
 }
 
-// --- inline icons (stroke = currentColor) ---
-function icon(path: ReactNode) {
+// The cheatsheet, on ?. It lists what exists and nothing else.
+function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {path}
-    </svg>
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div className="absolute inset-0" style={{ background: 'rgba(0,0,0,0.45)' }} onClick={onClose} aria-hidden />
+      <div
+        className="absolute left-1/2 top-1/4 w-[min(24rem,92vw)] -translate-x-1/2 rounded-xl border px-5 py-4"
+        style={{ background: 'var(--surface)', borderColor: 'var(--border-strong)' }}
+      >
+        <h2 className="text-sm font-semibold tracking-tight">Keyboard</h2>
+        <ul className="mt-2 flex flex-col gap-1 text-sm">
+          {[...CHORDS.map((c) => ({ keys: c.keys, label: c.label })), { keys: '⌘K', label: 'Search' }, { keys: 'Esc', label: 'Close' }].map(
+            (row) => (
+              <li key={row.keys} className="flex items-baseline justify-between gap-3">
+                <span style={{ color: 'var(--muted)' }}>{row.label}</span>
+                <kbd className="font-mono text-xs">{row.keys}</kbd>
+              </li>
+            ),
+          )}
+        </ul>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-3 rounded-md px-2.5 py-1 text-xs font-medium"
+          style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
   )
 }
-function PulseIcon() { return icon(<polyline points="3 12 8 12 11 4 14 20 17 12 21 12" />) }
-function BroadcastIcon() { return icon(<><circle cx="12" cy="12" r="2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M5 5a10 10 0 0 0 0 14M19 19a10 10 0 0 0 0-14" /></>) }
-function WaveIcon() { return icon(<><path d="M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0" /></>) }
-function GlobeIcon() { return icon(<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18" /></>) }
-function GridIcon() { return icon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>) }
-function ShieldIcon() { return icon(<path d="M12 3l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V6z" />) }
-function BellIcon() { return icon(<><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>) }
-function CloudIcon() { return icon(<path d="M17.5 18H7a4 4 0 0 1-.5-7.97A5 5 0 0 1 16 9.5a3.5 3.5 0 0 1 1.5 8.5z" />) }
-function SlidersIcon() { return icon(<><path d="M4 6h11M18 6h2M4 12h2M9 12h11M4 18h11M18 18h2" /><circle cx="16" cy="6" r="2" /><circle cx="7" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>) }
-function GearIcon() { return icon(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 .3-1.8l-.1-.1" transform="scale(0.85) translate(2 2)" /></>) }

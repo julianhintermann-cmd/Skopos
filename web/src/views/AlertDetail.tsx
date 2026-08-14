@@ -1,0 +1,162 @@
+import { useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { useFetch } from '../lib/useFetch'
+import { api, type Alert } from '../lib/api'
+import { Card, CardHeader, Spinner, SeverityBadge, Button, Pill } from '../components/ui'
+import { BlockDialog } from '../components/BlockDialog'
+import { Reputation } from '../components/Reputation'
+import { EntityLink } from '../components/entity'
+import { useDeviceIndex, entityHref, isPrivateAddress } from '../lib/links'
+import { formatTime } from '../lib/format'
+
+// How many alerts to pull looking for one id. There is no GET /api/alerts/{id}
+// — the list endpoint is all there is — so the deep link is best-effort within
+// this page, and says so when the id falls outside it.
+const LOOKBACK = 500
+
+// The ntfy landing page: every push carries Click: {externalURL}/alerts/{id}.
+//
+// Until today that URL rendered the unfiltered alerts list, so the one flow
+// the product exists for — a phone, at three in the morning, from a push —
+// ended on a page that did not contain the alert and could not be made to.
+export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
+  const { id = '' } = useParams()
+  const index = useDeviceIndex(onUnauthorized)
+  const { data, loading, error, refresh } = useFetch<{ alerts: Alert[] | null }>(`/api/alerts?limit=${LOOKBACK}`, {
+    onUnauthorized,
+  })
+  const [blocking, setBlocking] = useState(false)
+
+  if (loading && !data) return <Spinner />
+
+  const alert = (data?.alerts ?? []).find((a) => String(a.ID) === id)
+
+  if (!alert) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Breadcrumb label={`Alert ${id}`} />
+        <Card className="px-4 py-6">
+          <h1 className="text-lg font-semibold tracking-tight">
+            {error ? 'Could not read the alerts list.' : `Alert ${id} is not in the current list.`}
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: 'var(--muted)' }}>
+            {error ? (
+              <>The server said: <span className="font-mono">{error}</span>.</>
+            ) : (
+              <>
+                Skopos keeps this page to the {LOOKBACK} most recent alerts, and this one is older than that or has
+                been pruned by retention. Nothing here is a claim about what the alert said.
+              </>
+            )}
+          </p>
+          <Link
+            to="/alerts"
+            className="mt-3 inline-block rounded-md px-3 py-1.5 text-sm font-medium"
+            style={{ background: 'var(--surface-2)', color: 'var(--accent-strong)' }}
+          >
+            Open the alerts list
+          </Link>
+        </Card>
+      </div>
+    )
+  }
+
+  const name = index.names.get(alert.Source)
+  const sourceHref = alert.Source ? entityHref(alert.Source, index) : null
+  const ack = async () => {
+    await api.post(`/api/alerts/${alert.ID}/ack`)
+    refresh()
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Breadcrumb label={alert.Title} />
+
+      {blocking && alert.Source && (
+        <BlockDialog
+          source={alert.Source}
+          detector={alert.Detector}
+          onClose={() => setBlocking(false)}
+          onDone={() => {
+            setBlocking(false)
+            refresh()
+          }}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
+      <Card className="px-4 py-3.5">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="pt-0.5">
+            <SeverityBadge severity={alert.Severity} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-semibold tracking-tight">{alert.Title}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <Pill tone="neutral">{alert.Detector}</Pill>
+              {alert.Count > 1 && <Pill>{alert.Count}×</Pill>}
+              {alert.Ack ? <Pill tone="good">acknowledged</Pill> : <Pill tone="warn">outstanding</Pill>}
+            </div>
+            <p className="mt-1.5 text-sm">{alert.Detail}</p>
+            <div className="mt-1 text-sm" style={{ color: 'var(--muted)' }}>
+              {alert.Source && (
+                <>
+                  <EntityLink value={alert.Source} index={index} />
+                  {name && <span> ({name})</span>}
+                  {' · '}
+                </>
+              )}
+              {formatTime(alert.Time)}
+              {alert.Ack && alert.AckTime && <span> · acknowledged {formatTime(alert.AckTime)}</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {canWrite && alert.Source && <Button onClick={() => setBlocking(true)}>Block {alert.Source}</Button>}
+          {canWrite && !alert.Ack && (
+            <Button variant="primary" onClick={ack}>
+              Acknowledge
+            </Button>
+          )}
+          {sourceHref && (
+            <Link
+              to={sourceHref}
+              className="rounded-md border px-3 py-1.5 text-sm font-medium"
+              style={{ background: 'var(--surface-2)', color: 'var(--text)', borderColor: 'var(--border)' }}
+            >
+              Everything about {alert.Source}
+            </Link>
+          )}
+        </div>
+      </Card>
+
+      {alert.Source && !isPrivateAddress(alert.Source) && (
+        <Card>
+          <CardHeader title="Who is this" sub={`what the public registries say about ${alert.Source}`} />
+          <div className="px-4 pb-4">
+            <Reputation ip={alert.Source} />
+          </div>
+        </Card>
+      )}
+
+      <p className="text-xs" style={{ color: 'var(--muted)' }}>
+        This alert may be one of several from the same source. The alerts list groups them into episodes.
+      </p>
+    </div>
+  )
+}
+
+function Breadcrumb({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
+      <Link to="/alerts" className="hover:underline">
+        Alerts
+      </Link>
+      <span>/</span>
+      <span className="min-w-0 truncate" style={{ color: 'var(--text)' }}>
+        {label}
+      </span>
+    </div>
+  )
+}

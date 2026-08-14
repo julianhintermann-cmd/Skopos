@@ -2,18 +2,26 @@ import { useState, type ReactNode } from 'react'
 import { useFetch } from '../lib/useFetch'
 import { api, countryFlag, countryName, type BlocksResponse, type GeoIPSummary } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill, TextInput } from '../components/ui'
+import { SegmentedControl } from '../components/RangeControl'
+import { EntityLink } from '../components/entity'
+import { PageTitle } from '../components/PageTitle'
 import { Th, Td } from './Devices'
-import { useDeviceNames } from '../lib/deviceNames'
+import { useDeviceIndex, type DeviceIndex } from '../lib/links'
+import { useUrlState } from '../lib/useUrlState'
 import { formatCount, formatRelative, formatTime } from '../lib/format'
 
 // blockName resolves a blocked prefix to a device name when it is a single
 // host that the inventory knows (strip the /32 or /128 the API normalises to).
-function blockName(names: Map<string, string>, prefix: string): string {
+function blockName(index: DeviceIndex, prefix: string): string {
   const host = prefix.replace(/\/(32|128)$/, '')
-  return names.get(host) ?? ''
+  return index.names.get(host) ?? ''
 }
 
+const TABS = ['blocks', 'countries'] as const
+type Tab = (typeof TABS)[number]
+
 export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
+  const [tab, setTab] = useUrlState<Tab>('tab', 'blocks', { valid: TABS, history: 'push' })
   const { data, loading, error, refresh } = useFetch<BlocksResponse>('/api/blocks', {
     pollMs: 5000,
     onUnauthorized,
@@ -23,7 +31,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
   const [ttl, setTtl] = useState('')
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
-  const names = useDeviceNames(onUnauthorized)
+  const index = useDeviceIndex(onUnauthorized)
 
   const blocks = data?.blocks ?? []
 
@@ -53,6 +61,16 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
 
   return (
     <div className="flex flex-col gap-4">
+      <PageTitle title="Firewall">what is blocked, whether the kernel really holds it, and what it has caught</PageTitle>
+      <SegmentedControl
+        value={tab}
+        label="Firewall view"
+        onChange={setTab}
+        options={[
+          { value: 'blocks', label: 'Blocked addresses' },
+          { value: 'countries', label: 'Countries' },
+        ]}
+      />
       {observing && (
         <Banner tone="warn" title="Observe mode — nothing is actually blocked">
           Blocks are recorded and counted, but the kernel drops no packets, so traffic from
@@ -69,7 +87,9 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
           nf_tables. Check the System view and container logs.
         </Banner>
       )}
-      {canWrite && (
+      {tab === 'countries' && <CountryBlocking canWrite={canWrite} onUnauthorized={onUnauthorized} />}
+
+      {tab === 'blocks' && canWrite && (
         <Card className="px-4 py-3.5">
           <CardHeader title="Block an address" sub="IP or CIDR — never blocks the gateway or allowlist" />
           <div className="mt-2 flex flex-wrap items-end gap-2 px-0">
@@ -84,8 +104,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
         </Card>
       )}
 
-      <CountryBlocking canWrite={canWrite} onUnauthorized={onUnauthorized} />
-
+      {tab === 'blocks' && (
       <Card>
         <CardHeader
           title="Active blocks"
@@ -119,10 +138,10 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
                 {blocks.map((b) => (
                   <tr key={b.ID} style={{ borderTop: '1px solid var(--border)' }}>
                     <Td mono>
-                      {b.Prefix}
-                      {blockName(names, b.Prefix) && (
+                      <EntityLink value={b.Prefix} index={index} />
+                      {blockName(index, b.Prefix) && (
                         <div className="font-sans text-xs" style={{ color: 'var(--muted)' }}>
-                          {blockName(names, b.Prefix)}
+                          {blockName(index, b.Prefix)}
                         </div>
                       )}
                     </Td>
@@ -164,6 +183,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
           </div>
         )}
       </Card>
+      )}
     </div>
   )
 }
@@ -191,16 +211,29 @@ function Banner({ tone, title, children }: { tone: 'warn' | 'crit'; title: strin
 // service; the reactive detector still catches stragglers on sight.
 function CountryBlocking({ canWrite, onUnauthorized }: { canWrite: boolean; onUnauthorized: () => void }) {
   const { data, error, refresh } = useFetch<GeoIPSummary>('/api/geoip/summary?window=1h', { onUnauthorized })
-  const [input, setInput] = useState('')
+  // `add` is a hand-off from a country bar on Traffic: it prefills the field
+  // and stops there. Arriving from a link must never be the same act as
+  // blocking a country.
+  const [prefill, setPrefill] = useUrlState('add', '')
+  // null means untouched, so clearing the field to empty stays empty instead
+  // of falling back to the prefill and refilling itself under the cursor.
+  const [typed, setTyped] = useState<string | null>(null)
   const [err, setErr] = useState('')
+  const input = typed ?? prefill
   const blocked = data?.blocked ?? []
   const prefixCounts = data?.blocked_prefixes ?? {}
+
+  const setInput = (v: string) => {
+    setTyped(v)
+    if (prefill) setPrefill('')
+  }
 
   const save = async (countries: string[]) => {
     setErr('')
     try {
       await api.post('/api/geoip/blocked', { countries })
-      setInput('')
+      setTyped(null)
+      setPrefill('')
       refresh()
     } catch (e) {
       if ((e as { status?: number }).status === 401) return onUnauthorized()

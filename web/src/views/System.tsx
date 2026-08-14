@@ -3,13 +3,16 @@ import { useFetch } from '../lib/useFetch'
 import { api, type Health, type AuditEntry, type SpeedtestResult, type UpdateStatus } from '../lib/api'
 import { Card, CardHeader, Spinner, EmptyState, Button, Pill } from '../components/ui'
 import { Sparkline } from '../components/Sparkline'
+import { EntityLink } from '../components/entity'
 import { Th, Td } from './Devices'
+import { useDeviceIndex } from '../lib/links'
 import { formatTime, formatRelative } from '../lib/format'
 
 export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const health = useFetch<Health>('/api/health', { pollMs: 5000, onUnauthorized })
   const audit = useFetch<{ audit: AuditEntry[] | null }>('/api/audit?limit=50', { pollMs: 10000, onUnauthorized })
   const updates = useFetch<UpdateStatus>('/api/updates', { pollMs: 300000, onUnauthorized })
+  const index = useDeviceIndex(onUnauthorized)
   const [testResult, setTestResult] = useState<string>('')
 
   const sendTest = async () => {
@@ -110,7 +113,12 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
                         {e.Action}
                       </Pill>
                     </Td>
-                    <Td mono>{e.Target}</Td>
+                    {/* An audit target is an address, a MAC or a rule id.
+                        entityHref answers for the first two and returns null
+                        for the third, which renders as text. */}
+                    <Td mono>
+                      <EntityLink value={e.Target} index={index} />
+                    </Td>
                     <Td muted>{e.Detail}</Td>
                   </tr>
                 ))}

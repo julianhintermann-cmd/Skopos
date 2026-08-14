@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type CFAnalytics, type CFStatus, type CFZone } from '../lib/api'
 import { Card, CardHeader, StatTile, Spinner, EmptyState, Button, Pill, Toggle, TextInput } from '../components/ui'
 import { CFAnalyticsChart } from '../components/CFAnalyticsChart'
-import { SheetSelect } from '../components/mobile'
-import { useIsMobile } from '../lib/useIsMobile'
+import { RangeControl } from '../components/RangeControl'
+import { apiWindow, useUrlRange, useUrlState } from '../lib/useUrlState'
 import { formatBytes, formatCount } from '../lib/format'
 
 const TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tokens'
@@ -122,14 +122,15 @@ function ConnectCard({ canWrite, onConnected }: { canWrite: boolean; onConnected
 
 function Connected({ status, canWrite, onChange }: { status: CFStatus; canWrite: boolean; onChange: () => void }) {
   const monitored = useMemo(() => status.zones.filter((z) => z.monitored), [status.zones])
-  const [selected, setSelected] = useState(monitored[0]?.id ?? status.zones[0]?.id ?? '')
-
-  // Keep the selection valid as zones are toggled.
-  useEffect(() => {
-    if (!status.zones.some((z) => z.id === selected)) {
-      setSelected(monitored[0]?.id ?? status.zones[0]?.id ?? '')
-    }
-  }, [status.zones, monitored, selected])
+  const fallback = monitored[0]?.id ?? status.zones[0]?.id ?? ''
+  // The chosen zone is in the URL, so "look at this zone" is a link someone
+  // can send. An id that no longer exists falls back without rewriting what
+  // the sender typed.
+  const [zone, setZone] = useUrlState('zone', fallback, {
+    valid: status.zones.map((z) => z.id),
+    history: 'push',
+  })
+  const selected = status.zones.some((z) => z.id === zone) ? zone : fallback
 
   const disconnect = async () => {
     await api.del('/api/integrations/cloudflare').catch(() => {})
@@ -167,7 +168,7 @@ function Connected({ status, canWrite, onChange }: { status: CFStatus; canWrite:
             {monitored.map((z) => (
               <button
                 key={z.id}
-                onClick={() => setSelected(z.id)}
+                onClick={() => setZone(z.id)}
                 className="rounded-md px-3 py-1 text-sm font-medium"
                 style={
                   z.id === selected
@@ -188,15 +189,14 @@ function Connected({ status, canWrite, onChange }: { status: CFStatus; canWrite:
   )
 }
 
-const windows = [
-  { label: '24h', value: '24h', hint: 'Last 24 hours' },
-  { label: '7d', value: '168h', hint: 'Last 7 days' },
-  { label: '30d', value: '720h', hint: 'Last 30 days' },
-]
+// Cloudflare's analytics API takes a coarser window than Skopos's own history,
+// so this control offers a subset of the shared vocabulary rather than a
+// fourth vocabulary of its own.
+const CF_RANGES = ['24h', '7d', '30d'] as const
 
 function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthorized: () => void }) {
-  const [win, setWin] = useState(windows[0])
-  const isMobile = useIsMobile()
+  const { range, setRange } = useUrlRange('24h', CF_RANGES)
+  const win = apiWindow(range)
   const [data, setData] = useState<CFAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -206,7 +206,7 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
     setLoading(true)
     const load = async () => {
       try {
-        const d = await api.get<CFAnalytics>(`/api/integrations/cloudflare/analytics?zone=${zoneID}&window=${win.value}`)
+        const d = await api.get<CFAnalytics>(`/api/integrations/cloudflare/analytics?zone=${zoneID}&window=${win}`)
         if (stop) return
         setData(d)
         setErr('')
@@ -240,41 +240,19 @@ function ZoneAnalytics({ zoneID, onUnauthorized }: { zoneID: string; onUnauthori
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-1.5">
-        {isMobile ? (
-          <SheetSelect
-            value={win.value}
-            label="Time window"
-            options={windows.map((w) => ({ value: w.value, label: w.label, hint: w.hint }))}
-            onChange={(v) => setWin(windows.find((w) => w.value === v) ?? windows[0])}
-          />
-        ) : (
-          windows.map((wnd) => (
-            <button
-              key={wnd.value}
-              onClick={() => setWin(wnd)}
-              className="rounded-md px-3 py-1 text-xs font-medium"
-              style={
-                wnd.value === win.value
-                  ? { background: 'var(--accent-tint)', color: 'var(--accent-strong)' }
-                  : { background: 'var(--surface-2)', color: 'var(--muted)' }
-              }
-            >
-              {wnd.label}
-            </button>
-          ))
-        )}
+      <div className="flex flex-wrap items-center gap-2">
+        <RangeControl range={range} setRange={setRange} allowed={CF_RANGES} label="Time window" />
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Requests" value={formatCount(totals.requests)} tone="accent" hint={`last ${win.label}`} />
+        <StatTile label="Requests" value={formatCount(totals.requests)} tone="accent" hint={`last ${range}`} />
         <StatTile label="Data served" value={formatBytes(totals.bytes).split(' ')[0]} unit={formatBytes(totals.bytes).split(' ')[1]} />
         <StatTile label="Cache hit" value={`${totals.cachePct}`} unit="%" tone={totals.cachePct >= 50 ? 'good' : 'neutral'} />
         <StatTile label="Threats" value={formatCount(totals.threats)} tone={totals.threats > 0 ? 'crit' : 'good'} hint="blocked at the edge" />
       </div>
 
       <Card>
-        <CardHeader title="Requests over time" sub={`${win.label} · total vs cached`} />
+        <CardHeader title="Requests over time" sub={`${range} · total vs cached`} />
         <div className="px-2 pb-2">
           {loading && !data ? (
             <Spinner />

@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Logo } from './Logo'
 import { ThemeToggle } from './ThemeToggle'
+import { MORE, TABS, DotsIcon, SearchIcon } from './nav'
+import { useStatus, toneColor } from '../lib/status'
 import { t } from '../lib/i18n'
 import type { Me } from '../lib/api'
 
@@ -135,25 +137,21 @@ export function SheetSelect<T extends string>({
 
 // --- MobileShell -----------------------------------------------------------
 
-const tabs = [
-  { to: '/', key: 'nav.overview' as const, icon: PulseIcon, end: true },
-  { to: '/live', key: 'nav.live' as const, icon: BroadcastIcon },
-  { to: '/devices', key: 'nav.devices' as const, icon: GridIcon },
-  { to: '/alerts', key: 'nav.alerts' as const, icon: BellIcon },
-]
-
-const moreItems = [
-  { to: '/traffic', key: 'nav.traffic' as const, icon: WaveIcon },
-  { to: '/domains', key: 'nav.domains' as const, icon: GlobeIcon },
-  { to: '/firewall', key: 'nav.firewall' as const, icon: ShieldIcon },
-  { to: '/cloudflare', key: 'nav.cloudflare' as const, icon: CloudIcon },
-  { to: '/settings', key: 'nav.settings' as const, icon: SlidersIcon },
-  { to: '/system', key: 'nav.system' as const, icon: GearIcon },
-]
-
 // MobileShell is the phone chrome: sticky header, scrollable content, fixed
-// bottom tab bar with a More sheet for the secondary views.
-export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout: () => void; banner?: ReactNode }) {
+// bottom tab bar with a More sheet for the secondary views. The tab list comes
+// from the shared nav model — Now · Traffic · Devices · Alerts · More — so the
+// phone and the sidebar cannot drift apart again.
+export function MobileShell({
+  me,
+  onLogout,
+  banner,
+  onSearch,
+}: {
+  me: Me | null
+  onLogout: () => void
+  banner?: ReactNode
+  onSearch: () => void
+}) {
   const [moreOpen, setMoreOpen] = useState(false)
   const location = useLocation()
 
@@ -162,7 +160,7 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
     setMoreOpen(false)
   }, [location.pathname])
 
-  const inMore = moreItems.some((i) => location.pathname.startsWith(i.to))
+  const inMore = MORE.some((i) => location.pathname.startsWith(i.to))
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -175,13 +173,16 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
           <span className="font-mono text-xs font-semibold uppercase tracking-[0.25em]">Skopos</span>
         </div>
         <div className="flex items-center gap-2.5">
-          {me?.enforcing !== undefined && (
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              title={me.enforcing ? t('label.enforcing') : t('label.observing')}
-              style={{ background: me.enforcing ? 'var(--good)' : 'var(--muted)' }}
-            />
-          )}
+          <StatusDots />
+          <button
+            type="button"
+            onClick={onSearch}
+            aria-label="Search Skopos"
+            className="rounded-md p-1"
+            style={{ color: 'var(--muted)' }}
+          >
+            <SearchIcon size={20} />
+          </button>
           <ThemeToggle />
         </div>
       </header>
@@ -203,7 +204,7 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
         aria-label="Primary"
       >
         <div className="grid grid-cols-5">
-          {tabs.map((tab) => (
+          {TABS.map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}
@@ -211,8 +212,8 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
               className="flex flex-col items-center gap-0.5 py-2"
               style={({ isActive }) => ({ color: isActive ? 'var(--accent-strong)' : 'var(--muted)' })}
             >
-              <tab.icon />
-              <span className="text-[0.62rem] font-medium">{t(tab.key)}</span>
+              <tab.icon size={20} />
+              <span className="text-[0.62rem] font-medium">{tab.label}</span>
             </NavLink>
           ))}
           <button
@@ -223,14 +224,14 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
             aria-haspopup="dialog"
             aria-expanded={moreOpen}
           >
-            <DotsIcon />
+            <DotsIcon size={20} />
             <span className="text-[0.62rem] font-medium">More</span>
           </button>
         </div>
       </nav>
 
       <BottomSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="More">
-        {moreItems.map((item) => (
+        {MORE.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -241,8 +242,8 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
               background: isActive ? 'var(--accent-tint)' : undefined,
             })}
           >
-            <item.icon />
-            {t(item.key)}
+            <item.icon size={20} />
+            {item.label}
             <ChevronIcon />
           </NavLink>
         ))}
@@ -262,6 +263,66 @@ export function MobileShell({ me, onLogout, banner }: { me: Me | null; onLogout:
   )
 }
 
+// --- status dots -----------------------------------------------------------
+
+// The phone form of the status strip: three dots, and a sheet with the three
+// full sentences. Colour alone is unreadable at 8 px and unavailable to a
+// colour-blind reader, so the sheet — not the dot — is where the answer lives.
+function StatusDots() {
+  const { chips } = useStatus()
+  const [open, setOpen] = useState(false)
+  const worst =
+    chips.find((c) => c.tone === 'crit') ?? chips.find((c) => c.tone === 'unknown') ?? chips.find((c) => c.tone === 'warn')
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={worst ? worst.detail : 'Skopos status'}
+        aria-haspopup="dialog"
+        className="flex items-center gap-1 rounded-full px-1.5 py-1"
+        style={{ background: 'var(--surface-2)' }}
+      >
+        {chips.map((c) => (
+          <span
+            key={c.key}
+            className="inline-block h-2 w-2 rounded-full"
+            style={{
+              background: c.tone === 'loading' ? 'var(--surface-3)' : toneColor(c.tone).fg,
+              opacity: c.asOf ? 0.45 : 1,
+            }}
+          />
+        ))}
+      </button>
+      <BottomSheet open={open} onClose={() => setOpen(false)} title="Status">
+        {chips.map((c) => (
+          <Link
+            key={c.key}
+            to={c.href}
+            onClick={() => setOpen(false)}
+            className="flex items-start gap-3 px-5 py-3.5 text-[15px]"
+            style={{ borderTop: '1px solid var(--border)' }}
+          >
+            <span
+              className="mt-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ background: c.tone === 'loading' ? 'var(--surface-3)' : toneColor(c.tone).fg }}
+              aria-hidden
+            />
+            <span className="min-w-0">
+              <span className="block font-medium">{c.tone === 'loading' ? 'Checking…' : c.label}</span>
+              <span className="block text-xs" style={{ color: 'var(--muted)' }}>
+                {c.detail}
+                {c.asOf && ` Last successful reading at ${c.asOf}.`}
+              </span>
+            </span>
+          </Link>
+        ))}
+      </BottomSheet>
+    </>
+  )
+}
+
 // --- icons (stroke = currentColor) ----------------------------------------
 
 function icon(path: ReactNode, size = 20) {
@@ -271,17 +332,6 @@ function icon(path: ReactNode, size = 20) {
     </svg>
   )
 }
-function PulseIcon() { return icon(<polyline points="3 12 8 12 11 4 14 20 17 12 21 12" />) }
-function BroadcastIcon() { return icon(<><circle cx="12" cy="12" r="2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M5 5a10 10 0 0 0 0 14M19 19a10 10 0 0 0 0-14" /></>) }
-function WaveIcon() { return icon(<path d="M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0" />) }
-function GlobeIcon() { return icon(<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 2.5 15.4 0 18M12 3c-2.5 2.6-2.5 15.4 0 18" /></>) }
-function GridIcon() { return icon(<><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>) }
-function ShieldIcon() { return icon(<path d="M12 3l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V6z" />) }
-function BellIcon() { return icon(<><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>) }
-function CloudIcon() { return icon(<path d="M17.5 18H7a4 4 0 0 1-.5-7.97A5 5 0 0 1 16 9.5a3.5 3.5 0 0 1 1.5 8.5z" />) }
-function SlidersIcon() { return icon(<><path d="M4 6h11M18 6h2M4 12h2M9 12h11M4 18h11M18 18h2" /><circle cx="16" cy="6" r="2" /><circle cx="7" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>) }
-function GearIcon() { return icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) }
-function DotsIcon() { return icon(<><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></>) }
 function ChevronIcon() {
   return (
     <svg className="ml-auto" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

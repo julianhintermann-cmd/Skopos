@@ -21,6 +21,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Preventive country blocking was being switched off by ordinary blocks.**
+  The reconciler that owns the four per-IP block sets was emptying every set
+  in the table and refilling only its own, so each block or unblock silently
+  cleared the country sets, the LAN ranges the per-device rules compare
+  against, and the never-block set. On a box with an active detector that
+  meant country blocking was down most of the time while the dashboard went
+  on reporting the prefix count it had last loaded, and "LAN only" quietly
+  became a full quarantine, since with no LAN ranges loaded every peer counts
+  as outside. Present since preventive country blocking shipped in 0.2.1. An
+  integration test against a real kernel now asserts that a block leaves
+  every other set exactly as it was.
+- **Turning on two-factor authentication locked you out of the dashboard.**
+  The server answers "password correct, now the one-time code" as a 401 with
+  a flag in the body, and the API client threw that body away unread on every
+  401 — so the login form never learned to ask for the code and reported
+  invalid credentials for a password that was right. The only way back in was
+  deleting rows from the database.
+- **A detector firing stalled packet capture.** Handling a finding did the
+  database write, the ntfy request and the kernel call on the goroutine
+  reading frames off the wire, so one alert could stop capture on that
+  interface for as long as the notification took — up to fifteen seconds per
+  channel, during an attack, which is when the findings come. That work
+  happens on its own now. If it ever falls behind, findings are dropped and
+  counted rather than allowed to block capture, and the count is a metric.
+- **The rate detector could not keep up with its own default settings.** It
+  kept one timestamp per packet per source and shifted the whole backlog
+  forward on every packet — at the shipped 8000 packets per second that is
+  more work per millisecond than a millisecond contains, and the memory grew
+  without bound. It counts into a fixed ring of buckets now: same answer,
+  constant memory, measured at 34 nanoseconds per packet. The per-source maps
+  in the rate, port-scan and blocklist detectors are bounded too.
+- **A LAN device with a real IPv6 address counted as the internet.** The
+  private ranges cover RFC1918, ULA and link-local but not the globally
+  routable addresses an ISP-delegated prefix hands every device — which is
+  what most dual-stack homes actually run. That picked the wrong end of the
+  flow for blocklist matching, hid inbound attacks on a device's own address
+  from the country detector, judged ordinary local traffic against the strict
+  external thresholds, and left the behavioural baseline with nothing to
+  learn from. The on-link global prefixes are now found at startup and
+  treated as local.
+- **A panic in one subsystem no longer takes the rest down with it.** Every
+  loop is contained and reports what stopped. The flow aggregator was the
+  sharpest case: any write failure ended it permanently and in silence while
+  the detectors carried on alerting, so Skopos looked alive while it had
+  stopped recording anything.
+- **Cold storage never held flow archives.** The documentation described
+  Parquet archives, a spool buffer for when cold storage is unreachable, and
+  a nightly export — none of which was ever built. Raw flows past their
+  retention are deleted, and the daily backup is the durable copy. The
+  documentation says that now, and the two settings that fed the missing
+  feature say plainly that they do nothing.
+- **Rolling back to an older image no longer starts against a newer
+  database.** It refuses, naming both schema versions, rather than running on
+  a schema it does not know.
+- **The database was carrying a duplicate of itself.** Three rollup indexes
+  repeated their own tables' primary keys — measured at roughly half the file
+  on a year of traffic. Dropped, which gives that space back to the retention
+  cap.
 - **The never-block allowlist now holds on every path.** Blocks placed by
   hand went straight to the kernel without consulting it, and so did
   per-device policies — the worse of the two, because device rules sit ahead

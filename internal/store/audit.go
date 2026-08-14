@@ -19,10 +19,20 @@ func (s *Store) Audit(ctx context.Context, e model.AuditEntry) error {
 	return err
 }
 
-// ListAudit returns audit entries most recent first, up to limit.
+// Row bounds for a listing, for the reason set out on alertRowCap: the audit
+// table has no retention either, and ListAudit reads it newest-first with no
+// window, so an unbounded caller-supplied limit reads all of it across the one
+// connection everything else is queued behind.
+const (
+	defaultAuditRows = 200
+	auditRowCap      = 1000
+)
+
+// ListAudit returns audit entries most recent first, at most auditRowCap of
+// them.
 func (s *Store) ListAudit(ctx context.Context, limit int) ([]model.AuditEntry, error) {
-	if limit <= 0 {
-		limit = 200
+	if limit <= 0 || limit > auditRowCap {
+		limit = defaultAuditRows
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, time_ms, actor, action, target, detail

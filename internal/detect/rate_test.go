@@ -78,19 +78,28 @@ func TestSourceMapReclaimsQuietSources(t *testing.T) {
 	// Still inside the window: nothing may be evicted, because those sources
 	// are under active evaluation and dropping them is what a spoofed flood
 	// would want.
-	if makeRoom(sources, base.Add(window/2), window) {
+	var sh shed
+	if makeRoom(sources, base.Add(window/2), window, &sh) {
 		t.Error("made room by forgetting sources that are still active")
 	}
 	if len(sources) != maxTrackedSources {
 		t.Errorf("active sources were evicted: %d left", len(sources))
 	}
+	// Refusing to track a source is the serious half of the bound, so it is
+	// counted rather than left for someone to deduce.
+	if got := sh.stats(); got.Untracked != 1 || got.Forgotten != 0 {
+		t.Errorf("a refused source went uncounted: %+v", got)
+	}
 
 	// Long silent: the space comes back, so a genuinely new source is tracked.
-	if !makeRoom(sources, base.Add(idleFactor*window+time.Second), window) {
+	if !makeRoom(sources, base.Add(idleFactor*window+time.Second), window, &sh) {
 		t.Fatal("silent sources were not reclaimed")
 	}
 	if len(sources) != 0 {
 		t.Errorf("expected the quiet entries to be gone, %d left", len(sources))
+	}
+	if got := sh.stats(); got.Forgotten != maxTrackedSources {
+		t.Errorf("reclaimed entries went uncounted: %+v", got)
 	}
 }
 
@@ -107,7 +116,8 @@ func TestSourceMapKeepsTheActiveOne(t *testing.T) {
 	now := base.Add(idleFactor*window + time.Second)
 	sources[active] = &rateState{last: now}
 
-	if !makeRoom(sources, now, window) {
+	var sh shed
+	if !makeRoom(sources, now, window, &sh) {
 		t.Fatal("the quiet sources should have been reclaimed")
 	}
 	if _, ok := sources[active]; !ok {

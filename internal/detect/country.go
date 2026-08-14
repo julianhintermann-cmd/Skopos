@@ -40,6 +40,8 @@ type CountryBlock struct {
 
 	mu   sync.Mutex
 	seen map[netip.Addr]time.Time // per-source raise throttle
+
+	shed shed
 }
 
 // NewCountryBlock creates the detector.
@@ -88,16 +90,8 @@ func (c *CountryBlock) Observe(p flow.Packet) {
 		c.mu.Unlock()
 		return
 	}
+	c.reclaim(now)
 	c.seen[p.SrcIP] = now
-	// Bound the throttle map; a scan from many addresses must not grow it
-	// without limit.
-	if len(c.seen) > 4096 {
-		for k, t := range c.seen {
-			if now.Sub(t) > countryThrottle {
-				delete(c.seen, k)
-			}
-		}
-	}
 	c.mu.Unlock()
 
 	c.sink.Raise(Finding{
@@ -111,3 +105,40 @@ func (c *CountryBlock) Observe(p flow.Packet) {
 		SuggestBlock: true,
 	})
 }
+
+// reclaim bounds the throttle map. Callers hold c.mu.
+//
+// The old sweep had no cap behind it: past 4096 entries it walked the whole
+// map on every SYN and deleted only entries older than the throttle, so a
+// spoofed flood or a botnet sweep from more than 4096 addresses inside 30
+// seconds deleted nothing and walked it all again on the next packet — O(n)
+// per frame, on the capture goroutine, growing without limit. The detector
+// meant to watch a flood was what made Skopos stop reading frames during one.
+//
+// The same ageing pass runs here, but only when the map is genuinely full, and
+// if it cannot free half the map the memo is dropped whole (as Feeds does).
+// Either way the next pass is at least maxTrackedSources/2 insertions away, so
+// the per-packet cost is constant. Dropping the memo costs at most one extra
+// raise per source still in flight, which the policy cooldown absorbs — and it
+// is counted, so an overrun shows up as a number instead of as a mystery.
+func (c *CountryBlock) reclaim(now time.Time) {
+	if len(c.seen) < maxTrackedSources {
+		return
+	}
+	before := len(c.seen)
+	for addr, t := range c.seen {
+		if now.Sub(t) >= countryThrottle {
+			delete(c.seen, addr)
+		}
+	}
+	if len(c.seen) > maxTrackedSources/2 {
+		c.seen = make(map[netip.Addr]time.Time, maxTrackedSources)
+	}
+	c.shed.forgotten.Add(uint64(before - len(c.seen)))
+}
+
+// Shed reports the throttle entries this detector has had to forget. Sources
+// forgotten while still inside the throttle window can raise one extra finding
+// each, so a non-zero and climbing value is the signal that the reactive
+// country path is being overrun.
+func (c *CountryBlock) Shed() ShedStats { return c.shed.stats() }

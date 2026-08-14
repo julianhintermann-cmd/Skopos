@@ -45,6 +45,7 @@ type Rate struct {
 
 	mu      sync.Mutex
 	sources map[netip.Addr]*rateState
+	shed    shed
 }
 
 type rateState struct {
@@ -146,7 +147,7 @@ func (d *Rate) Observe(p flow.Packet) {
 
 	st := d.sources[p.SrcIP]
 	if st == nil {
-		if !makeRoom(d.sources, now, d.cfg.Window) {
+		if !makeRoom(d.sources, now, d.cfg.Window, &d.shed) {
 			return
 		}
 		st = &rateState{}
@@ -187,6 +188,11 @@ func (d *Rate) Observe(p flow.Packet) {
 		}
 	}
 }
+
+// Shed reports the per-source rate state this detector has had to forget, and
+// the sources it could not take on because the map was full of active ones.
+// A climbing Untracked means floods are going unmeasured.
+func (d *Rate) Shed() ShedStats { return d.shed.stats() }
 
 func (d *Rate) finding(src netip.Addr, internal bool, title, detail string) Finding {
 	return Finding{

@@ -30,15 +30,30 @@ func (s *Store) InsertAlert(ctx context.Context, a model.Alert) (model.Alert, er
 type AlertFilter struct {
 	// UnackedOnly returns only alerts that have not been acknowledged.
 	UnackedOnly bool
-	// Limit caps the number of rows (0 = a sensible default).
+	// Limit caps the number of rows (0, or anything above alertRowCap, means
+	// defaultAlertRows).
 	Limit int
 }
 
-// ListAlerts returns alerts most recent first.
+// Row bounds for a listing. The lower bound was the only one there was, so a
+// caller-supplied limit went to SQLite unchecked: `?limit=999999999`
+// materialised the whole table — which has no retention — into a slice and
+// then into a JSON response. Every query in this process shares one connection
+// (Open sets SetMaxOpenConns(1)), so that single request stalls the flow writer
+// and every other page behind it, and repeating it is a denial of service
+// against the monitor from an endpoint that is deliberately unauthenticated on
+// an `auth: none` LAN. ListIncidents and SearchFlows already clamp both ends;
+// alerts and audit were the two that were missed.
+const (
+	defaultAlertRows = 200
+	alertRowCap      = 1000
+)
+
+// ListAlerts returns alerts most recent first, at most alertRowCap of them.
 func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]model.Alert, error) {
 	limit := f.Limit
-	if limit <= 0 {
-		limit = 200
+	if limit <= 0 || limit > alertRowCap {
+		limit = defaultAlertRows
 	}
 	q := `SELECT id, time_ms, detector, severity, source, title, detail, count, ack, ack_ms
 	      FROM alerts`

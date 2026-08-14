@@ -46,6 +46,7 @@ type Baseline struct {
 
 	mu      sync.Mutex
 	devices map[netip.Addr]*deviceHistory
+	shed    shed
 }
 
 type deviceHistory struct {
@@ -54,6 +55,11 @@ type deviceHistory struct {
 	history     []uint64 // completed buckets, oldest first
 	firedAt     time.Time
 }
+
+// seenAt is the start of the bucket this device last sent in, which is within
+// one bucket of when it was last heard from — enough for makeRoom to tell a
+// device that has gone away from one that is merely quiet this hour.
+func (d *deviceHistory) seenAt() time.Time { return d.bucketStart }
 
 // NewBaseline creates the detector with sane defaults for missing fields.
 func NewBaseline(cfg BaselineConfig, sink Sink, clock Clock) *Baseline {
@@ -100,9 +106,17 @@ func (b *Baseline) Observe(p flow.Packet) {
 	b.mu.Lock()
 	d := b.devices[p.SrcIP]
 	if d == nil {
-		// Bound the map: a scan spoofing many source addresses must not
-		// grow it without limit. LAN devices are few; the cap is generous.
-		if len(b.devices) > 1024 {
+		// Bound the map: a scan spoofing many source addresses must not grow
+		// it without limit. The old bound refused every new device past 1024
+		// and never evicted anything, so the first 1024 addresses ever seen
+		// held the slots permanently — and a home LAN reaches that on its own,
+		// because SLAAC privacy extensions rotate each device's temporary IPv6
+		// address about once a day. Twenty devices over three months is enough.
+		// From then on nothing new was ever baselined, and nothing said so.
+		//
+		// Reclaim devices that have not sent for several buckets first, the way
+		// the other detectors do, and count whatever the bound costs.
+		if !makeRoom(b.devices, now, b.cfg.Bucket, &b.shed) {
 			b.mu.Unlock()
 			return
 		}
@@ -209,3 +223,9 @@ func (b *Baseline) Devices() int {
 	defer b.mu.Unlock()
 	return len(b.devices)
 }
+
+// Shed reports the device baselines dropped to stay inside the bound, and the
+// devices that got no baseline at all because the map was full of active ones.
+// Forgotten costs a device its learned history; Untracked means a device on
+// the LAN is not being watched. Neither is allowed to happen quietly.
+func (b *Baseline) Shed() ShedStats { return b.shed.stats() }

@@ -105,6 +105,9 @@ type Engine struct {
 	async   atomic.Bool
 	dropped atomic.Uint64
 
+	forgotten  atomic.Uint64 // cooldown entries reclaimed
+	unreported atomic.Uint64 // occurrences those entries never got to report
+
 	mu       sync.Mutex
 	cooldown map[string]*cooldownState
 }
@@ -116,9 +119,41 @@ type Engine struct {
 // source it has already reacted to.
 const findingQueue = 1024
 
+// maxCooldownSources bounds the cooldown map, at the same number
+// internal/detect caps every detector's per-source state at, for the same
+// reason: this process is expected to run for months, and a port-forwarded box
+// meets a steady trickle of addresses it has never seen. Capping the detectors
+// and then handing every one of their findings to an uncapped map one layer
+// down did not fix that leak, it moved it.
+const maxCooldownSources = 8192
+
+// cooldownSweepEvery is how often the worker ages the map out. The worker
+// already owns its goroutine and takes e.mu between findings rather than
+// during one, so this never touches the packet path.
+const cooldownSweepEvery = time.Minute
+
 type cooldownState struct {
 	lastNotified time.Time
 	suppressed   int // occurrences counted since the last notification
+}
+
+// CooldownStats reports the size of the cooldown map and what bounding it has
+// cost. Forgotten entries are ordinarily harmless — an entry past its window
+// suppresses nothing — but a forgotten entry still holding suppressed
+// occurrences takes their count with it, and an operator is entitled to see
+// that number rather than infer it from an alert whose Count looks low.
+type CooldownStats struct {
+	Tracked    int
+	Forgotten  uint64
+	Unreported uint64
+}
+
+// cooldownShed is what one reclamation gave up, carried out of the locked
+// section so the log call happens with e.mu back down.
+type cooldownShed struct {
+	forgotten  int
+	unreported int
+	reset      bool
 }
 
 // New creates a policy engine.
@@ -155,12 +190,22 @@ func New(cfg Config, store AlertStore, notifier Notifier, blocker Blocker, clock
 func (e *Engine) Run(ctx context.Context) {
 	e.async.Store(true)
 	defer e.async.Store(false)
+	// Age the cooldown map from here rather than from handle: the sources that
+	// need forgetting are precisely the ones that have stopped producing
+	// findings, so nothing on the finding path would ever come back to them.
+	sweep := time.NewTicker(cooldownSweepEvery)
+	defer sweep.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case f := <-e.queue:
 			e.handle(ctx, f)
+		case <-sweep.C:
+			e.mu.Lock()
+			shed := e.ageCooldownLocked(e.clock())
+			e.mu.Unlock()
+			e.reportShed(shed)
 		}
 	}
 }
@@ -245,7 +290,15 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 	e.mu.Lock()
 	cooldown, quiet := e.cfg.Cooldown, e.cfg.QuietHours
 	cs := e.cooldown[key]
+	var shed cooldownShed
 	if cs == nil {
+		// The map is about to take an entry it has no other way of losing.
+		// Reclaiming here as well as from the worker is what covers the two
+		// stretches where the worker is not running: before Run starts and
+		// after it returns at shutdown, when Raise handles findings inline.
+		if len(e.cooldown) >= maxCooldownSources {
+			shed = e.reclaimCooldownLocked(now)
+		}
 		cs = &cooldownState{}
 		e.cooldown[key] = cs
 	}
@@ -262,6 +315,7 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 	cs.suppressed = 0
 	cs.lastNotified = now
 	e.mu.Unlock()
+	e.reportShed(shed)
 
 	alert := model.Alert{
 		Time:     now,
@@ -289,6 +343,89 @@ func (e *Engine) handle(ctx context.Context, f detect.Finding) {
 		e.notifier.Notify(ctx, stored)
 	}
 	e.maybeBlock(ctx, f)
+}
+
+// ageCooldownLocked forgets cooldown state for sources that have been quiet
+// long enough that their next finding would notify anyway. Callers hold e.mu.
+func (e *Engine) ageCooldownLocked(now time.Time) cooldownShed {
+	// Two cooldowns of silence. One is enough for the entry to stop
+	// suppressing anything; the second is the margin that keeps a source
+	// alternating around the window from losing its aggregation count.
+	idle := 2 * e.cfg.Cooldown
+	if idle < cooldownSweepEvery {
+		idle = cooldownSweepEvery
+	}
+	var shed cooldownShed
+	for key, cs := range e.cooldown {
+		if now.Sub(cs.lastNotified) < idle {
+			continue
+		}
+		shed.forgotten++
+		shed.unreported += cs.suppressed
+		delete(e.cooldown, key)
+	}
+	e.forgotten.Add(uint64(shed.forgotten))
+	e.unreported.Add(uint64(shed.unreported))
+	return shed
+}
+
+// reclaimCooldownLocked makes room in a full map. Callers hold e.mu.
+//
+// Ageing comes first, so in the ordinary case only entries that have stopped
+// meaning anything are lost. If that cannot get the map under half the cap —
+// more than four thousand distinct sources all inside their cooldown window,
+// which is a distributed scan and not a Tuesday — the map goes entirely. The
+// alternative to dropping it is refusing new entries, and a source with no
+// cooldown state notifies on every single finding, which is a worse flood than
+// the one extra notification per tracked source that a reset costs. Either way
+// the next reclamation is thousands of insertions away, so this stays off the
+// per-finding cost.
+func (e *Engine) reclaimCooldownLocked(now time.Time) cooldownShed {
+	shed := e.ageCooldownLocked(now)
+	if len(e.cooldown) <= maxCooldownSources/2 {
+		return shed
+	}
+	dropped, unreported := len(e.cooldown), 0
+	for _, cs := range e.cooldown {
+		unreported += cs.suppressed
+	}
+	shed.forgotten += dropped
+	shed.unreported += unreported
+	e.forgotten.Add(uint64(dropped))
+	e.unreported.Add(uint64(unreported))
+	e.cooldown = make(map[string]*cooldownState, maxCooldownSources)
+	shed.reset = true
+	return shed
+}
+
+// reportShed logs a reclamation. Called with e.mu down, because the logger
+// writes to the process log and holding the engine's mutex across that would
+// put file I/O in front of every finding.
+func (e *Engine) reportShed(shed cooldownShed) {
+	if !shed.reset && shed.unreported == 0 {
+		// Ordinary ageing of entries that had nothing left to say. The
+		// counters carry it; the log does not need to.
+		return
+	}
+	if shed.reset {
+		e.log("policy: cooldown map overrun at %d sources, dropped all of it — %d suppressed occurrences unreported, and each tracked source may notify once more",
+			maxCooldownSources, shed.unreported)
+		return
+	}
+	e.log("policy: forgot %d quiet cooldown entries, %d suppressed occurrences never reported",
+		shed.forgotten, shed.unreported)
+}
+
+// CooldownStats reports the cooldown map's size and what bounding it has cost.
+func (e *Engine) CooldownStats() CooldownStats {
+	e.mu.Lock()
+	tracked := len(e.cooldown)
+	e.mu.Unlock()
+	return CooldownStats{
+		Tracked:    tracked,
+		Forgotten:  e.forgotten.Load(),
+		Unreported: e.unreported.Load(),
+	}
 }
 
 // maybeBlock applies a block when the detector suggested one, enforcement is

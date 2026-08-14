@@ -48,6 +48,10 @@ func (m *MemoryBackend) Reconcile(_ context.Context, desired []Rule) error {
 // Available implements Backend.
 func (m *MemoryBackend) Available() bool { return m.available }
 
+// Verify implements Backend. The memory backend cannot lose its state to
+// anything outside the process, so it is always consistent with itself.
+func (m *MemoryBackend) Verify(context.Context) error { return nil }
+
 // Name implements Backend.
 func (m *MemoryBackend) Name() string { return "memory" }
 

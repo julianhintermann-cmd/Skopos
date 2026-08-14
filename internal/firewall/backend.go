@@ -74,6 +74,12 @@ type Backend interface {
 	// Available reports whether the backend can actually enforce (required
 	// capabilities and kernel support present).
 	Available() bool
+	// Verify reads the kernel back and reports whether the structures Skopos
+	// programmed are still there. Available() only proves the interface can be
+	// opened, which says nothing about whether someone ran `nft flush ruleset`
+	// an hour ago — and a firewall that reports enforcing over an empty kernel
+	// is the most dangerous thing this product can do.
+	Verify(ctx context.Context) error
 	// Name identifies the backend for logs and the system view.
 	Name() string
 }

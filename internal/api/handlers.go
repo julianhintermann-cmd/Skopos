@@ -343,6 +343,10 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 		"enforcement": s.deps.Config.Firewall.Enforcement,
 		"enforcing":   s.deps.Firewall.Enforcing(),
 		"protected":   protected,
+		// What the kernel was last actually found to hold, so the view can say
+		// "unconfirmed since 09:14" instead of painting every row green on the
+		// strength of a configuration file.
+		"kernel": s.deps.Firewall.KernelHealth(),
 	})
 }
 

@@ -15,38 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// nft names. Everything Skopos creates lives in one table so it never
-// interferes with Docker's or UGOS's own nftables rules and can be removed
-// wholesale.
-const (
-	tableName = "skopos"
-	chainIn   = "input"
-	chainFwd  = "forward"
-	chainOut  = "output"
-
-	setDrop4   = "drop4"
-	setDrop6   = "drop6"
-	setReject4 = "reject4"
-	setReject6 = "reject6"
-
-	// Preventive country blocking: whole countries' prefixes, dropped on the
-	// way in only (after a ct accept for established flows, so the NAS can
-	// still deliberately reach those countries).
-	setCountry4   = "country_drop4"
-	setCountry6   = "country_drop6"
-	setProtected4 = "protected4"
-	setProtected6 = "protected6"
-
-	// Per-device policy: the LAN ranges to compare against, plus the two
-	// device sets.
-	setLAN4        = "lan4"
-	setLAN6        = "lan6"
-	setDevLANOnly4 = "dev_lanonly4"
-	setDevLANOnly6 = "dev_lanonly6"
-	setDevQuar4    = "dev_quarantine4"
-	setDevQuar6    = "dev_quarantine6"
-)
-
 // nftBackend enforces blocks through a dedicated inet table via netlink.
 // Requires CAP_NET_ADMIN.
 type nftBackend struct {
@@ -79,6 +47,56 @@ func (b *nftBackend) Available() bool {
 		return false
 	}
 	return true
+}
+
+// Verify reads the kernel back and reports whether the table, chains and sets
+// Skopos programmed are still there.
+//
+// Available() cannot answer this: it proves only that netlink opens. Anything
+// that wipes the ruleset out from under a running Skopos — `nft flush ruleset`
+// from another tool, a container's network being rebuilt, a firewall package
+// upgrade — left the service reporting that it was enforcing over an empty
+// kernel, indefinitely, because nothing ever looked again.
+func (b *nftBackend) Verify(context.Context) error {
+	c, err := nftables.New()
+	if err != nil {
+		return fmt.Errorf("opening netlink: %w", err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		return fmt.Errorf("listing tables: %w", err)
+	}
+	var table *nftables.Table
+	for _, t := range tables {
+		if t.Name == tableName && t.Family == nftables.TableFamilyINet {
+			table = t
+			break
+		}
+	}
+	if table == nil {
+		return fmt.Errorf("the %s table is gone from the kernel", tableName)
+	}
+	chains, err := c.ListChainsOfTableFamily(nftables.TableFamilyINet)
+	if err != nil {
+		return fmt.Errorf("listing chains: %w", err)
+	}
+	found := map[string]bool{}
+	for _, ch := range chains {
+		if ch.Table != nil && ch.Table.Name == tableName {
+			found[ch.Name] = true
+		}
+	}
+	for _, name := range []string{chainIn, chainFwd, chainOut} {
+		if !found[name] {
+			return fmt.Errorf("the %s chain is missing from the %s table", name, tableName)
+		}
+	}
+	for _, name := range allSets {
+		if _, err := c.GetSetByName(table, name); err != nil {
+			return fmt.Errorf("the %s set is missing from the %s table: %w", name, tableName, err)
+		}
+	}
+	return nil
 }
 
 // EnsureBase creates the table, sets and chains with their static match rules.
@@ -621,70 +639,5 @@ func unionBySet(prefixes []netip.Prefix, name4, name6 string) map[string][]span 
 	if s := unionPrefixes(v6); len(s) > 0 {
 		out[name6] = s
 	}
-	return out
-}
-
-// setFor picks the set name for a rule by family and action.
-func setFor(r Rule) (string, bool) {
-	v6 := r.Prefix.Addr().Is6()
-	switch r.Action {
-	case Reject:
-		if v6 {
-			return setReject6, true
-		}
-		return setReject4, true
-	default: // Drop
-		if v6 {
-			return setDrop6, true
-		}
-		return setDrop4, true
-	}
-}
-
-// intervalBounds returns the inclusive start and exclusive end addresses of a
-// prefix, as required by nftables interval sets.
-// Both are one byte wider than the address itself. The exclusive end of a
-// range that reaches the top of the family — 255.255.255.0/24, 240.0.0.0/4,
-// ffff::/16 — is one past the maximum address, which does not fit in an
-// address and which netip reports as an invalid Addr. Carrying it in an extra
-// leading byte keeps every bound orderable, so the coalescer can sort and
-// compare them without special cases. setKey strips that byte on the way to
-// the kernel, where the same value is written as a wrap to zero.
-func intervalBounds(p netip.Prefix) (start, end []byte) {
-	p = p.Masked()
-	start = append([]byte{0}, ipBytes(p.Addr())...)
-	end = append([]byte{0}, ipBytes(lastAddr(p))...)
-	for i := len(end) - 1; i >= 0; i-- {
-		if end[i]++; end[i] != 0 {
-			break
-		}
-	}
-	return start, end
-}
-
-// setKey renders a bound as the kernel key: the address bytes without the
-// ordering byte. A range ending one past the family maximum becomes the
-// all-zero key, which is how nftables spells "up to the end".
-func setKey(bound []byte) []byte { return bound[1:] }
-
-func ipBytes(a netip.Addr) []byte {
-	if a.Is4() {
-		b := a.As4()
-		return b[:]
-	}
-	b := a.As16()
-	return b[:]
-}
-
-// lastAddr returns the last address contained in the prefix.
-func lastAddr(p netip.Prefix) netip.Addr {
-	addr := p.Masked().Addr()
-	bs := ipBytes(addr)
-	bits := p.Bits()
-	total := len(bs) * 8
-	for i := bits; i < total; i++ {
-		bs[i/8] |= 1 << (7 - uint(i%8))
-	}
-	out, _ := netip.AddrFromSlice(bs)
 	return out
 }

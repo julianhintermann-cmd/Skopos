@@ -548,3 +548,53 @@ func TestIntegrationCountryMergesContiguousPrefixes(t *testing.T) {
 		t.Errorf("the merged range does not start where it should: %v", elems)
 	}
 }
+
+// Available() only proves netlink opens. Verify has to notice that the table
+// Skopos programmed is gone — which is what happens when another tool runs
+// `nft flush ruleset`, or a container's network is rebuilt underneath a
+// running Skopos. Before this existed the service went on reporting that it
+// was enforcing over an empty kernel, indefinitely.
+func TestIntegrationVerifyNoticesAWipedRuleset(t *testing.T) {
+	enterNetNS(t)
+	ctx := context.Background()
+	b := NewNFTablesBackend(nil)
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+	if err := b.Verify(ctx); err != nil {
+		t.Fatalf("a freshly built ruleset should verify: %v", err)
+	}
+
+	// Wipe it the way another tool would.
+	c, err := nftables.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables, err := c.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range tables {
+		c.DelTable(tb)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatalf("flushing the ruleset: %v", err)
+	}
+
+	if b.Available() != true {
+		t.Log("netlink still opens, as expected — which is exactly why Available is not enough")
+	}
+	if err := b.Verify(ctx); err == nil {
+		t.Fatal("Verify reported the ruleset healthy after it was wiped")
+	} else {
+		t.Logf("Verify correctly reported: %v", err)
+	}
+
+	// And it comes back on its own.
+	if err := b.EnsureBase(ctx); err != nil {
+		t.Fatalf("rebuilding: %v", err)
+	}
+	if err := b.Verify(ctx); err != nil {
+		t.Errorf("the rebuilt ruleset should verify: %v", err)
+	}
+}

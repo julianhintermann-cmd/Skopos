@@ -186,10 +186,17 @@ type SearchFilter struct {
 	Limit int
 }
 
-// SearchFlows returns raw flows matching the filter, newest first. Built for
-// the question "what actually happened at 3am", which the aggregated views
-// cannot answer.
-func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, error) {
+// searchScanCap bounds how many rows a subnet search examines. A CIDR cannot
+// be tested in SQL, so the rows have to be walked — and this database serves
+// every query through a single connection, so an unbounded walk over a wide
+// window would stall flow writes along with the rest of the dashboard.
+const searchScanCap = 200000
+
+// SearchFlows returns raw flows matching the filter, newest first, and whether
+// more matches exist beyond what is returned. Built for the question "what
+// actually happened at 3am", which the aggregated views cannot answer — so a
+// capped answer must never be presented as a complete one.
+func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, bool, error) {
 	if f.Limit <= 0 || f.Limit > 5000 {
 		f.Limit = 500
 	}
@@ -199,15 +206,14 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 	args := []any{toMs(f.From), toMs(f.To)}
 
 	if f.Address != "" {
-		if p, err := netip.ParsePrefix(f.Address); err == nil {
-			// A range: compare on the text form's prefix is wrong, so filter
-			// in Go below. Mark it by leaving the SQL open.
-			_ = p
+		if _, err := netip.ParsePrefix(f.Address); err == nil {
+			// A range: comparing the text form's prefix is wrong, so it is
+			// filtered in Go below and the SQL is left open here.
 		} else if _, err := netip.ParseAddr(f.Address); err == nil {
 			q += ` AND (src_ip = ? OR dst_ip = ?)`
 			args = append(args, f.Address, f.Address)
 		} else {
-			return nil, fmt.Errorf("store: %q is not an address or CIDR", f.Address)
+			return nil, false, fmt.Errorf("store: %q is not an address or CIDR", f.Address)
 		}
 	}
 	if f.Port > 0 {
@@ -225,7 +231,7 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 		case "icmp":
 			n = uint8(model.ProtoICMP)
 		default:
-			return nil, fmt.Errorf("store: unknown protocol %q", f.Proto)
+			return nil, false, fmt.Errorf("store: unknown protocol %q", f.Proto)
 		}
 		q += ` AND proto = ?`
 		args = append(args, n)
@@ -238,16 +244,7 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 		q += ` AND dst_name LIKE ?`
 		args = append(args, "%"+f.Name+"%")
 	}
-	q += ` ORDER BY start_ms DESC LIMIT ?`
-	args = append(args, f.Limit)
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	// A CIDR filter is applied here: SQLite has no network types, and the
+	// A CIDR filter is applied in Go: SQLite has no network types, and the
 	// alternative — a text prefix match — would be wrong at every boundary
 	// that is not a byte boundary.
 	var cidr netip.Prefix
@@ -257,6 +254,30 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 		}
 	}
 
+	// When the filter runs in Go, the limit cannot also be in SQL. It used to
+	// be, so a subnet search fetched the newest f.Limit flows regardless of
+	// address, discarded the ones outside the range, and reported "Nothing
+	// matched" while the matches sat just past the cut. That is a false
+	// negative handed to someone in the middle of an investigation — the worst
+	// possible moment to be told nothing happened. Scan instead, and stop once
+	// enough matches are in hand; scanCap bounds the work so a wide window
+	// cannot hold the single database connection indefinitely.
+	q += ` ORDER BY start_ms DESC`
+	if !cidr.IsValid() {
+		q += ` LIMIT ?`
+		args = append(args, f.Limit)
+	} else {
+		q += ` LIMIT ?`
+		args = append(args, searchScanCap)
+	}
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	scanned := 0
 	var out []model.Flow
 	for rows.Next() {
 		var (
@@ -267,8 +288,9 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 		)
 		if err := rows.Scan(&start, &end, &src, &dst, &fl.SrcPort, &fl.DstPort, &proto, &dir,
 			&fl.OutBytes, &fl.OutPackets, &fl.InBytes, &fl.InPackets, &fl.DstName); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		scanned++
 		fl.Start, fl.End = fromMs(start), fromMs(end)
 		fl.SrcIP, _ = netip.ParseAddr(src)
 		fl.DstIP, _ = netip.ParseAddr(dst)
@@ -278,6 +300,12 @@ func (s *Store) SearchFlows(ctx context.Context, f SearchFilter) ([]model.Flow, 
 			continue
 		}
 		out = append(out, fl)
+		if len(out) >= f.Limit {
+			// More may match beyond this point; say so rather than let the
+			// caller present a capped answer as a complete one.
+			return out, true, rows.Err()
+		}
 	}
-	return out, rows.Err()
+	// Hitting the scan cap means the window was not fully examined.
+	return out, cidr.IsValid() && scanned >= searchScanCap, rows.Err()
 }

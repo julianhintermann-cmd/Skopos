@@ -12,11 +12,14 @@ import (
 // failing to start — handy for developing the UI on macOS or Windows.
 type unsupportedBackend struct{}
 
-// NewNFTablesBackend returns a backend that is never available off Linux.
-func NewNFTablesBackend() Backend { return &unsupportedBackend{} }
+// NewNFTablesBackend returns a backend that is never available off Linux. It
+// takes the LAN ranges the Linux one does so the non-Linux build actually
+// compiles against the same call site.
+func NewNFTablesBackend([]netip.Prefix) Backend { return &unsupportedBackend{} }
 
 func (unsupportedBackend) Name() string                                           { return "nftables (unsupported)" }
 func (unsupportedBackend) Available() bool                                        { return false }
+func (unsupportedBackend) Verify(context.Context) error                           { return nil }
 func (unsupportedBackend) EnsureBase(context.Context) error                       { return nil }
 func (unsupportedBackend) Reconcile(context.Context, []Rule) error                { return nil }
 func (unsupportedBackend) ReconcileCountry(context.Context, []netip.Prefix) error { return nil }

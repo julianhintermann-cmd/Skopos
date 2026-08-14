@@ -82,6 +82,10 @@ type Service struct {
 	// failure on every cold start for work that simply has not come up yet.
 	baseReady bool
 
+	// healthMu guards what the last kernel verification found.
+	healthMu sync.RWMutex
+	health   KernelHealth
+
 	countryMu       sync.Mutex
 	countryPrefixes []netip.Prefix
 	devicePolicies  []DeviceRule
@@ -238,6 +242,102 @@ func (s *Service) Protects(prefix netip.Prefix) (netip.Prefix, bool) {
 		}
 	}
 	return netip.Prefix{}, false
+}
+
+// KernelHealth is what the last verification actually found in the kernel, as
+// opposed to what the configuration intends. The two are reported separately
+// on purpose: "you asked for enforcement" and "enforcement is in place" are
+// different facts, and this product's job is to tell them apart.
+type KernelHealth struct {
+	// Wanted is the operator's setting: enforce, or observe.
+	Wanted bool `json:"wanted"`
+	// OK is whether the kernel was found to hold what Skopos programmed.
+	OK bool `json:"ok"`
+	// CheckedAt is when that was last actually looked at — not when the
+	// configuration was last read.
+	CheckedAt time.Time `json:"checked_at,omitzero"`
+	// FailingSince is when it first stopped matching, so a banner can say how
+	// long the gap has been open rather than just that one exists.
+	FailingSince time.Time `json:"failing_since,omitzero"`
+	Error        string    `json:"error,omitempty"`
+}
+
+// KernelHealth returns the outcome of the last verification pass.
+func (s *Service) KernelHealth() KernelHealth {
+	s.healthMu.RLock()
+	defer s.healthMu.RUnlock()
+	h := s.health
+	s.cfgMu.RLock()
+	h.Wanted = s.cfg.Enforce
+	s.cfgMu.RUnlock()
+	return h
+}
+
+func (s *Service) recordHealth(ok bool, err error) {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	s.health.OK = ok
+	s.health.CheckedAt = s.clock()
+	if ok {
+		s.health.FailingSince = time.Time{}
+		s.health.Error = ""
+		return
+	}
+	if s.health.FailingSince.IsZero() {
+		s.health.FailingSince = s.clock()
+	}
+	if err != nil {
+		s.health.Error = err.Error()
+	}
+}
+
+// Verify reads the kernel back and repairs it if what Skopos programmed is no
+// longer there.
+//
+// Everything else in this service reports intent: the configuration says
+// enforce, netlink opens, therefore the dashboard says enforcing. That held
+// right up until something removed the ruleset — another tool running `nft
+// flush ruleset`, a container's network being rebuilt, a package upgrade — at
+// which point Skopos went on reporting that it was protecting a machine it had
+// stopped protecting, with nothing anywhere to contradict it. This is the one
+// place that asks the kernel instead of the configuration, and it is why the
+// answer can be trusted.
+//
+// It returns nil when there is nothing to enforce (observe mode, or a backend
+// that cannot enforce at all) — that is not a failure, it is a setting.
+func (s *Service) Verify(ctx context.Context) error {
+	s.cfgMu.RLock()
+	wanted := s.cfg.Enforce
+	s.cfgMu.RUnlock()
+	if !wanted || !s.backend.Available() {
+		s.recordHealth(true, nil)
+		return nil
+	}
+
+	err := s.backend.Verify(ctx)
+	if err == nil {
+		s.recordHealth(true, nil)
+		return nil
+	}
+
+	// Rebuild rather than merely complain: the desired state is all in the
+	// store, so recovery is a Restore away and an operator should not have to
+	// notice before their firewall comes back.
+	s.log("firewall: the kernel no longer matches what Skopos programmed (%v) — rebuilding", err)
+	s.cfgMu.Lock()
+	s.baseReady = false
+	s.cfgMu.Unlock()
+	if rerr := s.Restore(ctx); rerr != nil {
+		s.recordHealth(false, fmt.Errorf("%v; rebuilding it failed too: %w", err, rerr))
+		return fmt.Errorf("firewall verification failed and could not be repaired: %w", rerr)
+	}
+	if verr := s.backend.Verify(ctx); verr != nil {
+		s.recordHealth(false, fmt.Errorf("%v; still wrong after rebuilding: %w", err, verr))
+		return fmt.Errorf("firewall rebuilt but still does not match: %w", verr)
+	}
+	s.log("firewall: rebuilt and verified")
+	s.recordHealth(true, nil)
+	return nil
 }
 
 // Enforcing reports whether rules are actually being applied: enforce mode is

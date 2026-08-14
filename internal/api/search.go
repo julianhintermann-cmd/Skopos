@@ -58,13 +58,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	flows, err := s.deps.Store.SearchFlows(ctx, f)
+	flows, truncated, err := s.deps.Store.SearchFlows(ctx, f)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// count is what is shown, not what exists. Saying so is the difference
+	// between "nothing happened" and "nothing else fit on the page", and an
+	// operator searching their history deserves to know which one they got.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"from": from, "to": to, "count": len(flows),
+		"from": from, "to": to, "count": len(flows), "truncated": truncated,
 		"flows": NewLiveFlows(flows, nil),
 	})
 }

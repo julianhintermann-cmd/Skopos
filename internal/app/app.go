@@ -428,6 +428,36 @@ func (a *App) Run(ctx context.Context) error {
 			degraded("device inventory", "Updating the device list"))
 		spawn("devices", func() { _ = observers.deviceTracker.Run(runCtx) })
 	}
+
+	// Ask the kernel, periodically, whether it still holds what Skopos
+	// programmed — and rebuild it when it does not. Everything else in the
+	// product reports enforcement from configuration, which stays green
+	// through a `nft flush ruleset` from another tool or a rebuilt container
+	// network. This is the loop that makes "enforcing" mean something.
+	spawn("firewall-verify", func() {
+		report := degraded("firewall enforcement",
+			"The kernel no longer holds the rules Skopos programmed")
+		t := time.NewTicker(2 * time.Minute)
+		defer t.Stop()
+		var failing bool
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				err := fw.Verify(runCtx)
+				switch {
+				case err != nil:
+					failing = true
+				case failing:
+					failing = false
+				default:
+					continue
+				}
+				report(err)
+			}
+		}
+	})
 	a.spawnMaintenance(runCtx, spawn, st, dispatcher)
 	a.spawnFeeds(runCtx, spawn, observers.feeds, dispatcher)
 	a.spawnCapture(runCtx, spawn, agg, sampler, dispatcher)

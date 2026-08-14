@@ -132,7 +132,11 @@
   --sk-qr-quiet:      #ffffff;
   --sk-brand-cf:      #f6821f;
 
-  --sk-elev-card:     none;      /* dark separates with borders, not shadow */
+  /* Dark separates with borders, not shadow. Written as a transparent shadow
+     rather than `none` because a Tailwind shadow utility composes its value
+     into a comma list with the ring layers, where `none` is not a legal item
+     and would invalidate the whole declaration. Renders identically. */
+  --sk-elev-card:     0 0 0 0 rgb(0 0 0 / 0);
   --sk-elev-overlay:  0 12px 34px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.4);
 }
 
@@ -293,22 +297,31 @@
      whose digits shift width on every poll reads as unstable. */
   .tabnums, table, .font-mono { font-variant-numeric: tabular-nums; }
 
-  /* Coarse pointers only, so table density is untouched on the desktop. */
-  @media (pointer: coarse) {
-    input, select, textarea { font-size: var(--text-input); }
-  }
-
-  /* Focus ring. NOTE the absence of a border-radius declaration: `outline`
-     follows the element's own border-radius natively (Chrome 94+, Firefox 88+,
-     Safari 16.4+), so the old `border-radius: 3px` was squaring off every pill
-     and card it touched. `inherit` would have been just as wrong — it takes the
-     PARENT's radius. The fix is to say nothing. */
-  :focus-visible {
-    outline: 2px solid var(--sk-line-focus);
-    outline-offset: 2px;
-  }
-
   ::selection { background: var(--sk-accent-quiet); color: var(--sk-fg); }
+}
+
+/* The two rules below are deliberately NOT in @layer base.
+   Tailwind orders its layers `theme, base, components, utilities`, and an
+   unlayered rule outranks every one of them regardless of specificity. Both of
+   these have to win against a utility class on the element itself:
+   `text-sm` on an input would otherwise undo the 16px floor, and the four
+   `outline-none` inputs in this app would otherwise have no focus ring at all. */
+
+/* iOS Safari zooms the viewport when focusing an input whose computed
+   font-size is below 16px. Coarse pointers only — the whole point of 13px is
+   density, and the desktop has no zoom problem to solve. */
+@media (pointer: coarse) {
+  input, select, textarea { font-size: var(--text-input); }
+}
+
+/* Focus ring. NOTE the absence of a border-radius declaration: `outline`
+   follows the element's own border-radius natively (Chrome 94+, Firefox 88+,
+   Safari 16.4+), so the old `border-radius: 3px` was squaring off every pill
+   and card it touched. `inherit` would have been just as wrong — it takes the
+   PARENT's radius. The fix is to say nothing. */
+:focus-visible {
+  outline: 2px solid var(--sk-line-focus);
+  outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -348,8 +361,24 @@
   to { opacity: 1; }
 }
 
-/* Skeleton sweep. */
+/* Skeleton sweep. A shimmering placeholder holds the shape the data is about
+   to occupy; the Spinners it replaces rendered the literal word "Loading…" in
+   the middle of a collapsed layout, so every load was also a reflow. */
 @keyframes skopos-shimmer {
   from { background-position: -200% 0; }
   to { background-position: 200% 0; }
+}
+.sk-skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--sk-raised) 25%,
+    var(--sk-sunken) 37%,
+    var(--sk-raised) 63%
+  );
+  background-size: 200% 100%;
+  animation: skopos-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skopos-spin {
+  to { transform: rotate(360deg); }
 }

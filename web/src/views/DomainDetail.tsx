@@ -56,16 +56,23 @@ export function DomainDetail({ onUnauthorized }: { onUnauthorized: () => void })
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <StatTile
           label="Volume"
-          value={stat ? formatBytes(stat.bytes).split(' ')[0] : '—'}
+          value={stat ? formatBytes(stat.bytes).split(' ')[0] : null}
           unit={stat ? formatBytes(stat.bytes).split(' ')[1] : undefined}
           tone={stat ? 'accent' : 'neutral'}
-          hint={stat ? `last ${range}` : totals.loading ? 'checking…' : 'not in the top names for this window'}
+          unavailable={totals.loading ? 'still checking' : 'not in the top names for this window'}
+          hint={stat ? `last ${range}` : undefined}
         />
-        <StatTile label="Flows" value={stat ? formatCount(stat.flows) : '—'} hint={`last ${range}`} />
+        <StatTile
+          label="Flows"
+          value={stat ? formatCount(stat.flows) : null}
+          unavailable={totals.loading ? 'still checking' : 'not measured for this name'}
+          hint={stat ? `last ${range}` : undefined}
+        />
         <StatTile
           label="Devices"
-          value={stat ? formatCount(stat.devices) : '—'}
-          hint={stat ? 'asked for this name' : ''}
+          value={stat ? formatCount(stat.devices) : null}
+          unavailable={totals.loading ? 'still checking' : 'not measured for this name'}
+          hint={stat ? 'asked for this name' : undefined}
         />
       </div>
 

@@ -33,23 +33,24 @@ export function LivePulse({
       <div className={`grid gap-3 ${variant === 'full' ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-2'}`}>
         <StatTile
           label="Throughput"
-          value={bits ? bits.split(' ')[0] : '—'}
+          value={bits ? bits.split(' ')[0] : null}
           unit={bits ? bits.split(' ')[1] : undefined}
           tone={bits ? 'accent' : 'neutral'}
-          hint={bits ? undefined : 'no reading'}
+          unavailable="no reading"
         />
         <StatTile
           label="Packets"
-          value={pps ? pps.split(' ')[0] : '—'}
+          value={pps ? pps.split(' ')[0] : null}
           unit={pps ? 'pkt/s' : undefined}
-          hint={pps ? undefined : 'no reading'}
+          unavailable="no reading"
         />
         {variant === 'full' && (
           <>
             <StatTile
               label="Sampling"
-              value={live?.sampling ? 'On' : live ? 'Off' : '—'}
+              value={live?.sampling ? 'On' : live ? 'Off' : null}
               tone={live?.sampling ? 'warn' : 'neutral'}
+              unavailable="no reading"
               hint={
                 live?.sampling
                   ? typeof live.keep_rate === 'number'
@@ -57,14 +58,15 @@ export function LivePulse({
                     : 'volumes are a floor'
                   : live
                     ? 'every packet counted'
-                    : 'no reading'
+                    : undefined
               }
             />
             <StatTile
               label="Sources"
-              value={sources ? `${sources.up}/${sources.total}` : '—'}
+              value={sources ? `${sources.up}/${sources.total}` : null}
               tone={sources && sources.up < sources.total ? 'warn' : 'neutral'}
-              hint={sources ? 'capture interfaces running' : 'not reported'}
+              unavailable="not reported"
+              hint={sources ? 'capture interfaces running' : undefined}
             />
           </>
         )}

@@ -4,6 +4,17 @@
 // namespace. They need root (CAP_NET_ADMIN) and are gated behind the
 // "integration" build tag, so `go test ./...` skips them and CI runs them
 // explicitly with: go test -tags=integration -run Integration ./internal/firewall/...
+//
+// One rule for anything testing Service.Verify, learned the expensive way:
+// assert on the kernel state afterwards, never on the returned error. Verify
+// repairs what it finds, so nil means either "nothing was wrong" or "something
+// was wrong and I fixed it" — opposite outcomes, identical return value. A
+// test written against that return passes just as happily over a check that
+// inspects nothing at all. Two people reviewing this package independently
+// wrote unsound tests for exactly that reason, which makes it a property of
+// the pattern rather than an oversight, and it will come back the next time
+// someone extends Verify. Damage the kernel, run Verify, then look at the
+// kernel.
 package firewall
 
 import (

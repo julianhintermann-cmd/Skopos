@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -225,5 +226,45 @@ func TestCoalesceRefusesWholeFamily(t *testing.T) {
 	}
 	if got := render(out[setDrop4], time.Time{}); got != "[203.0.113.7..203.0.113.8) permanent" {
 		t.Errorf("got %s", got)
+	}
+}
+
+// Two halves that tile the whole space are the case the ordering byte makes
+// possible and could just as easily have broken. Merged, the range starts at
+// the family minimum and ends one past its maximum — and both of those render
+// to the same all-zero kernel key, so the start and the end element of one
+// range are byte-identical. Nothing about that is obvious from reading the
+// encoding, which is exactly why it is written down here.
+func TestCoalesceTilingHalvesCollapseToOneRange(t *testing.T) {
+	out := coalesceRules([]Rule{
+		{Prefix: netip.MustParsePrefix("0.0.0.0/1"), Action: Drop},
+		{Prefix: netip.MustParsePrefix("128.0.0.0/1"), Action: Drop},
+	})
+	spans := out[setDrop4]
+	if len(spans) != 1 {
+		t.Fatalf("two tiling halves should merge into one range, got %d: %v", len(spans), out)
+	}
+	if got := render(spans, time.Time{}); got != "[0.0.0.0..0.0.0.0) permanent" {
+		t.Errorf("got %s", got)
+	}
+	// The internal bounds must stay distinguishable even though the keys do
+	// not: lose that and the sweep cannot order them.
+	s := spans[0]
+	if bytes.Equal(s.lo, s.hi) {
+		t.Error("the internal bounds collapsed; the ordering byte is not doing its job")
+	}
+	if !bytes.Equal(setKey(s.lo), setKey(s.hi)) {
+		t.Error("expected both kernel keys to be all-zero for a range spanning the family")
+	}
+
+	// Different expiries must keep them apart rather than merging into a
+	// range that outlives one of them.
+	hour := time.Now().Add(time.Hour)
+	out = coalesceRules([]Rule{
+		{Prefix: netip.MustParsePrefix("0.0.0.0/1"), Action: Drop, Expires: &hour},
+		{Prefix: netip.MustParsePrefix("128.0.0.0/1"), Action: Drop},
+	})
+	if n := len(out[setDrop4]); n != 2 {
+		t.Errorf("halves with different expiries must stay apart, got %d ranges", n)
 	}
 }

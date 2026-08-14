@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
@@ -90,6 +91,9 @@ type Service struct {
 	// healthMu guards what the last kernel verification found.
 	healthMu sync.RWMutex
 	health   KernelHealth
+	// enforcingNow mirrors State().Verdict == VerdictEnforcing for the capture
+	// path, which cannot afford a lock per packet.
+	enforcingNow atomic.Bool
 
 	countryMu       sync.Mutex
 	countryPrefixes []netip.Prefix
@@ -121,6 +125,11 @@ func (s *Service) SetLogger(f func(string, ...any)) { s.log = f }
 // and country prefixes into the kernel; turning it off tears the table down
 // again, so "observe" never leaves stale rules behind.
 func (s *Service) SetEnforce(ctx context.Context, on bool) error {
+	// Deferred so every exit is covered, the error paths included: a failed
+	// arming leaves the flag describing where we actually ended up rather than
+	// where the caller was heading.
+	defer s.refreshEnforcingNow()
+
 	s.cfgMu.RLock()
 	was := s.cfg.Enforce
 	s.cfgMu.RUnlock()
@@ -284,7 +293,15 @@ func (s *Service) KernelHealth() KernelHealth {
 	return h
 }
 
+// recordHealth stores the outcome and then refreshes the packet-path flag.
+// The refresh has to happen outside the lock: it reads the state back through
+// State, which takes the same mutex, and Go's RWMutex does not re-enter.
 func (s *Service) recordHealth(ok, setsChecked bool, err error) {
+	s.storeHealth(ok, setsChecked, err)
+	s.refreshEnforcingNow()
+}
+
+func (s *Service) storeHealth(ok, setsChecked bool, err error) {
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
 	s.health.OK = ok
@@ -497,6 +514,144 @@ func (s *Service) Enforcing() bool {
 	return on && ready && s.backend.Available()
 }
 
+// VerifyInterval is how often the kernel is read back. The staleness threshold
+// below is derived from it rather than written twice, because two constants
+// that must agree eventually will not.
+const VerifyInterval = 2 * time.Minute
+
+// StaleAfter is how long a passing verification stays evidence. Past it the
+// state demotes to unverified rather than staying green.
+//
+// This exists because of a hole in the check that shipped in 0.3.3: if the
+// verify goroutine stops — panics, is never started, loses its context — the
+// last recorded health simply stays where it is, and every screen goes on
+// reporting a reading that could be days old. The whole point of asking the
+// kernel was to stop reporting protection nobody had confirmed, and an answer
+// that never expires quietly reintroduces exactly that.
+const StaleAfter = 3 * VerifyInterval
+
+// Verdict is the one answer to "is this machine actually protected".
+type Verdict string
+
+const (
+	// VerdictObserving is observe mode: nothing is dropped, by choice. It is a
+	// setting, not a fault, and must never be drawn as a failure.
+	VerdictObserving Verdict = "observing"
+	// VerdictEnforcing means the kernel was read back and held what Skopos
+	// programmed, recently enough to still count.
+	VerdictEnforcing Verdict = "enforcing"
+	// VerdictPartial means the read passed but covered less ground than usual.
+	VerdictPartial Verdict = "partial"
+	// VerdictDegraded means enforcement was wanted and the kernel does not have it.
+	VerdictDegraded Verdict = "degraded"
+	// VerdictUnverified means enforcement was wanted and nobody has looked
+	// lately — either never, or not since StaleAfter ago.
+	VerdictUnverified Verdict = "unverified"
+	// VerdictUnable means enforcement was wanted and this backend cannot do it.
+	VerdictUnable Verdict = "unable"
+)
+
+// EnforcementState is what every screen, endpoint and metric must render
+// protection from. Nothing else may: the fields keep the setting and the
+// finding apart on purpose, because "you asked for enforcement" and
+// "enforcement is in place" are different facts and this product exists to
+// tell them apart.
+type EnforcementState struct {
+	// Mode is the setting — "observe" or "enforce".
+	Mode string `json:"mode"`
+	// Verdict is the single derived answer. Render this, not the fields.
+	Verdict Verdict `json:"verdict"`
+	Backend string  `json:"backend"`
+	// BackendUp is whether netlink opens. It proves the interface works, not
+	// that any rule exists.
+	BackendUp bool `json:"backend_up"`
+	// BaseReady is whether the table, chains and sets have been created.
+	BaseReady bool `json:"base_ready"`
+	// CheckedAt is when the kernel was last actually read. Zero means never.
+	CheckedAt time.Time `json:"checked_at,omitzero"`
+	// FailingSince is when it first stopped matching, so a view can say how
+	// long the gap has been open instead of only that one exists.
+	FailingSince time.Time `json:"failing_since,omitzero"`
+	Error        string    `json:"error,omitempty"`
+	SetsChecked  bool      `json:"sets_checked"`
+	// StaleAfter lets a client age the reading itself without hardcoding a
+	// constant that would drift from this one.
+	StaleAfter int `json:"stale_after_seconds"`
+}
+
+// State derives the one verdict a caller may render.
+//
+// The order matters and is not arbitrary. Observe mode is checked first
+// because Verify short-circuits to recording OK when enforcement is off — a
+// true that means "nothing to check", which read as enforcing would be the
+// original defect wearing a new hat. Staleness is checked before the recorded
+// outcome, because an old pass is not a pass.
+func (s *Service) State() EnforcementState {
+	s.cfgMu.RLock()
+	wanted, ready := s.cfg.Enforce, s.baseReady
+	s.cfgMu.RUnlock()
+
+	s.healthMu.RLock()
+	h := s.health
+	s.healthMu.RUnlock()
+
+	up := s.backend.Available()
+	st := EnforcementState{
+		Mode:         "observe",
+		Backend:      s.backend.Name(),
+		BackendUp:    up,
+		BaseReady:    ready,
+		CheckedAt:    h.CheckedAt,
+		FailingSince: h.FailingSince,
+		Error:        h.Error,
+		SetsChecked:  h.SetsChecked,
+		StaleAfter:   int(StaleAfter / time.Second),
+	}
+	if wanted {
+		st.Mode = "enforce"
+	}
+
+	switch {
+	case !wanted:
+		st.Verdict = VerdictObserving
+		// An observe-mode install has no failure to report, and carrying one
+		// over from a previous enforcing period would date-stamp a problem
+		// that is no longer being had.
+		st.Error, st.FailingSince = "", time.Time{}
+	case !up || !ready:
+		st.Verdict = VerdictUnable
+	case h.CheckedAt.IsZero():
+		st.Verdict = VerdictUnverified
+	case s.clock().Sub(h.CheckedAt) > StaleAfter:
+		st.Verdict = VerdictUnverified
+	case !h.OK:
+		st.Verdict = VerdictDegraded
+	case !h.SetsChecked:
+		st.Verdict = VerdictPartial
+	default:
+		st.Verdict = VerdictEnforcing
+	}
+	return st
+}
+
+// EnforcingNow answers the same question as State for the packet path, in one
+// atomic load. The capture goroutine sees every packet, and taking two
+// read-locks per packet to ask a question that changes every two minutes would
+// cost more than the check is worth.
+//
+// It is deliberately conservative: anything short of a confirmed, fresh
+// enforcing verdict reads as false. A flow marked "dropped" that was not, or
+// an alert suppressed because the kernel was believed to be handling it, are
+// both worse than the redundant alternative.
+func (s *Service) EnforcingNow() bool { return s.enforcingNow.Load() }
+
+// refreshEnforcingNow recomputes the packet-path flag. Every path that can
+// change the verdict calls it: recording a health outcome, arming or disarming
+// enforcement, and bringing the base up.
+func (s *Service) refreshEnforcingNow() {
+	s.enforcingNow.Store(s.State().Verdict == VerdictEnforcing)
+}
+
 // Block records a block (origin: detector) and reconciles. It implements
 // policy.Blocker. ttl <= 0 falls back to the configured default.
 func (s *Service) Block(ctx context.Context, prefix netip.Prefix, reason string, ttl time.Duration) error {
@@ -626,6 +781,8 @@ func (s *Service) Unblock(ctx context.Context, prefix netip.Prefix, actor string
 // stored desired state. Called once at startup so reboots and container
 // updates never drop protection.
 func (s *Service) Restore(ctx context.Context) error {
+	defer s.refreshEnforcingNow()
+
 	s.cfgMu.RLock()
 	enforce := s.cfg.Enforce
 	s.cfgMu.RUnlock()

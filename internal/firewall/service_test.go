@@ -316,3 +316,128 @@ func TestUnblockRollsBackWhenTheKernelRefuses(t *testing.T) {
 		t.Errorf("the block should still be listed, got %d rows", len(active))
 	}
 }
+
+// stateService builds a service whose clock the test drives, so staleness can
+// be reached without waiting six minutes for it.
+func stateService(t *testing.T, enforce bool) (*Service, *time.Time) {
+	t.Helper()
+	now := time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
+	svc := NewService(baseConfig(enforce), NewMemoryBackend(true), openStore(t), func() time.Time { return now })
+	if err := svc.Restore(context.Background()); err != nil {
+		t.Fatalf("restoring: %v", err)
+	}
+	return svc, &now
+}
+
+// Observe mode reports observing, not enforcing — even though Verify records
+// OK for it. That true means "there was nothing to check"; rendering it as
+// enforcement is the exact defect this whole mechanism exists to prevent, and
+// it would be an easy one to reintroduce by reading health.OK directly.
+func TestStateObserveModeIsNotEnforcing(t *testing.T) {
+	svc, _ := stateService(t, false)
+	svc.recordHealth(true, true, nil)
+
+	if got := svc.State().Verdict; got != VerdictObserving {
+		t.Errorf("verdict = %q, want %q", got, VerdictObserving)
+	}
+	if svc.EnforcingNow() {
+		t.Error("observe mode must not report enforcing to the packet path")
+	}
+}
+
+// Before the first verification there is no evidence, and the honest answer is
+// that nobody has looked — not that everything is fine. This covers the first
+// two minutes of every process life.
+func TestStateBeforeAnyCheckIsUnverified(t *testing.T) {
+	svc, _ := stateService(t, true)
+
+	st := svc.State()
+	if st.Verdict != VerdictUnverified {
+		t.Errorf("verdict = %q, want %q", st.Verdict, VerdictUnverified)
+	}
+	if !st.CheckedAt.IsZero() {
+		t.Errorf("checked_at = %v, want zero for never-checked", st.CheckedAt)
+	}
+	if svc.EnforcingNow() {
+		t.Error("an unverified firewall must not report enforcing")
+	}
+}
+
+func TestStateFreshPassIsEnforcing(t *testing.T) {
+	svc, _ := stateService(t, true)
+	svc.recordHealth(true, true, nil)
+
+	if got := svc.State().Verdict; got != VerdictEnforcing {
+		t.Errorf("verdict = %q, want %q", got, VerdictEnforcing)
+	}
+	if !svc.EnforcingNow() {
+		t.Error("a fresh confirmed pass should reach the packet path")
+	}
+}
+
+// The hole this closes: before StaleAfter existed, a passing check stayed
+// green for the life of the process. If the verify goroutine died — panicked,
+// never started, lost its context — every screen went on reporting protection
+// from a reading that could be days old. An old pass is not a pass.
+func TestStatePassGoesStaleAndDemotes(t *testing.T) {
+	svc, now := stateService(t, true)
+	svc.recordHealth(true, true, nil)
+	if got := svc.State().Verdict; got != VerdictEnforcing {
+		t.Fatalf("precondition: verdict = %q, want %q", got, VerdictEnforcing)
+	}
+
+	// One second inside the window still counts.
+	*now = now.Add(StaleAfter - time.Second)
+	if got := svc.State().Verdict; got != VerdictEnforcing {
+		t.Errorf("just inside the window: verdict = %q, want %q", got, VerdictEnforcing)
+	}
+
+	// One second past it does not.
+	*now = now.Add(2 * time.Second)
+	if got := svc.State().Verdict; got != VerdictUnverified {
+		t.Errorf("past StaleAfter: verdict = %q, want %q — a reading that never "+
+			"expires is how a dead check stays green", got, VerdictUnverified)
+	}
+}
+
+func TestStateFailedCheckIsDegraded(t *testing.T) {
+	svc, _ := stateService(t, true)
+	svc.recordHealth(false, true, errors.New("the blocks4 set is empty in the kernel"))
+
+	st := svc.State()
+	if st.Verdict != VerdictDegraded {
+		t.Errorf("verdict = %q, want %q", st.Verdict, VerdictDegraded)
+	}
+	if st.Error == "" {
+		t.Error("a degraded state must carry what went wrong")
+	}
+	if st.FailingSince.IsZero() {
+		t.Error("a degraded state must say since when")
+	}
+	if svc.EnforcingNow() {
+		t.Error("a degraded firewall must not report enforcing")
+	}
+}
+
+// A check that could not read the desired state covered less ground than
+// usual. Reporting that as a clean bill of health is how a narrower check
+// becomes invisible.
+func TestStateCheckThatSkippedTheSetsIsPartial(t *testing.T) {
+	svc, _ := stateService(t, true)
+	svc.recordHealth(true, false, nil)
+
+	if got := svc.State().Verdict; got != VerdictPartial {
+		t.Errorf("verdict = %q, want %q", got, VerdictPartial)
+	}
+	if svc.EnforcingNow() {
+		t.Error("partial is not confirmed, so the packet path must not treat it as such")
+	}
+}
+
+// StaleAfter is derived from the verify cadence rather than written twice.
+// Two constants that must agree are two constants that will eventually differ.
+func TestStaleAfterTracksTheVerifyInterval(t *testing.T) {
+	if StaleAfter != 3*VerifyInterval {
+		t.Errorf("StaleAfter = %v, want 3 × VerifyInterval (%v)", StaleAfter, 3*VerifyInterval)
+	}
+}

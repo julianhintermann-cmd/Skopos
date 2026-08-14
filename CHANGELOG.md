@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-14
+
+Seven reviewers went through the codebase together. What they found was
+mostly the same shape: controls that reached less far than they claimed, and
+failures that stayed quiet. Preventive country blocking had been switching
+itself off since 0.2.1. Turning on two-factor authentication locked you out
+of your own dashboard. A full disk ended traffic recording for good while
+everything still looked alive. The never-block allowlist could be walked past
+four different ways. None of it announced itself, which is exactly why it
+lasted.
+
 ### Added
 
 - **Block from the alert** — every alert and every incident has a Block
@@ -390,7 +401,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.2
 [0.3.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.1
 [0.3.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.0
 [0.2.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.2.2

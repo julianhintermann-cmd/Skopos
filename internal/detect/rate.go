@@ -31,9 +31,62 @@ type Rate struct {
 }
 
 type rateState struct {
-	conns   []time.Time // connection-attempt timestamps
-	packets []time.Time // all packet timestamps
+	conns   rateWindow // new connection attempts
+	packets rateWindow // every packet
 	firedAt time.Time
+}
+
+// rateBuckets is how finely the sliding window is divided. Twelve gives a
+// window edge that moves in steps of a twelfth of the window — smooth enough
+// that a burst is not double-counted across the boundary, coarse enough to
+// stay tiny.
+const rateBuckets = 12
+
+// rateWindow counts events over a sliding window with a fixed-size ring of
+// buckets.
+//
+// It used to be a slice of timestamps, one per packet. At the shipped default
+// of 8000 packets per second over a ten-second window that is eighty thousand
+// timestamps per source, re-compacted to the front of the slice on every
+// single packet — quadratic work that could not keep up with the very rate it
+// was configured to detect. Counting into buckets is constant work and
+// constant memory, and a rate never needed the individual timestamps anyway.
+type rateWindow struct {
+	counts [rateBuckets]int
+	head   int       // index of the newest bucket
+	headAt time.Time // when the newest bucket started
+	total  int
+}
+
+// add records n events at now and returns the total over the window.
+func (w *rateWindow) add(now time.Time, window time.Duration, n int) int {
+	step := window / rateBuckets
+	if step <= 0 {
+		step = time.Millisecond
+	}
+	switch {
+	case w.headAt.IsZero():
+		w.headAt = now
+	case now.Before(w.headAt):
+		// Clock went backwards, or packets arrived out of order by less than
+		// a bucket. Count them in the current bucket rather than rewinding.
+	default:
+		advance := int(now.Sub(w.headAt) / step)
+		if advance >= rateBuckets {
+			// Nothing in the ring is still inside the window.
+			*w = rateWindow{headAt: now}
+		} else {
+			for i := 0; i < advance; i++ {
+				w.head = (w.head + 1) % rateBuckets
+				w.total -= w.counts[w.head]
+				w.counts[w.head] = 0
+			}
+			w.headAt = w.headAt.Add(time.Duration(advance) * step)
+		}
+	}
+	w.counts[w.head] += n
+	w.total += n
+	return w.total
 }
 
 // NewRate creates a rate detector.
@@ -76,25 +129,26 @@ func (d *Rate) Observe(p flow.Packet) {
 		st = &rateState{}
 		d.sources[p.SrcIP] = st
 	}
-	st.packets = append(st.packets, now)
+	packets := st.packets.add(now, d.cfg.Window, 1)
+	conns := st.conns.total
 	if p.Proto == model.ProtoTCP && p.SYN {
-		st.conns = append(st.conns, now)
+		conns = st.conns.add(now, d.cfg.Window, 1)
+	} else {
+		conns = st.conns.add(now, d.cfg.Window, 0)
 	}
-	st.packets = pruneTimes(st.packets, now.Add(-d.cfg.Window))
-	st.conns = pruneTimes(st.conns, now.Add(-d.cfg.Window))
 
 	if !st.firedAt.IsZero() && now.Sub(st.firedAt) < d.cfg.Window {
 		return
 	}
 
-	if d.cfg.MaxNewConnections > 0 && len(st.conns) >= d.cfg.MaxNewConnections {
+	if d.cfg.MaxNewConnections > 0 && conns >= d.cfg.MaxNewConnections {
 		st.firedAt = now
 		d.sink.Raise(d.finding(p.SrcIP, "Connection-rate spike",
-			fmt.Sprintf("%d new connections within %s", len(st.conns), d.cfg.Window)))
+			fmt.Sprintf("%d new connections within %s", conns, d.cfg.Window)))
 		return
 	}
 	if d.cfg.MaxPacketsPerSecond > 0 {
-		pps := float64(len(st.packets)) / d.cfg.Window.Seconds()
+		pps := float64(packets) / d.cfg.Window.Seconds()
 		if int(pps) >= d.cfg.MaxPacketsPerSecond {
 			st.firedAt = now
 			d.sink.Raise(d.finding(p.SrcIP, "Packet-rate spike",
@@ -108,18 +162,4 @@ func (d *Rate) finding(src netip.Addr, title, detail string) Finding {
 		Detector: "rate", Source: src, Severity: d.cfg.Severity,
 		Title: title, Detail: detail, SuggestBlock: d.cfg.Block,
 	}
-}
-
-// pruneTimes drops timestamps at or before cutoff, preserving order.
-func pruneTimes(times []time.Time, cutoff time.Time) []time.Time {
-	i := 0
-	for ; i < len(times); i++ {
-		if times[i].After(cutoff) {
-			break
-		}
-	}
-	if i > 0 {
-		return append(times[:0], times[i:]...)
-	}
-	return times
 }

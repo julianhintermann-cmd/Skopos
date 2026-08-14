@@ -156,7 +156,10 @@ func (d *Portscan) prune(st *scanState, now time.Time) {
 		}
 	}
 	if i > 0 {
-		st.attempts = append(st.attempts[:0], st.attempts[i:]...)
+		// Reslice rather than compact to the front: append reclaims the
+		// abandoned prefix the next time it has to grow, so this is constant
+		// work instead of moving every surviving element on every packet.
+		st.attempts = st.attempts[i:]
 	}
 }
 

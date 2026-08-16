@@ -4,16 +4,12 @@ import { useFetch } from '../lib/useFetch'
 import { api, type Alert } from '../lib/api'
 import { Card, CardHeader, Spinner, SeverityBadge, Button, Pill, useToast } from '../components/ui'
 import { BlockDialog } from '../components/BlockDialog'
+import { ExplainAlert } from '../components/ExplainAlert'
 import { Reputation } from '../components/Reputation'
 import { EntityLink } from '../components/entity'
 import { humanError } from '../components/humanError'
 import { useDeviceIndex, entityHref, isPrivateAddress } from '../lib/links'
 import { formatTime } from '../lib/format'
-
-// How many alerts to pull looking for one id. There is no GET /api/alerts/{id}
-// — the list endpoint is all there is — so the deep link is best-effort within
-// this page, and says so when the id falls outside it.
-const LOOKBACK = 500
 
 // The ntfy landing page: every push carries Click: {externalURL}/alerts/{id}.
 //
@@ -23,15 +19,16 @@ const LOOKBACK = 500
 export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () => void; canWrite: boolean }) {
   const { id = '' } = useParams()
   const index = useDeviceIndex(onUnauthorized)
-  const { data, loading, error, refresh } = useFetch<{ alerts: Alert[] | null }>(`/api/alerts?limit=${LOOKBACK}`, {
+  // One alert, fetched by id. This used to pull the 500 most recent and search
+  // them, so an alert older than that page reported itself as missing while its
+  // row sat in the table — on exactly the page a 3am push lands on.
+  const { data: alert, loading, error, refresh } = useFetch<Alert>(`/api/alerts/${encodeURIComponent(id)}`, {
     onUnauthorized,
   })
   const toast = useToast()
   const [blocking, setBlocking] = useState(false)
 
-  if (loading && !data) return <Spinner />
-
-  const alert = (data?.alerts ?? []).find((a) => String(a.ID) === id)
+  if (loading && !alert) return <Spinner />
 
   if (!alert) {
     return (
@@ -39,15 +36,15 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
         <Breadcrumb label={`Alert ${id}`} />
         <Card className="px-4 py-6">
           <h1 className="text-lg font-semibold tracking-tight">
-            {error ? 'Could not read the alerts list.' : `Alert ${id} is not in the current list.`}
+            {error ? 'Could not read that alert.' : `Alert ${id} was not found.`}
           </h1>
           <p className="mt-1 text-sm" style={{ color: 'var(--muted)' }}>
             {error ? (
               <>The server said: <span className="font-mono">{error}</span>.</>
             ) : (
               <>
-                Skopos keeps this page to the {LOOKBACK} most recent alerts, and this one is older than that or has
-                been pruned by retention. Nothing here is a claim about what the alert said.
+                No alert with that id is in the database — it was never issued, or it has aged past the
+                retention window. Nothing here is a claim about what the alert said.
               </>
             )}
           </p>
@@ -152,6 +149,8 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
           )}
         </div>
       </Card>
+
+      <ExplainAlert alertID={alert.ID} canWrite={canWrite} />
 
       {alert.Source && !isPrivateAddress(alert.Source) && (
         <Card>

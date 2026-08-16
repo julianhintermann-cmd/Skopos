@@ -598,6 +598,32 @@ func (s *Server) handleValidateConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"valid": true})
 }
 
+// handleAlert returns one alert by id.
+//
+// The detail page previously found its alert by pulling the 500 most recent
+// and searching them, so an alert older than that rendered as "not in the
+// current list" while its row sat in the table — on the page a three-in-the-
+// morning ntfy push lands on.
+func (s *Server) handleAlert(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid alert id")
+		return
+	}
+	alert, err := s.deps.Store.Alert(ctx, id)
+	if errors.Is(err, store.ErrAlertNotFound) {
+		writeError(w, http.StatusNotFound, "no such alert")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, alert)
+}
+
 func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()

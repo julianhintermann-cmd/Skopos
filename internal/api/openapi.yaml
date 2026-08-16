@@ -181,6 +181,20 @@ paths:
         - { name: limit, in: query, schema: { type: integer } }
       responses:
         "200": { description: Alerts }
+  /api/alerts/{id}:
+    get:
+      summary: One alert by id
+      description: >
+        The detail page previously found its alert by pulling the most recent
+        page and searching it, so an alert older than that page reported itself
+        as missing while its row sat in the table — on the page an ntfy push
+        lands on.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The alert }
+        "400": { description: Invalid id }
+        "404": { description: No alert with that id — never issued, or aged past retention }
   /api/alerts/{id}/ack:
     post:
       summary: Acknowledge an alert
@@ -375,6 +389,73 @@ paths:
       responses:
         "200": { description: Reputation info }
         "400": { description: Invalid address }
+  /api/integrations/ai:
+    get:
+      summary: Which AI provider is configured, if any
+      description: >
+        Never returns the API key. The response carries the provider, the
+        model, whether the integration is switched on, and the last four
+        characters of the key — enough to tell two keys apart, never enough to
+        use one. It also lists the supported providers so the settings page can
+        render its dropdown before anything is configured.
+      responses:
+        "200": { description: AI integration status }
+    post:
+      summary: Store an API key for a provider
+      description: >
+        The key is verified against the provider before anything is written, so
+        a rejected key never reaches disk. It is then sealed with AES-GCM and
+        stored; it is never written to config, never logged, and never
+        returned. Storing a key does not switch the integration on — sending
+        household data to a third party is a separate, explicit decision.
+
+
+        Verification is deliberately per-provider. OpenAI and Anthropic
+        authenticate `GET /v1/models`, which runs no inference and costs no
+        tokens. OpenRouter's model list is public and would accept any string,
+        so its key endpoint is used instead.
+      responses:
+        "200": { description: Key verified and stored }
+        "400": { description: Missing provider, missing key, or the provider rejected it }
+        "403": { description: The provider refused the request }
+        "429": { description: The provider is rate limiting this key }
+        "502": { description: The provider could not be reached }
+    patch:
+      summary: Switch the integration on or off, or change the model
+      description: >
+        `enabled: false` means no request is made to the provider at all, not
+        even a test one.
+      responses:
+        "200": { description: Updated status }
+        "400": { description: Nothing to change }
+        "409": { description: No provider is configured }
+    delete:
+      summary: Delete the stored key and settings
+      responses:
+        "200": { description: Deleted }
+  /api/integrations/ai/explain:
+    post:
+      summary: Explain one alert in plain language
+      description: >
+        Sends a redacted description of a single alert to the configured
+        provider and returns the answer, together with the exact payload that
+        was sent so the operator can read what left the machine rather than
+        take a settings page's word for it.
+
+
+        The facts are read from the store by id, not taken from the request
+        body, so what is sent is decided server-side and cannot be widened by
+        crafting a call. Addresses are reduced to a shape; MAC addresses,
+        operator-typed device labels and DHCP hostnames are never included.
+        This is the only endpoint in Skopos that sends captured data off the
+        machine, and it acts only when called — nothing here runs on a
+        schedule.
+      responses:
+        "200": { description: The model's answer and the payload that was sent }
+        "400": { description: Missing alert_id }
+        "404": { description: No such alert }
+        "409": { description: The integration is not configured or not enabled }
+        "502": { description: The provider could not be reached }
   /api/domains:
     get:
       summary: Domains the network contacted, by volume

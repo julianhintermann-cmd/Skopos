@@ -220,6 +220,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/auth/totp", s.requireRead(http.HandlerFunc(s.handleTOTPStatus)))
 	s.mux.Handle("GET /api/integrations/cloudflare", s.requireRead(http.HandlerFunc(s.handleCFStatus)))
 	s.mux.Handle("GET /api/integrations/cloudflare/analytics", s.requireRead(http.HandlerFunc(s.handleCFAnalytics)))
+	s.mux.Handle("GET /api/alerts/{id}", s.requireRead(http.HandlerFunc(s.handleAlert)))
 	s.mux.Handle("GET /api/integrations/ai", s.requireRead(http.HandlerFunc(s.handleAIStatus)))
 	s.mux.Handle("GET /api/export/flows.csv", s.requireRead(http.HandlerFunc(s.handleExportFlows)))
 	s.mux.Handle("GET /api/export/devices.csv", s.requireRead(http.HandlerFunc(s.handleExportDevices)))

@@ -7,6 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0]
+
+Practically every address an operator opened reported "Abuse 70%". The
+figure was a constant. A match against any subscribed blocklist was
+hardcoded to 70, `combine` took the maximum across sources, and the built-in
+lists cover enough address space that almost anything worth looking at is on
+one — so the reading was 70, then 70 again, for unrelated addresses with
+nothing in common.
+
+The rest of that scale was no better. Twenty blocklist.de reports became 70,
+a hundred became 85, five DShield reports became 15. None of these sources
+publishes a risk rating; they publish counts and memberships. When AbuseIPDB
+was dropped in 0.3.0 its genuine abuse-confidence score went with it, the
+field on the card stayed, and the gap was filled by bucketing report counts
+into numbers that look measured and are not.
+
+There is no score now, and there will not be one: no free keyless source
+publishes a defined scale, and the available quantities are not
+commensurable — a DShield record count, a fail2ban report inside a 24-hour
+window and a blocklist membership do not share an axis, and the weights that
+would put them on one would come from Skopos rather than from anybody's
+measurement. Each source's own answer is reported with the counts that source
+published, and the summary is a word.
+
+### Added
+
+- **An AI integration, configured entirely in the web UI.** Pick OpenAI,
+  Anthropic or OpenRouter from a dropdown, then enter a key; it is verified
+  with the provider before anything is written, sealed with the same AES-GCM
+  box that holds the Cloudflare token, and returned by no endpoint. The
+  service interface has no method that yields a key, so the HTTP layer has no
+  way to ask for one. Nothing is configured from YAML, because a secret in a
+  YAML file is a secret in a backup and in a screenshot.
+- **"Explain this alert"** turns one finding into one paragraph. It is a
+  button, never a poll and never a page load: every request traces to a
+  click, which bounds the cost, keeps the exposure legible to the person who
+  caused it, and makes a failure a visible error rather than a silent nightly
+  leak. The answer arrives with the exact payload that was sent, so "what
+  leaves this machine" is something the operator can read rather than a claim
+  in a settings page.
+- **A redaction layer with its own tests**, because this is the single
+  exception to the README's promise that captured data never leaves the NAS.
+  Addresses are reduced to a shape (`192.168.1.x`) — external ones too, since
+  the final octet adds nothing to an explanation and a public address is one
+  join from an identity. Devices are numbered rather than named. MAC
+  addresses, operator-typed labels and DHCP hostnames are never sent: they
+  identify people, and a home network carries the browsing of a household
+  that never agreed to any of this. A guard re-reads the finished payload and
+  refuses to send if a banned shape survived.
+- **A motion layer.** Five durations and three curves, Carbon's productive
+  set — it exists for dense operational screens and pairs with the IBM Plex
+  already shipped. Redefining two Tailwind defaults retuned all 22 existing
+  transition sites without touching a component.
+- **Row hover on all five tables.** There was none anywhere in the app; every
+  hover rule in it was on a button or a link, while the token for this already
+  existed and went unused. On a seven-column flow table, tracking one row
+  across the width is the most common thing an operator does.
+- **`GET/POST/PATCH/DELETE /api/integrations/ai`** and **`POST
+  /api/integrations/ai/explain`**, and a `Store.Alert` lookup by id — the
+  detail pages previously found their alert by scanning the most recent page,
+  so an older one rendered as "not on this page" while the row sat in the
+  table.
+
+### Changed
+
+- **The reputation card reports evidence instead of a number.** One row per
+  source, always present, including the ones that had nothing and the ones
+  that failed — a source missing from the card is indistinguishable from one
+  that answered "nothing here", and telling those apart is the panel's whole
+  job. The verdict is `listed`, `reported`, `no_reports` or `unknown`, and
+  none of them is green: two sensor networks not having heard of an address is
+  a weak statement about a large internet, so it stays labelled "checked, not
+  cleared".
+- **A blocklist match names the list, and says what the list is.** "On a
+  blocklist" leaves the reader unable to weigh the match. Naming it exposed a
+  second problem: FireHOL Level 1 already contains Spamhaus DROP, so an
+  address on DROP rendered as two lists agreeing when it was one fact —
+  contained lists now collapse into their container. And roughly 97% of
+  FireHOL Level 1's address space is unallocated bogons rather than observed
+  attackers, so the card prints that beside the name instead of letting the
+  name imply a confirmed attacker.
+- **Reduced motion now reduces rather than removes.** The blanket rule
+  flattened every duration to 0.01ms, which also flattened the row-arrival
+  tint — the one animation here carrying information rather than polish — so
+  a reduced-motion operator lost the only signal that a row was new.
+  Entrances keep the fade and lose the travel, the row mark survives at
+  interaction speed, looping stops. The rule also gains
+  `animation-iteration-count`, which it was missing: without it an `infinite`
+  animation kept looping at 0.01ms a cycle, a permanent compositor wake-up
+  rather than a stopped animation.
+- **The bottom sheet, the live dot, the button spinner and the row flash**
+  are tokens rather than four hard-coded duration strings in three notations.
+
+### Fixed
+
+- **The input border failed WCAG 1.4.11.** `--sk-line-strong` measured
+  2.14:1 against the field it outlines in light and 2.40:1 in dark; a
+  control's visual boundary needs 3:1. Both now clear it. The no-data hatch
+  was 1.57:1 while carrying meaning — "no reading here" — and is fixed the
+  same way.
+- **The skeleton shimmer was invisible.** It swept between two colours 1.08:1
+  apart on a base 1.16:1 from the card behind it: a 1.4s infinite compositor
+  animation running where nobody could see it. It now has an amplitude.
+- **A source that could not be reached is no longer silent.** Every
+  reputation source leaves a signal behind when it fails, so "could not be
+  reached" and "answered, had nothing" are visibly different. That changed
+  what "every source failed" means, so the check now asks whether any source
+  produced a reading rather than whether any signal exists.
+- **Feed matches on reserved address space** — `0.0.0.0/8`, IETF protocol
+  assignments, benchmarking space and `240.0.0.0/4` — no longer count. A
+  packet from one of those is spoofed or misrouted, which is worth nothing as
+  a reputation signal and plenty as noise.
+
+### Upgrading
+
+- **No migration runs.** The AI key and its settings live in the existing
+  `meta` key-value table, so 0.5.0 starts against a 0.4.0 database unchanged.
+- **API consumers:** `/api/reputation` no longer returns `abuse_score`. It
+  returns `verdict` (`listed` / `reported` / `no_reports` / `unknown`) and a
+  `signals` array in which each entry carries `state`, `detail`, and the
+  `reports` / `targets` / `lists` that source actually published. A client
+  reading `abuse_score` gets nothing; there is no compatibility shim, because
+  emitting the old field would mean continuing to compute the number this
+  release exists to remove.
+- **The AI integration is off until you turn it on**, and storing a key does
+  not turn it on — sending household data to a third party is a separate,
+  explicit decision, taken after the disclosure on the settings card. With it
+  off, no request is made to any provider, including a test one.
+
 ## [0.4.0]
 
 Three hours with the capture down came out of the throughput chart as a clean

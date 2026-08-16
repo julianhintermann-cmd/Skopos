@@ -180,6 +180,34 @@ Read** and **Zone · Zone · Read**. Skopos verifies it, seals it with AES-GCM
 returns it or writes it to disk in the clear. Toggle which zones to monitor, and
 revoke the token from Cloudflare at any time.
 
+### AI explanations (optional, off by default)
+
+Skopos can turn one alert into one paragraph of plain language. Open
+**Settings → AI explanations**, pick **OpenAI**, **Anthropic** or
+**OpenRouter** from the dropdown, and paste an API key. As with Cloudflare
+there is nothing to add to `config.yaml`: the key is verified with the
+provider before anything is written, sealed with AES-GCM, and never returned
+by any endpoint.
+
+**This is the one feature that sends data off your NAS**, which is why it is
+off until you switch it on, and why storing a key does not switch it on.
+Read this before you do:
+
+- A request happens **only when you press "Explain"**. Nothing runs on a
+  schedule, and with the integration off no request is made at all — not even
+  a test one.
+- **What is sent:** the detector name and severity, counts, the country, and
+  addresses reduced to a shape like `192.168.1.x`.
+- **What is never sent:** MAC addresses, device names you typed, DHCP
+  hostnames, your public IP, packet contents, or your configuration. Every
+  answer shows you the exact payload that left, so you can check rather than
+  trust.
+- A home network carries the browsing of everyone in the household, and they
+  have not agreed to this. The provider's terms apply, not Skopos', and
+  nothing can be recalled once it is sent.
+- Answers come from a language model and **can be confidently wrong**. They
+  sit beside the measurements, never in place of them.
+
 ## How it works
 
 ```

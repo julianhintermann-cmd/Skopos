@@ -78,6 +78,9 @@ type Deps struct {
 	Countries *geoip.Blocklist
 	// Reputation answers who an external address belongs to.
 	Reputation *reputation.Service
+	// AI turns one finding into one paragraph, when the operator has
+	// configured a provider and switched it on. Nil disables the endpoints.
+	AI AIService
 	// ReloadMutes re-reads the suppression rules into the policy engine after
 	// an edit. Nil-safe.
 	ReloadMutes func()
@@ -217,6 +220,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/auth/totp", s.requireRead(http.HandlerFunc(s.handleTOTPStatus)))
 	s.mux.Handle("GET /api/integrations/cloudflare", s.requireRead(http.HandlerFunc(s.handleCFStatus)))
 	s.mux.Handle("GET /api/integrations/cloudflare/analytics", s.requireRead(http.HandlerFunc(s.handleCFAnalytics)))
+	s.mux.Handle("GET /api/integrations/ai", s.requireRead(http.HandlerFunc(s.handleAIStatus)))
 	s.mux.Handle("GET /api/export/flows.csv", s.requireRead(http.HandlerFunc(s.handleExportFlows)))
 	s.mux.Handle("GET /api/export/devices.csv", s.requireRead(http.HandlerFunc(s.handleExportDevices)))
 	s.mux.Handle("GET /api/export/alerts.csv", s.requireRead(http.HandlerFunc(s.handleExportAlerts)))
@@ -256,6 +260,12 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /api/integrations/cloudflare", s.requireWrite(http.HandlerFunc(s.handleCFConnect)))
 	s.mux.Handle("DELETE /api/integrations/cloudflare", s.requireWrite(http.HandlerFunc(s.handleCFDisconnect)))
 	s.mux.Handle("POST /api/integrations/cloudflare/zones/{id}", s.requireWrite(http.HandlerFunc(s.handleCFSetZone)))
+	s.mux.Handle("POST /api/integrations/ai", s.requireWrite(http.HandlerFunc(s.handleAIConnect)))
+	s.mux.Handle("DELETE /api/integrations/ai", s.requireWrite(http.HandlerFunc(s.handleAIDisconnect)))
+	s.mux.Handle("PATCH /api/integrations/ai", s.requireWrite(http.HandlerFunc(s.handleAISettings)))
+	// Explaining costs the operator money and sends data off the machine, so
+	// it takes a write credential even though it changes nothing here.
+	s.mux.Handle("POST /api/integrations/ai/explain", s.requireWrite(http.HandlerFunc(s.handleAIExplain)))
 
 	// API docs.
 	s.mux.HandleFunc("GET /api/openapi.yaml", s.handleOpenAPISpec)

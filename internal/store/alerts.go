@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/netip"
 
 	"github.com/julianhintermann-cmd/skopos/internal/model"
@@ -79,6 +80,27 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter) ([]model.Alert, e
 	return out, rows.Err()
 }
 
+// ErrAlertNotFound reports an alert id that is not in the table — either never
+// issued, or aged past the retention window.
+var ErrAlertNotFound = errors.New("alert not found")
+
+// Alert returns one alert by id.
+//
+// The detail pages used to find their alert by scanning the most recent page,
+// which meant an alert older than that page rendered as "not on this page"
+// even though the row was right there. It also means a caller that needs
+// exactly one alert no longer materialises two hundred.
+func (s *Store) Alert(ctx context.Context, id int64) (model.Alert, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, time_ms, detector, severity, source, title, detail, count, ack, ack_ms
+		FROM alerts WHERE id = ?`, id)
+	a, err := scanAlert(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Alert{}, ErrAlertNotFound
+	}
+	return a, err
+}
+
 // AckAlert marks an alert acknowledged.
 func (s *Store) AckAlert(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET ack = 1, ack_ms = ? WHERE id = ?`,
@@ -93,7 +115,11 @@ func (s *Store) CountUnackedAlerts(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func scanAlert(rows *sql.Rows) (model.Alert, error) {
+// rowScanner is satisfied by both *sql.Rows and *sql.Row, so one scan
+// function serves the listing and the single-row lookup.
+type rowScanner interface{ Scan(dest ...any) error }
+
+func scanAlert(rows rowScanner) (model.Alert, error) {
 	var a model.Alert
 	var sourceStr, sev string
 	var ackMs sql.NullInt64

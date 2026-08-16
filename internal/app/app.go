@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/julianhintermann-cmd/skopos/internal/ai"
 	"github.com/julianhintermann-cmd/skopos/internal/api"
 	"github.com/julianhintermann-cmd/skopos/internal/blockwatch"
 	"github.com/julianhintermann-cmd/skopos/internal/capture"
@@ -257,6 +258,16 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("opening secret store: %w", err)
 	}
 	cf := cloudflare.NewManager(st, secretBox, cloudflare.NewClient(), a.clock)
+
+	// --- ai integration ----------------------------------------------------
+	// Same shape as Cloudflare and for the same reason: the key is entered in
+	// the UI and sealed with the same box, never read from the YAML. It shares
+	// that box rather than making a second one — one key, one place.
+	//
+	// Nothing starts here. There is no loop, no refresher and no scheduled
+	// call; the manager only acts when an operator presses a button, which is
+	// what keeps "off" meaning no packets rather than merely no button.
+	aiMgr := ai.NewManager(st, secretBox, ai.NewClient(), a.clock)
 
 	// --- geoip -------------------------------------------------------------
 	// Country lookups run locally against the DB-IP Lite database, refreshed
@@ -504,6 +515,7 @@ func (a *App) Run(ctx context.Context) error {
 	if observers.feeds != nil {
 		rep.Listed = observers.feeds.Listed
 		rep.FeedsLoaded = func() bool { return observers.feeds.Count() > 0 }
+		rep.DescribeList = detect.FeedDescription
 	}
 
 	// Release check: a monitoring tool quietly running a stale image is a
@@ -530,6 +542,7 @@ func (a *App) Run(ctx context.Context) error {
 		Live:                live,
 		LiveFlows:           liveSink,
 		Cloudflare:          cf,
+		AI:                  aiMgr,
 		Speedtest:           runSpeedtest,
 		GeoIP:               geo,
 		Countries:           countries,

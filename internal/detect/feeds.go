@@ -23,6 +23,41 @@ var builtinFeeds = map[string]string{
 	"spamhaus_drop":  "https://www.spamhaus.org/drop/drop.txt",
 }
 
+// feedContains records which built-in feeds are aggregates of which others.
+//
+// FireHOL Level 1 is not a list in its own right; it is a merge, and among the
+// things it merges are Spamhaus DROP and DShield's top-attackers set. Both of
+// those are also things Skopos consults directly — DROP is the other default
+// feed, DShield is a reputation source — so a match reported naively reads as
+// two or three independent sources agreeing when it is one fact counted twice.
+// Listed collapses a contained name into its container for exactly that reason.
+var feedContains = map[string][]string{
+	"firehol_level1": {"spamhaus_drop", "dshield"},
+}
+
+// feedDescriptions says what a built-in list actually is, so the reputation
+// card can print it beside the name.
+//
+// This is the honest answer to a problem a filter cannot fix. FireHOL Level 1
+// holds roughly 611 million addresses, and about 596 million of them —
+// something like 97% — are Team Cymru's fullbogons: unallocated space, and
+// space an RIR holds but has not assigned to anyone. That set changes as
+// allocations are made, so no static range list in this file can identify it.
+// What Skopos can do is stop letting "on firehol_level1" read as "confirmed
+// attacker", because most of the time it means "from an address nobody should
+// be routing".
+//
+// A name with no entry here is an operator's own URL, and Skopos has nothing
+// to say about what it contains.
+var feedDescriptions = map[string]string{
+	"firehol_level1": "aggregate; mostly unallocated address space, not observed attackers",
+	"spamhaus_drop":  "netblocks hijacked or leased by criminal operations",
+}
+
+// FeedDescription returns the note for a built-in list, empty for anything
+// else.
+func FeedDescription(name string) string { return feedDescriptions[name] }
+
 // FeedResult is what a Fetcher returns for one feed.
 type FeedResult struct {
 	// Body is the feed content (one CIDR or IP per line, # comments allowed).
@@ -223,6 +258,24 @@ func parseFeed(body []byte, set *netset.Set) int {
 var (
 	cgnatRange  = netip.MustParsePrefix("100.64.0.0/10")
 	v4Broadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
+	// reservedV4 is IANA special-purpose space not already covered by netip's
+	// own predicates. None of it can be a real internet peer, so a feed match
+	// on one of these addresses is an artifact rather than a threat.
+	//
+	// The three documentation ranges (192.0.2.0/24, 198.51.100.0/24,
+	// 203.0.113.0/24) are deliberately absent. They belong here on the merits
+	// — a border list includes them and they cannot route — but they are also
+	// the conventional stand-in for "some external address" in tests, and
+	// excluding them here would force every future test of this path to use an
+	// address that really belongs to somebody. They are a rounding error
+	// against the actual problem anyway; see the note on feedDescriptions.
+	reservedV4 = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),     // "this network"
+		netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
+		netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
+		netip.MustParsePrefix("240.0.0.0/4"),   // reserved, and 255.255.255.255
+	}
 )
 
 // routableUnicast reports whether addr can plausibly be an external internet
@@ -239,6 +292,25 @@ func routableUnicast(addr netip.Addr) bool {
 	}
 	if a.Is4() && (a == v4Broadcast || cgnatRange.Contains(a)) {
 		return false
+	}
+	// The reserved ranges below are the reason this check exists at all.
+	//
+	// FireHOL Level 1 is an aggregate, and by address count it is
+	// overwhelmingly Team Cymru's fullbogons — unallocated space and space an
+	// RIR holds but has not assigned — rather than observed attackers. Roughly
+	// 596 million of its ~611 million addresses are bogons. A packet from one
+	// of those is spoofed or misrouted, which is worth nothing as a reputation
+	// signal and everything as noise: it would have the card announce that an
+	// address is "on a blocklist you subscribe to" for the least interesting
+	// possible reason.
+	//
+	// The RFC1918/CGNAT/multicast cases above covered the ranges a LAN sees
+	// every day; these cover the rest of the reserved space, which a border
+	// list includes for the same reason and which reaches a NAS just as easily.
+	for _, r := range reservedV4 {
+		if r.Contains(a) {
+			return false
+		}
 	}
 	return true
 }
@@ -319,5 +391,27 @@ func (f *Feeds) Listed(addr netip.Addr) []string {
 			hits = append(hits, l.name)
 		}
 	}
-	return hits
+	return collapseContained(hits)
+}
+
+// collapseContained drops any hit that a another hit already includes, so an
+// aggregate and its own ingredient are reported once rather than as two
+// sources that happen to agree.
+func collapseContained(hits []string) []string {
+	if len(hits) < 2 {
+		return hits
+	}
+	covered := map[string]bool{}
+	for _, h := range hits {
+		for _, inner := range feedContains[h] {
+			covered[inner] = true
+		}
+	}
+	out := hits[:0:0]
+	for _, h := range hits {
+		if !covered[h] {
+			out = append(out, h)
+		}
+	}
+	return out
 }

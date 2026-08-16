@@ -160,6 +160,14 @@ type Service struct {
 	// compare against — and the card would state "not on your blocklists" as
 	// a fact on the strength of an empty set.
 	FeedsLoaded func() bool
+	// DescribeList says what a list is, for the built-ins Skopos ships. The
+	// lists differ enormously in what a match means — Spamhaus DROP is
+	// hand-curated criminal infrastructure, while FireHOL Level 1 is an
+	// aggregate whose address space is overwhelmingly unallocated bogons — and
+	// a card that prints only the name invites the reader to treat them alike.
+	// Empty for a list Skopos knows nothing about, which is the honest answer
+	// for an operator's own URL.
+	DescribeList func(string) string
 
 	clock func() time.Time
 
@@ -233,6 +241,23 @@ func (s *Service) Lookup(ctx context.Context, addr netip.Addr) (Info, error) {
 	return info, nil
 }
 
+// describeHits renders the matching list names, each with its note where
+// Skopos has one: "firehol_level1 (aggregate; mostly unallocated address
+// space, not observed attackers)".
+func (s *Service) describeHits(hits []string) string {
+	parts := make([]string, 0, len(hits))
+	for _, h := range hits {
+		if s.DescribeList != nil {
+			if note := s.DescribeList(h); note != "" {
+				parts = append(parts, h+" ("+note+")")
+				continue
+			}
+		}
+		parts = append(parts, h)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // answered reports whether any source produced a reading, as opposed to
 // failing or having nothing to compare against.
 func answered(info *Info) bool {
@@ -277,7 +302,7 @@ func (s *Service) local(addr netip.Addr, info *Info) {
 			Source: "blocklists",
 			State:  StateListed,
 			Lists:  hits,
-			Detail: "on " + strings.Join(hits, ", "),
+			Detail: "on " + s.describeHits(hits),
 		})
 		return
 	}

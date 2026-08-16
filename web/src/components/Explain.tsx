@@ -4,13 +4,17 @@ import { api, type AIStatus } from '../lib/api'
 import { useFetch } from '../lib/useFetch'
 import { Button, Card, CardHeader } from './ui'
 
-// "Explain this alert" — the one place the AI integration is used.
+// "Explain this" — the one place the AI integration is used.
 //
 // It is a button, never a poll and never a page load, and that is the whole
 // design. A request only ever happens because somebody pressed this, which
 // bounds what it can cost, keeps the privacy exposure legible to the person
 // who caused it, and makes a failure a visible error rather than a silent
 // nightly leak.
+//
+// It mounts on both detail pages, because there are two. The alerts list opens
+// episodes and an ntfy push opens a single alert; shipped on only one of them,
+// the feature was invisible to anyone arriving the ordinary way.
 //
 // The card renders nothing at all until a provider is configured. An operator
 // who has not opted in should not be shown a button whose only function is to
@@ -30,7 +34,11 @@ interface ExplainResponse {
   sent: unknown
 }
 
-export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite: boolean }) {
+// Subject is a union rather than two optional numbers so that "neither" and
+// "both" are not states a caller can reach.
+export type ExplainSubject = { alert: number } | { incident: number }
+
+export function Explain({ subject, canWrite }: { subject: ExplainSubject; canWrite: boolean }) {
   const ai = useFetch<AIStatus>('/api/integrations/ai')
   const [answer, setAnswer] = useState<ExplainResponse | null>(null)
   const [busy, setBusy] = useState(false)
@@ -61,11 +69,14 @@ export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite:
     )
   }
 
+  const noun = 'alert' in subject ? 'alert' : 'episode'
+  const body = 'alert' in subject ? { alert_id: subject.alert } : { incident_id: subject.incident }
+
   async function explain() {
     setBusy(true)
     setErr('')
     try {
-      setAnswer(await api.post<ExplainResponse>('/api/integrations/ai/explain', { alert_id: alertID }))
+      setAnswer(await api.post<ExplainResponse>('/api/integrations/ai/explain', body))
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -83,10 +94,10 @@ export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite:
         {!answer && (
           <div className="flex flex-wrap items-center gap-3">
             <Button onClick={explain} loading={busy} disabled={!canWrite}>
-              Explain this alert
+              Explain this {noun}
             </Button>
             <span className="text-xs" style={{ color: 'var(--muted)' }}>
-              Sends a redacted description of this one alert to {label}.
+              Sends a redacted description of this one {noun} to {label}.
             </span>
           </div>
         )}

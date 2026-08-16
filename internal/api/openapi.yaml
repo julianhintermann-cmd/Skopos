@@ -435,12 +435,20 @@ paths:
         "200": { description: Deleted }
   /api/integrations/ai/explain:
     post:
-      summary: Explain one alert in plain language
+      summary: Explain one alert or one episode in plain language
       description: >
-        Sends a redacted description of a single alert to the configured
-        provider and returns the answer, together with the exact payload that
-        was sent so the operator can read what left the machine rather than
-        take a settings page's word for it.
+        Sends a redacted description of a single alert or a single episode to
+        the configured provider and returns the answer, together with the exact
+        payload that was sent so the operator can read what left the machine
+        rather than take a settings page's word for it.
+
+
+        Pass exactly one of `alert_id` or `incident_id`. An episode carries the
+        shape of its repetition — how many events and over how long — because
+        that is what an episode is and explaining only its newest alert would
+        drop it. The span is a duration in whole minutes rather than two
+        timestamps: how long something went on is what the explanation turns
+        on, while when it happened describes the household's hours.
 
 
         The facts are read from the store by id, not taken from the request
@@ -452,8 +460,8 @@ paths:
         schedule.
       responses:
         "200": { description: The model's answer and the payload that was sent }
-        "400": { description: Missing alert_id }
-        "404": { description: No such alert }
+        "400": { description: Neither alert_id nor incident_id was given, or both were }
+        "404": { description: No such alert or episode }
         "409": { description: The integration is not configured or not enabled }
         "502": { description: The provider could not be reached }
   /api/domains:

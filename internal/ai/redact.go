@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Everything that leaves this machine passes through this file.
@@ -35,6 +36,12 @@ const (
 	// carry. Ten is enough to characterise a device and far short of a
 	// browsing history.
 	MaxDestinations = 10
+
+	// MaxSamples bounds how many of an episode's own detail lines go with it.
+	// An episode is repetition — fifteen events are usually fifteen copies of
+	// one sentence — so the distinct ones are the signal and the rest is
+	// padding the operator pays for by the token.
+	MaxSamples = 3
 )
 
 // macRE matches a MAC address in either usual separator. Used by Clean as a
@@ -99,6 +106,30 @@ type AlertFacts struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// IncidentFacts is the sanitised description of one episode.
+//
+// An episode is the same safe set as an alert plus the shape of the
+// repetition, which is the whole reason episodes exist: fifteen events over
+// five hours and one event at 03:00 are different findings and deserve
+// different answers. Explaining only the newest alert of an episode would
+// throw away the part the operator is actually looking at.
+type IncidentFacts struct {
+	Detectors []string `json:"detectors"`
+	Severity  string   `json:"severity"`
+	// Source is a shape from Addr, never a full address.
+	Source     string `json:"source"`
+	Country    string `json:"country,omitempty"`
+	EventCount int64  `json:"event_count"`
+	// SpanMinutes is first-to-last, in whole minutes. A duration and not two
+	// timestamps on purpose: how long something went on is what the
+	// explanation turns on, while when it happened describes the household's
+	// waking hours and is nobody else's business.
+	SpanMinutes int64 `json:"span_minutes"`
+	// Samples are a few of the episode's own detail lines, deduplicated and
+	// scrubbed.
+	Samples []string `json:"samples,omitempty"`
+}
+
 // DeviceFacts is the sanitised description of one device. It carries the
 // manufacturer — which is a property of the hardware — and never the label the
 // operator typed or the hostname DHCP reported, both of which routinely name a
@@ -123,6 +154,37 @@ func ScrubAlert(detector, severity, detail, country string, src netip.Addr, port
 		Count:    count,
 		Detail:   Text(detail),
 	}
+}
+
+// ScrubIncident builds the sanitised facts for one episode. Details are
+// deduplicated before they are capped, so three samples means three different
+// sentences rather than the same one three times.
+func ScrubIncident(detectors []string, severity, country string, src netip.Addr,
+	events int64, span time.Duration, details []string,
+) IncidentFacts {
+	out := IncidentFacts{
+		Detectors:  append([]string(nil), detectors...),
+		Severity:   severity,
+		Source:     Addr(src),
+		Country:    country,
+		EventCount: events,
+	}
+	if span > 0 {
+		out.SpanMinutes = int64(span.Round(time.Minute) / time.Minute)
+	}
+	seen := make(map[string]bool, len(details))
+	for _, d := range details {
+		if len(out.Samples) == MaxSamples {
+			break
+		}
+		d = Text(strings.TrimSpace(d))
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out.Samples = append(out.Samples, d)
+	}
+	return out
 }
 
 // ScrubDevice builds the sanitised facts for one device. The label and hostname

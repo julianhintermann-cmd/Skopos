@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -170,11 +171,15 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// handleAIExplain turns one alert into one paragraph.
+// handleAIExplain turns one alert, or one episode, into one paragraph.
 //
-// It reads the alert from the store rather than taking the facts from the
+// It reads the subject from the store rather than taking the facts from the
 // client, so what is sent upstream is decided here and cannot be widened by
 // crafting a request.
+//
+// Both subjects exist because both pages exist. The alerts list opens episodes
+// and an ntfy push opens a single alert, and a feature that only worked on one
+// of them would be missing from wherever the operator happened to be.
 func (s *Server) handleAIExplain(w http.ResponseWriter, r *http.Request) {
 	if s.aiUnavailable(w) {
 		return
@@ -183,32 +188,42 @@ func (s *Server) handleAIExplain(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var req struct {
-		AlertID int64 `json:"alert_id"`
+		AlertID    int64 `json:"alert_id"`
+		IncidentID int64 `json:"incident_id"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.AlertID <= 0 {
-		writeError(w, http.StatusBadRequest, "alert_id is required")
+	switch {
+	case req.AlertID > 0 && req.IncidentID > 0:
+		writeError(w, http.StatusBadRequest, "pass alert_id or incident_id, not both")
+		return
+	case req.AlertID <= 0 && req.IncidentID <= 0:
+		writeError(w, http.StatusBadRequest, "alert_id or incident_id is required")
 		return
 	}
 
-	alert, err := s.deps.Store.Alert(ctx, req.AlertID)
+	var (
+		instruction string
+		facts       any
+		target      string
+		subject     string
+		err         error
+	)
+	if req.IncidentID > 0 {
+		instruction, facts, target, err = s.incidentFacts(ctx, req.IncidentID)
+		subject = "incident " + strconv.FormatInt(req.IncidentID, 10)
+	} else {
+		instruction, facts, target, err = s.alertFacts(ctx, req.AlertID)
+		subject = "alert " + strconv.FormatInt(req.AlertID, 10)
+	}
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no such alert")
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	country := ""
-	if s.deps.GeoIP != nil {
-		if c, ok := s.deps.GeoIP.Lookup(alert.Source); ok {
-			country = c
-		}
-	}
-	facts := ai.ScrubAlert(alert.Detector, string(alert.Severity), alert.Detail,
-		country, alert.Source, 0, alert.Count)
-	prompt, err := factsPrompt("Explain this alert.", facts)
+	prompt, err := factsPrompt(instruction, facts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -221,13 +236,55 @@ func (s *Server) handleAIExplain(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := identityFrom(r)
 	_ = s.deps.Store.Audit(ctx, model.AuditEntry{
-		Actor: id.name, Action: "ai_explain", Target: alert.Detector,
-		Detail: "alert " + strconv.FormatInt(req.AlertID, 10),
+		Actor: id.name, Action: "ai_explain", Target: target, Detail: subject,
 	})
 	// The redacted payload goes back with the answer. The operator can see
 	// exactly what left the machine, rather than being asked to trust a
 	// sentence in the settings page saying what would leave it.
 	writeJSON(w, http.StatusOK, map[string]any{"answer": answer, "sent": facts})
+}
+
+// alertFacts loads one alert and reduces it to the safe set.
+func (s *Server) alertFacts(ctx context.Context, id int64) (string, any, string, error) {
+	a, err := s.deps.Store.Alert(ctx, id)
+	if err != nil {
+		return "", nil, "", errors.New("no such alert")
+	}
+	return "Explain this alert.", ai.ScrubAlert(a.Detector, string(a.Severity), a.Detail,
+		s.country(a.Source), a.Source, 0, a.Count), a.Detector, nil
+}
+
+// incidentFacts loads one episode and reduces it to the safe set.
+func (s *Server) incidentFacts(ctx context.Context, id int64) (string, any, string, error) {
+	inc, err := s.deps.Store.IncidentByID(ctx, id)
+	if err != nil {
+		return "", nil, "", errors.New("no such incident")
+	}
+	src, _ := netip.ParseAddr(inc.Source)
+	details := make([]string, 0, len(inc.Alerts))
+	for _, a := range inc.Alerts {
+		details = append(details, a.Detail)
+	}
+	target := ""
+	if len(inc.Detectors) > 0 {
+		target = inc.Detectors[0]
+	}
+	facts := ai.ScrubIncident(inc.Detectors, inc.Severity, s.country(src), src,
+		inc.AlertCount, inc.Last.Sub(inc.First), details)
+	return "Explain this episode — the same source firing repeatedly.", facts, target, nil
+}
+
+// country resolves an address to an ISO code, or to "" when GeoIP is absent or
+// has no answer. An empty string is omitted from the payload rather than being
+// sent as a guess.
+func (s *Server) country(a netip.Addr) string {
+	if s.deps.GeoIP == nil {
+		return ""
+	}
+	if c, ok := s.deps.GeoIP.Lookup(a); ok {
+		return c
+	}
+	return ""
 }
 
 // aiStatusCode maps a provider failure onto an HTTP status. The distinctions

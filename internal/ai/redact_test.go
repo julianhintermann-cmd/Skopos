@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The redaction tests are the ones that matter most in this package. Skopos
@@ -158,5 +159,72 @@ func TestScrubbedAlertPassesTheGate(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "203.0.113.x") {
 		t.Errorf("payload lost the address shape entirely: %s", body)
+	}
+}
+
+// Same contract for an episode, plus the two things an episode adds: the span
+// is a duration and never a timestamp, and repeated detail lines collapse. A
+// blocklist episode is fifteen copies of one sentence, and paying a provider
+// by the token to read the same sentence fifteen times is waste on top of
+// exposure.
+func TestScrubbedIncidentPassesTheGate(t *testing.T) {
+	inc := ScrubIncident(
+		[]string{"feeds"}, "critical", "CA",
+		netip.MustParseAddr("203.0.113.199"), 15, 5*time.Hour+2*time.Minute,
+		[]string{
+			"matched a configured IP blocklist feed",
+			"matched a configured IP blocklist feed",
+			"seen from 203.0.113.199 (aa:bb:cc:dd:ee:ff)",
+			"matched a configured IP blocklist feed",
+			"a fourth distinct line that must be dropped by the cap",
+		},
+	)
+	body, err := json.Marshal(inc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Clean(string(body)); err != nil {
+		t.Fatalf("a scrubbed episode must pass the gate: %v\npayload: %s", err, body)
+	}
+	if strings.Contains(string(body), "203.0.113.199") {
+		t.Errorf("payload carries the full source address: %s", body)
+	}
+	if strings.Contains(string(body), "aa:bb:cc:dd:ee:ff") {
+		t.Errorf("payload carries a MAC: %s", body)
+	}
+	if inc.SpanMinutes != 302 {
+		t.Errorf("span = %d minutes, want 302", inc.SpanMinutes)
+	}
+	if len(inc.Samples) != MaxSamples {
+		t.Fatalf("samples = %d, want %d: %q", len(inc.Samples), MaxSamples, inc.Samples)
+	}
+	seen := map[string]bool{}
+	for _, s := range inc.Samples {
+		if seen[s] {
+			t.Errorf("duplicate sample survived: %q", s)
+		}
+		seen[s] = true
+	}
+}
+
+// An episode with no alerts attached — every one pruned by retention — still
+// has to produce a sendable payload rather than a nil-deref or an empty prompt.
+func TestScrubIncidentWithoutSamples(t *testing.T) {
+	inc := ScrubIncident(nil, "info", "", netip.Addr{}, 1, 0, nil)
+	if inc.Samples != nil {
+		t.Errorf("samples = %q, want none", inc.Samples)
+	}
+	if inc.SpanMinutes != 0 {
+		t.Errorf("span = %d, want 0", inc.SpanMinutes)
+	}
+	if inc.Source != "an address" {
+		t.Errorf("source = %q, want the invalid-address placeholder", inc.Source)
+	}
+	body, err := json.Marshal(inc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Clean(string(body)); err != nil {
+		t.Fatalf("an empty episode must still pass the gate: %v", err)
 	}
 }

@@ -4,7 +4,7 @@ import { useFetch } from '../lib/useFetch'
 import { api, type Alert } from '../lib/api'
 import { Card, CardHeader, Spinner, SeverityBadge, Button, Pill, useToast } from '../components/ui'
 import { BlockDialog } from '../components/BlockDialog'
-import { ExplainAlert } from '../components/ExplainAlert'
+import { Explain } from '../components/Explain'
 import { Reputation } from '../components/Reputation'
 import { EntityLink } from '../components/entity'
 import { humanError } from '../components/humanError'
@@ -150,7 +150,7 @@ export function AlertDetail({ onUnauthorized, canWrite }: { onUnauthorized: () =
         </div>
       </Card>
 
-      <ExplainAlert alertID={alert.ID} canWrite={canWrite} />
+      <Explain subject={{ alert: alert.ID }} canWrite={canWrite} />
 
       {alert.Source && !isPrivateAddress(alert.Source) && (
         <Card>

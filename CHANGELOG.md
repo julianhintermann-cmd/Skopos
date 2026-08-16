@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2]
+
+### Fixed
+
+- **"Explain this" was on a page the alerts list never opens.** There are two
+  detail routes: `/alerts/:id` for a single alert, which is where an ntfy push
+  lands, and `/incidents/:id` for an episode, which is where every link in the
+  alerts list goes. The card shipped on the first one only, so an operator with
+  a verified key and the switch on saw nothing — the feature was reachable
+  solely by opening the "Every alert" tab, which is not the default. It now
+  mounts on both.
+
+### Added
+
+- **Episodes can be explained as episodes.** `POST
+  /api/integrations/ai/explain` now takes `incident_id` as well as `alert_id`.
+  An episode's payload carries the shape of its repetition — how many events,
+  and over how long — because that is the thing an episode has that a single
+  alert does not, and explaining only its newest alert would throw away what
+  the operator is looking at. The span goes as a duration in whole minutes
+  rather than as two timestamps: how long something went on is what the answer
+  turns on, while when it happened describes the household's waking hours.
+  Repeated detail lines are deduplicated before a cap of three is applied, so
+  a fifteen-event blocklist episode does not pay a provider by the token to
+  read one sentence fifteen times. Both new paths are covered by redaction
+  tests that assert on the finished payload.
+
 ## [0.5.1]
 
 ### Fixed
@@ -1016,7 +1043,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.2
 [0.5.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.1
 [0.5.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.0
 [0.4.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.4.0

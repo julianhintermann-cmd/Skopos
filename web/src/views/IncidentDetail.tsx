@@ -6,6 +6,7 @@ import { Card, CardHeader, Spinner, EmptyState, SeverityBadge, Button, Pill, use
 import { BlockDialog } from '../components/BlockDialog'
 import { MuteDialog } from '../components/MuteDialog'
 import { Reputation } from '../components/Reputation'
+import { Explain } from '../components/Explain'
 import { EntityLink } from '../components/entity'
 import { humanError } from '../components/humanError'
 import { useDeviceIndex, isPrivateAddress } from '../lib/links'
@@ -151,6 +152,8 @@ export function IncidentDetail({ onUnauthorized, canWrite }: { onUnauthorized: (
           </div>
         )}
       </Card>
+
+      <Explain subject={{ incident: inc.id }} canWrite={canWrite} />
 
       {inc.source && !isPrivateAddress(inc.source) && (
         <Card>

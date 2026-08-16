@@ -50,7 +50,17 @@
 
   /* lines */
   --sk-line:          #d5e0dc;   /* internal dividers — deliberately quiet */
-  --sk-line-strong:   #93a9a1;   /* input borders, structural edges */
+  /* An input's border IS the control's visual boundary, so WCAG 1.4.11 wants
+     3:1 against what sits behind it. #93a9a1 measured 2.14:1 on --sk-raised
+     and 2.49:1 on --sk-surface: a real failure on every text field in the app,
+     not a judgement call. */
+  --sk-line-strong:   #7b8d86;   /* input borders, structural edges */
+  /* Deliberately the same hex as --sk-accent, which is worth writing down
+     because it looks like a mistake. `:focus-visible` sets outline-offset:2px,
+     so the ring is drawn on the surface *behind* the control, never on an
+     accent fill — against that surface it measures 6.38:1. Darkening it to
+     also beat the accent would cost contrast where the ring actually lands.
+     The constraint this creates: never remove the outline-offset. */
   --sk-line-focus:    #0b6b61;
 
   /* accent */
@@ -77,7 +87,9 @@
   --sk-series-in:      #6b3fa0;
   --sk-series-3:       #8a5a0a;
   --sk-series-unknown: #93a9a1;
-  --sk-nodata-stripe:  #c3d2cc;
+  /* The hatch carries meaning — "no reading here" — so 1.4.11 applies to it.
+     #c3d2cc was 1.57:1 against the surface it is drawn on. */
+  --sk-nodata-stripe:  #8c9793;
 
   /* chrome */
   --sk-grid:          #e2ebe8;
@@ -102,7 +114,7 @@
   --sk-fg-muted:      #93aba3;
 
   --sk-line:          #26332f;
-  --sk-line-strong:   #4a5f57;
+  --sk-line-strong:   #5b6e67;   /* 2.40:1 -> 3.03:1 on --sk-raised */
   --sk-line-focus:    #4cbcae;
 
   --sk-accent:        #3fb3a4;
@@ -125,7 +137,7 @@
   --sk-series-in:      #a888f0;
   --sk-series-3:       #dcae52;
   --sk-series-unknown: #4a5f57;
-  --sk-nodata-stripe:  #33443e;
+  --sk-nodata-stripe:  #596762;   /* 1.73:1 -> 3.01:1 */
 
   --sk-grid:          #1d2a26;
   --sk-scrim:         rgb(0 0 0 / 0.62);
@@ -162,6 +174,48 @@
   --warn: var(--sk-warn);            --warn-tint: var(--sk-warn-quiet);
   --crit: var(--sk-crit);            --crit-tint: var(--sk-crit-quiet);
   --chart-grid: var(--sk-grid);      --shadow-sm: var(--sk-elev-card);
+}
+
+/* ---------------------------------------------------------------------------
+   Motion. Five durations, three curves, and nothing may invent a sixth.
+
+   0.4.0's token layer covered colour, type, radius and elevation and left
+   motion out entirely, so what existed instead was five unrelated one-offs:
+   0.18s, 0.22s, 0.7s, 1.2s and 1.4s, in three easings, expressed three
+   different ways (an inline style string, an arbitrary utility, a hand-written
+   class). None of them was reachable as a token, so none could be varied for
+   reduced motion.
+
+   The values are Carbon's productive set. That set exists for dense
+   operational screens, which is what this is, and it pairs with IBM Plex,
+   which this already ships. Carbon's "expressive" curves are the marketing
+   register and have no business on a page someone reads at 3am.
+
+   Motion is theme-invariant: a transition does not get slower in the dark.
+   --------------------------------------------------------------------------- */
+:root {
+  /* Press feedback. Under ~100ms reads as instantaneous, which is the point —
+     a control must never appear to lag the finger. */
+  --sk-dur-instant: 70ms;
+  /* The default: every colour or opacity change that is not an entrance. */
+  --sk-dur-fast: 140ms;
+  /* Overlay entrances, content crossfades, toasts. */
+  --sk-dur-base: 220ms;
+  /* The bottom sheet, and only the bottom sheet: it crosses the height of a
+     phone, and 220ms over that distance reads as a snap rather than a slide. */
+  --sk-dur-slow: 360ms;
+  /* Informational decay — "this row arrived while you were looking away".
+     Deliberately outside the interaction range: it is not feedback on
+     something the operator did, it is a mark fading on its own schedule, and
+     it has to survive a glance away and back. */
+  --sk-dur-flash: 1200ms;
+
+  /* `standard` for anything already on screen; `enter` starts at full speed so
+     nothing appears to wind up; `exit` accelerates away so the screen frees
+     sooner than the animation ends. */
+  --sk-ease-standard: cubic-bezier(0.2, 0, 0.38, 0.9);
+  --sk-ease-enter:    cubic-bezier(0, 0, 0.38, 0.9);
+  --sk-ease-exit:     cubic-bezier(0.2, 0, 1, 0.9);
 }
 
 /* ===========================================================================
@@ -230,6 +284,29 @@
   /* ---------- elevation ---------- */
   --shadow-card:    var(--sk-elev-card);
   --shadow-overlay: var(--sk-elev-overlay);
+
+  /* ---------- motion ----------
+     These two are the lever, not a convenience. Tailwind compiles every bare
+     `transition-colors` to `var(--tw-duration, var(--default-transition-duration))`,
+     so redefining them retunes all 22 existing call sites from the generic
+     150ms/ease to Carbon productive — with no .tsx edited, exactly the way
+     redefining --text-sm retuned 166 sites in 0.4.0. */
+  --default-transition-duration:        var(--sk-dur-fast);
+  --default-transition-timing-function: var(--sk-ease-standard);
+
+  --ease-standard: var(--sk-ease-standard);
+  --ease-enter:    var(--sk-ease-enter);
+  --ease-exit:     var(--sk-ease-exit);
+
+  /* Named animations. Tailwind hoists the referenced @keyframes into the
+     output, so a call site writes only `animate-flash`. There is no
+     `--duration-*` namespace in v4 — durations ride the defaults above, or
+     `duration-[var(--sk-dur-base)]` where a site needs a different one. */
+  --animate-flash:      sk-flash      var(--sk-dur-flash) var(--sk-ease-exit)     1;
+  --animate-appear:     sk-appear     var(--sk-dur-base)  var(--sk-ease-enter)    1;
+  --animate-rise:       sk-rise       var(--sk-dur-slow)  var(--sk-ease-enter)    1;
+  --animate-pulse-live: sk-pulse-live 2s                  var(--sk-ease-standard) infinite;
+  --animate-spin-sm:    sk-spin       700ms               linear                  infinite;
 
   /* ---------- surfaces ---------- */
   --color-canvas:  var(--sk-canvas);
@@ -324,9 +401,52 @@
   outline-offset: 2px;
 }
 
+/* Reduce, not remove.
+   The previous rule flattened every duration to 0.01ms, which also flattened
+   the row-arrival tint — the one animation here that carries information
+   rather than polish. A reduced-motion operator lost the only signal that a
+   row was new, which is a loss of information dressed up as a comfort setting.
+   Displacement and looping are what must go; opacity and colour changes are
+   safe and should be shortened instead.
+
+   The safety net also gains `animation-iteration-count`, which the canonical
+   snippet has and this one was missing: without it an `infinite` animation
+   kept looping at 0.01ms a cycle — a permanent compositor wake-up rather than
+   a stopped animation. */
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Entrances keep the fade and lose the travel. */
+  .animate-appear,
+  .animate-rise { animation: sk-fade var(--sk-dur-fast) linear 1 !important; }
+
+  /* The row-arrival mark survives, at interaction speed. */
+  .animate-flash { animation: sk-flash 240ms linear 1 !important; }
+
+  /* The live dot stops moving. The word "Live" sits beside it and carries the
+     state, which is also why stopping it satisfies WCAG 2.2.2 without needing
+     a pause control. */
+  .animate-pulse-live { animation: none !important; }
+
+  .sk-skeleton { animation: none !important; background-image: none !important; }
 }
+
+/* Row hover.
+   The app shipped with no row hover on any of its five tables — every hover
+   rule in it was on a button or a link. On a seven-column flow table, tracking
+   one row across the width is the most common thing an operator does and the
+   easiest to get wrong, and --sk-hover already existed and went unused at row
+   level. Colour only: a transform or a size change here would move the row out
+   from under the pointer that triggered it. */
+.sk-rows tbody tr {
+  transition: background-color var(--sk-dur-fast) var(--sk-ease-standard);
+}
+.sk-rows tbody tr:hover { background-color: var(--sk-hover); }
 
 /* uPlot theming hooks. */
 .uplot { font-family: var(--font-mono); }
@@ -344,14 +464,51 @@
   );
 }
 
-/* Slow pulse for the "live" indicator. Respects reduced-motion via the rule
-   above, which flattens every animation-duration. */
-@keyframes skopos-pulse {
+/* The named motion patterns. Six, and a seventh needs a reason in writing.
+
+   One rule governs all of them: transform and opacity only. ThroughputChart's
+   ResizeObserver calls uPlot.setSize() on every border-box change, so a width
+   or padding animation on any ancestor of a chart reallocates the canvas
+   backing store once per frame and re-publishes the shared drawing frame to
+   every EventStrip and Sparkline subscribed to it. */
+
+/* "This connection is live." Opacity only, on an 8px dot. The floor is raised
+   from 0.35 to 0.45 so the dot never approaches invisibility mid-cycle. */
+@keyframes sk-pulse-live {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  50%      { opacity: 0.45; }
 }
 
-/* Mobile sheet + backdrop entrances. */
+/* An overlay arriving. Four pixels of travel, not twenty-eight: the panel is
+   already where it belongs, and the movement is a hint of arrival rather than
+   a journey across the screen. */
+@keyframes sk-appear {
+  from { opacity: 0; transform: translateY(4px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The phone bottom sheet — the one element that genuinely travels. */
+@keyframes sk-rise {
+  from { transform: translateY(100%); }
+  to   { transform: none; }
+}
+
+/* "This changed while you were reading something else." A background tint that
+   decays. This is the only correct way to mark a value that changed on a poll:
+   it never touches the glyphs, so the number stays legible at every frame, and
+   it costs no layout. An animated counter does the opposite of both. */
+@keyframes sk-flash {
+  from { background-color: var(--sk-accent-quiet); }
+  to   { background-color: transparent; }
+}
+
+@keyframes sk-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Kept under the old names while the remaining inline call sites migrate. */
+@keyframes skopos-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 @keyframes skopos-slide-up {
   from { transform: translateY(28px); opacity: 0; }
   to { transform: none; opacity: 1; }
@@ -368,17 +525,26 @@
   from { background-position: -200% 0; }
   to { background-position: 200% 0; }
 }
+/* The sweep was running where nobody could see it: --sk-raised against
+   --sk-surface is 1.16:1, and the raised-to-sunken sweep across it was 1.08:1.
+   That is a 1.4s infinite compositor animation with no visible effect — pure
+   cost. Basing the placeholder on `sunken` gives it a body that reads against
+   the card, and sweeping `raised` through it gives the sweep an amplitude. */
 .sk-skeleton {
+  background-color: var(--sk-sunken);
   background-image: linear-gradient(
     90deg,
-    var(--sk-raised) 25%,
-    var(--sk-sunken) 37%,
-    var(--sk-raised) 63%
+    transparent 20%,
+    var(--sk-raised) 50%,
+    transparent 80%
   );
   background-size: 200% 100%;
-  animation: skopos-shimmer 1.4s ease-in-out infinite;
+  animation: skopos-shimmer 1.4s var(--sk-ease-standard) infinite;
 }
 
 @keyframes skopos-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes sk-spin {
   to { transform: rotate(360deg); }
 }

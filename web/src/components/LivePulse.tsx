@@ -113,10 +113,9 @@ export function LiveDot({ connected }: { connected: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: connected ? 'var(--good)' : 'var(--muted)' }}>
       <span
-        className="inline-block h-2 w-2 rounded-full"
+        className={'inline-block h-2 w-2 rounded-full' + (connected ? ' animate-pulse-live' : '')}
         style={{
           background: connected ? 'var(--good)' : 'var(--muted)',
-          animation: connected ? 'skopos-pulse 2s ease-in-out infinite' : undefined,
         }}
       />
       {connected ? 'Live' : 'Reconnecting'}

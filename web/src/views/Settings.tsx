@@ -5,6 +5,7 @@ import { useFetch } from '../lib/useFetch'
 import { api, type CFStatus, type Health } from '../lib/api'
 import { Card, CardHeader, Button, Pill, TextInput, KeyValue, useToast } from '../components/ui'
 import { useTheme } from '../lib/theme'
+import { AISettings } from '../components/AISettings'
 import { RuntimeSettings } from '../components/RuntimeSettings'
 import { ConfigCard } from '../components/ConfigCard'
 import { Glossary } from '../components/settingsHelp'
@@ -61,6 +62,8 @@ export function Settings({ onUnauthorized, canWrite }: { onUnauthorized: () => v
         </div>
         <ReputationSources />
       </Card>
+
+      <AISettings canWrite={canWrite} />
 
       <TwoFactor onUnauthorized={onUnauthorized} canWrite={canWrite} />
 

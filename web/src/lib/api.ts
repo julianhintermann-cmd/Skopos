@@ -84,6 +84,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
   postText: async (path: string, text: string) => {
     const resp = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
@@ -461,6 +462,33 @@ export interface ReputationInfo {
   usage_type?: string
   signals?: ReputationSignal[] | null
   checked_at: string
+}
+
+// AIProvider is one of the three the operator can pick.
+export type AIProvider = 'openai' | 'anthropic' | 'openrouter'
+
+// AIProviderInfo describes a provider for the dropdown. It carries no secret.
+export interface AIProviderInfo {
+  id: AIProvider
+  label: string
+  key_prefix: string
+  keys_url: string
+  default_model: string
+}
+
+// AIStatus is everything the UI may know about the configured provider.
+// Deliberately no key field: the endpoint has no way to return one, and this
+// type has no way to hold one if it ever did.
+export interface AIStatus {
+  configured: boolean
+  enabled: boolean
+  provider?: AIProvider
+  model?: string
+  // The last four characters of the key — enough to tell two keys apart,
+  // never enough to use one. Not a masked secret.
+  key_tail?: string
+  verified_at?: string
+  providers: AIProviderInfo[]
 }
 
 export interface SpeedtestResult {

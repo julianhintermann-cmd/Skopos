@@ -14,6 +14,8 @@ export function TextInput({
   size = 'md',
   onKeyDown,
   className = '',
+  autoComplete,
+  spellCheck,
 }: {
   value: string
   onChange: (v: string) => void
@@ -28,6 +30,11 @@ export function TextInput({
   size?: Size
   onKeyDown?: (e: KeyboardEvent) => void
   className?: string
+  // Both exist for the credential fields. A browser that offers to autofill a
+  // Cloudflare token into an OpenAI key box, or underlines it as a spelling
+  // mistake, is doing the operator no favours.
+  autoComplete?: string
+  spellCheck?: boolean
 }) {
   const pad = size === 'sm' ? 'px-2 py-1 text-xs' : 'px-3 py-2 text-sm'
   return (
@@ -37,6 +44,8 @@ export function TextInput({
       disabled={disabled}
       placeholder={placeholder}
       aria-invalid={invalid || undefined}
+      autoComplete={autoComplete}
+      spellCheck={spellCheck}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
       className={`w-full rounded-md border bg-raised text-fg transition-colors placeholder:text-fg-muted disabled:opacity-50 ${
@@ -59,7 +68,9 @@ export function Field({
 }: {
   label: string
   children: ReactNode
-  hint?: string
+  // ReactNode, not string: a hint that has to name where to get an API key
+  // needs a link in it.
+  hint?: ReactNode
   error?: string
   width?: string
   htmlFor?: string

@@ -337,7 +337,7 @@ export function Firewall({ onUnauthorized, canWrite }: { onUnauthorized: () => v
               </div>
             ) : (
               <ScrollArea label="Active blocks">
-                <table className="w-full text-sm">
+                <table className="sk-rows w-full text-sm">
                   <thead>
                     <tr style={{ color: 'var(--muted)' }}>
                       {canWrite && (

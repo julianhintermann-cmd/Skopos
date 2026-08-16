@@ -43,7 +43,7 @@ export function FlowTable({ rows, index, empty }: { rows: FeedFlow[]; index: Dev
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="sk-rows w-full text-sm">
         <thead>
           <tr style={{ color: 'var(--muted)' }}>
             <Hd>Time</Hd>
@@ -68,11 +68,8 @@ export function FlowTable({ rows, index, empty }: { rows: FeedFlow[]; index: Dev
 function FlowRow({ row, index }: { row: FeedFlow; index: DeviceIndex }) {
   return (
     <tr
-      style={{
-        borderTop: '1px solid var(--border)',
-        background: row._fresh ? 'var(--accent-tint)' : undefined,
-        transition: 'background 1.2s ease-out',
-      }}
+      className={row._fresh ? 'motion-safe:animate-flash' : undefined}
+      style={{ borderTop: '1px solid var(--border)' }}
     >
       <Cell muted>{clock(row.end)}</Cell>
       <Cell>
@@ -109,12 +106,8 @@ function FlowCard({ row, index }: { row: FeedFlow; index: DeviceIndex }) {
   const dst = row.dst_name || index.names.get(row.dst) || row.dst
   return (
     <div
-      className="px-4 py-2.5"
-      style={{
-        borderTop: '1px solid var(--border)',
-        background: row._fresh ? 'var(--accent-tint)' : undefined,
-        transition: 'background 1.2s ease-out',
-      }}
+      className={'px-4 py-2.5' + (row._fresh ? ' motion-safe:animate-flash' : '')}
+      style={{ borderTop: '1px solid var(--border)' }}
     >
       <div className="flex items-center gap-1.5 text-[13px] font-medium">
         <span className="min-w-0 flex-1 truncate">

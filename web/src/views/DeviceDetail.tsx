@@ -137,7 +137,7 @@ export function DeviceDetail({ onUnauthorized, canWrite }: { onUnauthorized: () 
             // instead of assuming, so a sixth column added later announces
             // itself rather than clipping in silence.
             <ScrollArea label="Ports and protocols" className="pb-2">
-              <table className="w-full text-sm">
+              <table className="sk-rows w-full text-sm">
                 <thead>
                   <tr style={{ color: 'var(--muted)' }}>
                     <Th>Port</Th>

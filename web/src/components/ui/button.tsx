@@ -77,7 +77,7 @@ export function Button({
 function Spin() {
   return (
     <svg
-      className="animate-[skopos-spin_0.7s_linear_infinite]"
+      className="animate-spin-sm"
       width="12"
       height="12"
       viewBox="0 0 24 24"

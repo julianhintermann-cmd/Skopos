@@ -159,7 +159,7 @@ export function System({ onUnauthorized, canWrite }: { onUnauthorized: () => voi
           </ul>
           ) : (
           <ScrollArea label="Audit log">
-            <table className="w-full text-sm">
+            <table className="sk-rows w-full text-sm">
               <thead>
                 <tr style={{ color: 'var(--muted)' }}>
                   <Th>Time</Th>

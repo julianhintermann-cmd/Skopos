@@ -49,8 +49,8 @@ export function BottomSheet({
   return (
     <div className="fixed inset-0 z-50">
       <div
-        className="absolute inset-0"
-        style={{ background: 'rgba(0,0,0,0.55)', animation: 'skopos-fade-in 0.18s ease-out' }}
+        className="absolute inset-0 animate-appear"
+        style={{ background: 'var(--sk-scrim)' }}
         onClick={onClose}
         aria-hidden
       />
@@ -60,11 +60,10 @@ export function BottomSheet({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t outline-none"
+        className="absolute inset-x-0 bottom-0 animate-rise rounded-t-2xl border-t outline-none"
         style={{
           background: 'var(--surface)',
           borderColor: 'var(--border)',
-          animation: 'skopos-slide-up 0.22s ease-out',
           paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >

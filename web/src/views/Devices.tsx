@@ -179,7 +179,7 @@ export function Devices({ onUnauthorized, canWrite }: { onUnauthorized: () => vo
           // overflow-x-auto: it measures, so a long vendor string or a browser
           // window dragged narrow gets named instead of clipped in silence.
           <ScrollArea label="Device list">
-            <table className="w-full text-sm">
+            <table className="sk-rows w-full text-sm">
               <thead>
                 <tr style={{ color: 'var(--muted)' }}>
                   <Th>Name</Th>

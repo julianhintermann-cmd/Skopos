@@ -24,11 +24,11 @@ const maxBody = 8 << 20
 // blocked a request made with a perfectly good key, and telling the operator
 // their key was rejected would send them off to regenerate a key that is fine.
 var (
-	ErrBadKey       = errors.New("ai: the provider rejected this key")
-	ErrNoCredit     = errors.New("ai: the provider reports no remaining credit")
-	ErrForbidden    = errors.New("ai: the provider refused this request")
-	ErrRateLimited  = errors.New("ai: the provider is rate limiting this key")
-	ErrProviderDown = errors.New("ai: the provider is unavailable")
+	ErrBadKey        = errors.New("ai: the provider rejected this key")
+	ErrNoCredit      = errors.New("ai: the provider reports no remaining credit")
+	ErrForbidden     = errors.New("ai: the provider refused this request")
+	ErrRateLimited   = errors.New("ai: the provider is rate limiting this key")
+	ErrProviderDown  = errors.New("ai: the provider is unavailable")
 	ErrNotConfigured = errors.New("ai: no provider is configured")
 )
 

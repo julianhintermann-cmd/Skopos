@@ -34,7 +34,11 @@ export function AISettings({ canWrite }: { canWrite: boolean }) {
       // The plaintext leaves React state the moment the server has it.
       setKey('')
       st.refresh()
-      toast.show({ tone: 'good', message: 'Key verified and stored' })
+      // "Stored" on its own reads as "done", and it is not: storing a key
+      // deliberately leaves sending off, so the toast has to name the step that
+      // is still missing or the operator goes looking for a button that is not
+      // there yet.
+      toast.show({ tone: 'good', message: 'Key verified and stored — now switch sending on' })
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -166,6 +170,16 @@ export function AISettings({ canWrite }: { canWrite: boolean }) {
               </Field>
             )}
           </>
+        )}
+
+        {data?.configured && !data.enabled && (
+          <div
+            className="animate-appear rounded-md px-3 py-2.5 text-xs"
+            style={{ background: 'var(--surface-2)', color: 'var(--text)' }}
+          >
+            <strong>Stored, but off.</strong> A key on its own does nothing. Until you turn on the
+            switch below, alerts show no “Explain this alert” button and no request is ever made.
+          </div>
         )}
 
         {data?.configured && (

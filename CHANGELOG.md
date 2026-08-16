@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1]
+
+### Fixed
+
+- **A stored AI key looked like a finished setup, and wasn't.** Storing a key
+  deliberately leaves sending switched off — a key at rest sends nothing, and
+  turning it on is a second, separate decision because it is the moment
+  household data becomes able to leave the machine. But the success message
+  said "Key verified and stored", the alert page then rendered nothing at all,
+  and there was no way to tell a half-finished setup from a broken one. The
+  alert page now says so in the one state where it matters — a key is stored
+  but sending is off — and links to the switch; it still renders nothing for an
+  operator who never configured a provider, because an alert page owes a paid
+  third-party service no advertising. The settings card names the missing step
+  instead of showing an "Off" pill and leaving the reader to infer it, and the
+  message after a key is accepted now says what is still required.
+- Both cards name the provider the way the dropdown does ("OpenAI") rather than
+  by its internal id ("openai").
+
 ## [0.5.0]
 
 Practically every address an operator opened reported "Abuse 70%". The
@@ -997,7 +1016,9 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.1
+[0.5.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.0
 [0.4.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.4.0
 [0.3.3]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.3
 [0.3.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.3.2

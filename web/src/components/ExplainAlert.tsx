@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, type AIStatus } from '../lib/api'
 import { useFetch } from '../lib/useFetch'
 import { Button, Card, CardHeader } from './ui'
@@ -11,9 +12,15 @@ import { Button, Card, CardHeader } from './ui'
 // who caused it, and makes a failure a visible error rather than a silent
 // nightly leak.
 //
-// The card renders nothing at all until a provider is configured and switched
-// on. An operator who has not opted in should not be shown a button whose only
-// function is to ask them to opt in.
+// The card renders nothing at all until a provider is configured. An operator
+// who has not opted in should not be shown a button whose only function is to
+// ask them to opt in — an alert page does not owe a paid third-party service
+// any advertising.
+//
+// Configured-but-switched-off is a different state, and it is the one that
+// traps people: the key was pasted, the toast said it was stored, and then this
+// page looks exactly like it did before. Rendering nothing there is not
+// restraint, it is a dead end. That state gets one line and the way out.
 
 interface ExplainResponse {
   answer: string
@@ -30,7 +37,29 @@ export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite:
   const [err, setErr] = useState('')
   const [showSent, setShowSent] = useState(false)
 
-  if (!ai.data?.configured || !ai.data.enabled) return null
+  if (!ai.data?.configured) return null
+
+  const label =
+    ai.data.providers?.find((p) => p.id === ai.data?.provider)?.label ?? ai.data.provider
+
+  if (!ai.data.enabled) {
+    return (
+      <Card>
+        <CardHeader title="Explain this" sub="a key is stored, but sending is switched off" />
+        <div
+          className="px-4 py-3 text-sm"
+          style={{ borderTop: '1px solid var(--border)', color: 'var(--muted)' }}
+        >
+          Your {label} key is saved. Nothing is sent anywhere until you turn sending on, so there
+          is no button here yet —{' '}
+          <Link to="/settings" className="underline" style={{ color: 'var(--accent-strong)' }}>
+            switch it on under “AI explanations”
+          </Link>
+          .
+        </div>
+      </Card>
+    )
+  }
 
   async function explain() {
     setBusy(true)
@@ -48,7 +77,7 @@ export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite:
     <Card>
       <CardHeader
         title="Explain this"
-        sub={`a language model's reading of the finding — ${ai.data.provider}`}
+        sub={`a language model's reading of the finding — ${label}`}
       />
       <div className="space-y-3 px-4 py-3 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
         {!answer && (
@@ -57,7 +86,7 @@ export function ExplainAlert({ alertID, canWrite }: { alertID: number; canWrite:
               Explain this alert
             </Button>
             <span className="text-xs" style={{ color: 'var(--muted)' }}>
-              Sends a redacted description of this one alert to {ai.data.provider}.
+              Sends a redacted description of this one alert to {label}.
             </span>
           </div>
         )}

@@ -2,6 +2,7 @@ package reputation
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -59,8 +60,9 @@ func TestLookupCombinesSources(t *testing.T) {
 	if info.AbuseReports != 1200 || info.Targets != 57 {
 		t.Errorf("dshield counts = %d/%d, want 1200/57", info.AbuseReports, info.Targets)
 	}
-	if info.AbuseScore == nil || *info.AbuseScore < 50 {
-		t.Errorf("score = %v, want a high score for 1200 reports across 57 targets", info.AbuseScore)
+	if info.Verdict != VerdictReported {
+		t.Errorf("verdict = %q, want %q for 1200 reports across 57 targets",
+			info.Verdict, VerdictReported)
 	}
 	if info.LastReport != "2026-08-12" || info.Source != "dshield" {
 		t.Errorf("report metadata missing: %+v", info)
@@ -114,7 +116,7 @@ func TestLookupDegradesIndependently(t *testing.T) {
 // An address nobody has data on is unknown, not clean. Reporting it as a
 // confident zero is the one answer the card must never give: it sat next to a
 // critical alert and read as reassurance.
-func TestUnknownAddressHasNoScore(t *testing.T) {
+func TestUnknownAddressIsNotCleared(t *testing.T) {
 	// DShield answers with nulls for addresses it has never seen; blocklist.de
 	// answers with zeroes.
 	s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,8 +133,9 @@ func TestUnknownAddressHasNoScore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.AbuseScore != nil {
-		t.Errorf("score = %d, want none: no source had data", *info.AbuseScore)
+	if info.Verdict != VerdictNoReports {
+		t.Errorf("verdict = %q, want %q: both sources answered and neither held anything",
+			info.Verdict, VerdictNoReports)
 	}
 	if info.AbuseReports != 0 {
 		t.Errorf("reports = %d, want 0", info.AbuseReports)
@@ -142,8 +145,11 @@ func TestUnknownAddressHasNoScore(t *testing.T) {
 		t.Fatalf("signals = %+v, want one per public source", info.Signals)
 	}
 	for _, sig := range info.Signals {
-		if sig.Score != nil {
-			t.Errorf("%s reported a score for an address it does not know", sig.Source)
+		if sig.State != StateClean {
+			t.Errorf("%s: state = %q, want %q", sig.Source, sig.State, StateClean)
+		}
+		if sig.Reports != nil || sig.Targets != nil {
+			t.Errorf("%s published counts for an address it has never seen", sig.Source)
 		}
 	}
 }
@@ -162,15 +168,31 @@ func TestBlocklistMembershipCounts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"name":"TECHOFF_SRV_LIMITED","country":"AD"}`))
 		}
 	}))
-	s.Listed = func(netip.Addr) bool { return true }
+	s.Listed = func(netip.Addr) []string { return []string{"spamhaus_drop"} }
 	s.Geo = func(netip.Addr) (string, bool) { return "NL", true }
 
 	info, err := s.Lookup(context.Background(), netip.MustParseAddr("195.178.110.48"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.AbuseScore == nil || *info.AbuseScore != listedScore {
-		t.Errorf("score = %v, want %d from the blocklist match", info.AbuseScore, listedScore)
+	if info.Verdict != VerdictListed {
+		t.Errorf("verdict = %q, want %q from the blocklist match", info.Verdict, VerdictListed)
+	}
+	// The signal has to name the list. "On a blocklist" leaves the reader
+	// unable to weigh the match, and weighing it is the whole decision: a
+	// Spamhaus DROP entry and somebody's homemade list are not the same claim.
+	var named bool
+	for _, sig := range info.Signals {
+		if sig.Source != "blocklists" {
+			continue
+		}
+		named = true
+		if len(sig.Lists) != 1 || sig.Lists[0] != "spamhaus_drop" {
+			t.Errorf("lists = %v, want the matching list named", sig.Lists)
+		}
+	}
+	if !named {
+		t.Error("no blocklists signal at all")
 	}
 	// GeoIP knows where the traffic comes from; the registry only knows where
 	// the holder is incorporated.
@@ -182,9 +204,10 @@ func TestBlocklistMembershipCounts(t *testing.T) {
 	}
 }
 
-// The strongest reading wins: one source with evidence should not be diluted
-// by others that have never heard of the address.
-func TestStrongestSignalWins(t *testing.T) {
+// Each source keeps its own figures. Collapsing "1 report" and "1430 reports"
+// into a single number is precisely what 0.5.0 removed: those are different
+// claims from different sensor networks, and only the reader can weigh them.
+func TestEachSourceKeepsItsOwnFigures(t *testing.T) {
 	s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/api/ip/"):
@@ -199,11 +222,59 @@ func TestStrongestSignalWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.AbuseScore == nil || *info.AbuseScore != 95 {
-		t.Errorf("score = %v, want 95 from blocklist.de rather than DShield's 15", info.AbuseScore)
+	if info.Verdict != VerdictReported {
+		t.Errorf("verdict = %q, want %q", info.Verdict, VerdictReported)
+	}
+	got := map[string]int{}
+	for _, sig := range info.Signals {
+		if sig.Reports != nil {
+			got[sig.Source] = *sig.Reports
+		}
+	}
+	if got["dshield"] != 1 || got["blocklist.de"] != 1430 {
+		t.Errorf("per-source reports = %v, want dshield 1 and blocklist.de 1430", got)
 	}
 	if info.AbuseReports != 1430 {
 		t.Errorf("reports = %d, want the highest count any source gave", info.AbuseReports)
+	}
+}
+
+// The regression guard for the bug this release exists to fix. Whatever else
+// the payload grows, it must never again carry a number Skopos invented: the
+// operator saw 70% on practically every address, and 70 was a constant.
+func TestPayloadCarriesNoInventedScore(t *testing.T) {
+	s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/ip/"):
+			_, _ = w.Write([]byte(`{"ip":{"count":"1200","attacks":"57"}}`))
+		case strings.HasPrefix(r.URL.Path, "/api.php"):
+			_, _ = w.Write([]byte("attacks: 640\nreports: 1430\n"))
+		default:
+			_, _ = w.Write([]byte(`{"name":"HOSTER"}`))
+		}
+	}))
+	s.Listed = func(netip.Addr) []string { return []string{"firehol_level1"} }
+
+	info, err := s.Lookup(context.Background(), netip.MustParseAddr("195.178.110.48"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{"abuse_score", "\"score\"", "percent"} {
+		if strings.Contains(string(body), banned) {
+			t.Errorf("payload still carries %s: %s", banned, body)
+		}
+	}
+	// Every number that survives has to be traceable to a source that
+	// published it.
+	if info.AbuseReports != 1430 {
+		t.Errorf("reports = %d, want blocklist.de's 1430", info.AbuseReports)
+	}
+	if info.Targets != 57 {
+		t.Errorf("targets = %d, want DShield's 57", info.Targets)
 	}
 }
 
@@ -230,22 +301,6 @@ func TestParseBlocklistDE(t *testing.T) {
 	}
 }
 
-func TestDShieldScore(t *testing.T) {
-	cases := []struct{ reports, targets, want int }{
-		{0, 0, 0},
-		{1, 0, 15},
-		{50, 3, 35},       // 30 (≥10 reports) + 5 (≥2 targets)
-		{150, 3, 50},      // 45 (≥100 reports) + 5
-		{5000, 200, 85},   // 60 + 25
-		{50000, 500, 100}, // 75 + 25
-	}
-	for _, c := range cases {
-		if got := dshieldScore(c.reports, c.targets); got != c.want {
-			t.Errorf("dshieldScore(%d, %d) = %d, want %d", c.reports, c.targets, got, c.want)
-		}
-	}
-}
-
 // The 0.3.0 failure, guarded. A decode into the DShield response struct
 // succeeds on any well-formed JSON and leaves every field zero; reading that
 // zero as "no reports" is how the card showed a confident green nothing beside
@@ -269,11 +324,13 @@ func TestDShieldUnrecognisedReplyIsNotNoReports(t *testing.T) {
 			if sig.Source != "dshield" {
 				continue
 			}
-			if sig.Detail == "no reports" {
-				t.Errorf("body %s was reported as a measured zero", body)
+			if sig.State != StateError {
+				t.Errorf("body %s produced state %q (%q), want %q",
+					body, sig.State, sig.Detail, StateError)
 			}
-			if !strings.Contains(sig.Detail, "no answer") {
-				t.Errorf("body %s produced %q, want it marked as no answer", body, sig.Detail)
+			if sig.Reports != nil {
+				t.Errorf("body %s produced a report count of %d out of nothing",
+					body, *sig.Reports)
 			}
 		}
 		if info.Source == "dshield" {
@@ -308,7 +365,7 @@ func TestNoBlocklistsLoadedIsNotAClearance(t *testing.T) {
 	s := testService(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
-	s.Listed = func(netip.Addr) bool { return false }
+	s.Listed = func(netip.Addr) []string { return nil }
 	s.FeedsLoaded = func() bool { return false }
 
 	info, _ := s.Lookup(context.Background(), netip.MustParseAddr("203.0.113.9"))

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,16 @@ type FeedsConfig struct {
 	IsInternal func(netip.Addr) bool
 }
 
+// listSet is one blocklist's entries under the name the operator configured
+// it as. Kept apart from the merged set so a match can be attributed: an
+// address on Spamhaus DROP and an address on somebody's homemade list are
+// evidence of very different weight, and collapsing both to "on a blocklist"
+// throws away the only part an operator can act on.
+type listSet struct {
+	name string
+	set  *netset.Set
+}
+
 // Feeds matches the external endpoint of each packet against downloaded IP
 // blocklists. The active set is swapped atomically on refresh, so lookups
 // never block on a download.
@@ -61,11 +72,17 @@ type Feeds struct {
 
 	set atomic.Pointer[netset.Set]
 
+	// lists holds the same entries split by the list they came from. Every
+	// packet is tested against the merged set above; these are walked only when
+	// someone opens an address and asks why it is flagged.
+	lists atomic.Pointer[[]listSet]
+
 	// cacheMu guards the per-URL ETag and last-good body cache, so a feed
 	// answering 304 keeps contributing its entries to the rebuilt set.
 	cacheMu sync.Mutex
 	etags   map[string]string
 	bodies  map[string][]byte
+	names   map[string]string // url → the name the operator configured it under
 
 	firedMu sync.Mutex
 	fired   map[netip.Addr]time.Time
@@ -86,11 +103,13 @@ func NewFeeds(cfg FeedsConfig, sink Sink, fetcher Fetcher, clock Clock) *Feeds {
 		clock:   clock,
 		etags:   make(map[string]string),
 		bodies:  make(map[string][]byte),
+		names:   make(map[string]string),
 		fired:   make(map[netip.Addr]time.Time),
 	}
 	empty := netset.New()
 	empty.Build()
 	f.set.Store(empty)
+	f.lists.Store(&[]listSet{})
 	return f
 }
 
@@ -121,6 +140,7 @@ func (f *Feeds) Refresh(ctx context.Context) (loaded int, err error) {
 		}
 		f.cacheMu.Lock()
 		prevETag := f.etags[url]
+		f.names[url] = entry
 		f.cacheMu.Unlock()
 
 		res, ferr := f.fetcher.Fetch(ctx, url, prevETag)
@@ -140,15 +160,32 @@ func (f *Feeds) Refresh(ctx context.Context) (loaded int, err error) {
 	}
 
 	// Rebuild the active set from every cached feed body, so unchanged and
-	// changed feeds all contribute.
+	// changed feeds all contribute. Each body is parsed a second time into a
+	// set of its own; that costs a few thousand lines per refresh interval and
+	// buys the ability to name the list an address is on, which is the
+	// difference between a card an operator can act on and one that just says
+	// "flagged".
 	merged := netset.New()
+	var lists []listSet
 	f.cacheMu.Lock()
-	for _, body := range f.bodies {
+	for url, body := range f.bodies {
 		loaded += parseFeed(body, merged)
+		per := netset.New()
+		parseFeed(body, per)
+		per.Build()
+		name := f.names[url]
+		if name == "" {
+			name = url
+		}
+		lists = append(lists, listSet{name: name, set: per})
 	}
 	f.cacheMu.Unlock()
 	merged.Build()
 	f.set.Store(merged)
+	// Sorted so the card names lists in a stable order rather than in Go's
+	// randomised map order, which would otherwise reshuffle on every refresh.
+	sort.Slice(lists, func(i, j int) bool { return lists[i].name < lists[j].name })
+	f.lists.Store(&lists)
 
 	if len(failures) > 0 {
 		return loaded, fmt.Errorf("some feeds failed: %s", strings.Join(failures, "; "))
@@ -262,12 +299,25 @@ func (f *Feeds) Observe(p flow.Packet) {
 // Count returns the number of prefixes currently loaded.
 func (f *Feeds) Count() int { return f.set.Load().Len() }
 
-// Listed reports whether an address is in the currently loaded blocklists.
-// The reputation card asks: an address the operator's own lists already
-// condemn should not be presented as one nobody has anything on.
-func (f *Feeds) Listed(addr netip.Addr) bool {
+// Listed names every loaded blocklist that contains the address, empty when
+// none does. The reputation card asks: an address the operator's own lists
+// already condemn should not be presented as one nobody has anything on — and
+// the answer has to say which list, because that is what decides whether the
+// match means anything.
+func (f *Feeds) Listed(addr netip.Addr) []string {
 	if f == nil || !routableUnicast(addr) {
-		return false
+		return nil
 	}
-	return f.set.Load().Contains(addr.Unmap())
+	a := addr.Unmap()
+	lists := f.lists.Load()
+	if lists == nil {
+		return nil
+	}
+	var hits []string
+	for _, l := range *lists {
+		if l.set.Contains(a) {
+			hits = append(hits, l.name)
+		}
+	}
+	return hits
 }

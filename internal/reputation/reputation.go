@@ -11,6 +11,16 @@
 // this package will not do is present silence as safety: an address nobody
 // happened to have data on is unknown, not clean. Results are cached for a
 // day.
+//
+// There is no score here, and that is deliberate. None of these sources
+// publishes a risk rating; they publish counts and memberships. Until 0.5.0
+// this package manufactured a 0–100 number out of them anyway — a blocklist
+// match was hardcoded to 70, twenty reports to 70, and the card rendered the
+// result as "Abuse 70%". Since the built-in lists cover a great deal of
+// address space, almost every address an operator inspected came back 70, and
+// the one figure on the card that looked like a measurement was the only one
+// nobody had measured. What each source actually said is reported instead,
+// and the summary is a word rather than a percentage.
 package reputation
 
 import (
@@ -35,27 +45,70 @@ const (
 	maxBody               = 1 << 20
 )
 
-// listedScore is what "this address is on a blocklist you subscribe to"
-// is worth on the 0–100 scale. The built-in lists (FireHOL Level 1, Spamhaus
-// DROP) are conservative and slow to add an address, so a match is strong
-// evidence — and it is evidence Skopos already had in memory while the card
-// was reporting nothing.
-const listedScore = 70
-
 // userAgent identifies Skopos to DShield, which asks API users to be
 // identifiable rather than anonymous.
 const userAgent = "Skopos (+https://github.com/julianhintermann-cmd/skopos)"
 
-// Signal is one source's verdict, kept separate so the card can show who said
-// what instead of a single number nobody can check.
+// State is what one source actually managed to say. The distinction between
+// the last three is the whole point: a source that holds nothing, a source
+// that was never asked, and a source that was asked and failed are three
+// different facts, and flattening them is how an unanswered lookup comes to
+// look like a clean one.
+type State string
+
+const (
+	// StateListed — the address is on a curated blocklist, named in Lists.
+	StateListed State = "listed"
+	// StateReported — sensors reported it, with counts that came from the
+	// source rather than from us.
+	StateReported State = "reported"
+	// StateClean — the source answered and holds nothing on this address.
+	StateClean State = "clean"
+	// StateUnknown — the source was not consulted, or had nothing to compare
+	// against.
+	StateUnknown State = "unknown"
+	// StateError — the source was asked and the answer could not be used.
+	StateError State = "error"
+)
+
+// Signal is one source's answer, kept whole so the card can show who said what.
+//
+// It used to carry a 0–100 Score. No free source publishes such a number, so
+// Skopos was computing one by bucketing report counts — 20 reports became 70,
+// a blocklist match became a flat 70 — and rendering the result as "Abuse 70%".
+// That is a fabricated measurement wearing the clothes of a real one, and
+// because the built-in lists cover a great deal of address space, nearly every
+// address an operator looked at came back 70. The counts below are what the
+// sources actually publish; the reader can weigh them.
 type Signal struct {
 	Source string `json:"source"`
-	// Score is this source's 0–100 reading, or nil when it had no data. A
-	// source that answered "I have never seen this address" is not the same
-	// as a source that answered zero.
-	Score  *int   `json:"score,omitempty"`
+	State  State  `json:"state"`
 	Detail string `json:"detail"`
+	// Reports and Targets are the source's own figures, absent when it
+	// published none. Never derived, never defaulted to zero.
+	Reports *int `json:"reports,omitempty"`
+	Targets *int `json:"targets,omitempty"`
+	// Lists names the blocklists that matched, for a listed signal.
+	Lists []string `json:"lists,omitempty"`
 }
+
+// Verdict is the one-word summary, derived from the signals and never from
+// anything else. It is deliberately categorical: the underlying evidence is a
+// handful of report counts from two sensor networks and a membership test
+// against a blocklist, and no honest arithmetic turns that into a percentage.
+type Verdict string
+
+const (
+	// VerdictListed — at least one curated blocklist holds this address.
+	VerdictListed Verdict = "listed"
+	// VerdictReported — sensors have reported it, with counts.
+	VerdictReported Verdict = "reported"
+	// VerdictNoReports — every source that answered holds nothing. Weak
+	// evidence, and never rendered as safety.
+	VerdictNoReports Verdict = "no_reports"
+	// VerdictUnknown — nothing could be learned. Not the same as clean.
+	VerdictUnknown Verdict = "unknown"
+)
 
 // Info is everything Skopos knows about an external address.
 type Info struct {
@@ -67,9 +120,10 @@ type Info struct {
 	// records where the holder is incorporated, which is regularly a
 	// different country from the one the addresses are announced in.
 	CountrySource string `json:"country_source,omitempty"`
-	// AbuseScore is the highest 0–100 reading any source returned; nil when
-	// no source had data at all.
-	AbuseScore   *int   `json:"abuse_score,omitempty"`
+	// Verdict summarises the signals in one word. Always set.
+	Verdict Verdict `json:"verdict"`
+	// AbuseReports is the largest report count any source published, absent
+	// when none did. It is a count somebody else measured, not a rating.
 	AbuseReports int    `json:"abuse_reports,omitempty"`
 	ISP          string `json:"isp,omitempty"`
 	UsageType    string `json:"usage_type,omitempty"`
@@ -95,9 +149,12 @@ type Service struct {
 	// It is the accurate answer for "where is this?" and takes precedence
 	// over the registry's country, which describes the holder, not the route.
 	Geo func(netip.Addr) (string, bool)
-	// Listed reports whether the address is in one of the blocklists the
-	// operator already subscribes to. Answered from memory, no request.
-	Listed func(netip.Addr) bool
+	// Listed names the blocklists the operator subscribes to that contain the
+	// address, empty when none does. Answered from memory, no request. It
+	// returns names rather than a bare yes because "on a blocklist" leaves the
+	// reader unable to judge the match, and the lists differ enormously in how
+	// carefully they are curated.
+	Listed func(netip.Addr) []string
 	// FeedsLoaded reports whether any blocklist is actually loaded. Without
 	// it, Listed answering false is indistinguishable from having nothing to
 	// compare against — and the card would state "not on your blocklists" as
@@ -150,9 +207,15 @@ func (s *Service) Lookup(ctx context.Context, addr netip.Addr) (Info, error) {
 	s.local(addr, &info)
 
 	rdapOK := s.rdap(ctx, ip, &info) == nil
-	dshieldOK := s.dshield(ctx, ip, &info) == nil
-	blOK := s.blocklistDE(ctx, ip, &info) == nil
-	if !rdapOK && !dshieldOK && !blOK && len(info.Signals) == 0 {
+	_ = s.dshield(ctx, ip, &info)
+	_ = s.blocklistDE(ctx, ip, &info)
+
+	// Every source failing is a different thing from every source having
+	// nothing, and the caller has to be able to tell them apart — the first is
+	// our failure to report, the second is an answer. The test cannot be "did
+	// any signal appear", because a failed source now leaves one behind on
+	// purpose; it has to be whether any source produced a reading.
+	if !rdapOK && !answered(&info) {
 		return info, fmt.Errorf("reputation: all sources failed for %s", ip)
 	}
 	s.combine(&info)
@@ -168,6 +231,18 @@ func (s *Service) Lookup(ctx context.Context, addr netip.Addr) (Info, error) {
 	}
 	s.mu.Unlock()
 	return info, nil
+}
+
+// answered reports whether any source produced a reading, as opposed to
+// failing or having nothing to compare against.
+func answered(info *Info) bool {
+	for _, sig := range info.Signals {
+		switch sig.State {
+		case StateListed, StateReported, StateClean:
+			return true
+		}
+	}
+	return false
 }
 
 // local answers from what Skopos already holds: the GeoIP database it keeps
@@ -192,42 +267,52 @@ func (s *Service) local(addr netip.Addr, info *Info) {
 		// off, or every download failed; in both cases the honest answer is
 		// that we do not know.
 		info.Signals = append(info.Signals, Signal{
-			Source: "blocklists", Detail: "no blocklists loaded — nothing to check against",
+			Source: "blocklists", State: StateUnknown,
+			Detail: "no blocklists loaded — nothing to check against",
 		})
 		return
 	}
-	if s.Listed(addr) {
-		score := listedScore
+	if hits := s.Listed(addr); len(hits) > 0 {
 		info.Signals = append(info.Signals, Signal{
 			Source: "blocklists",
-			Score:  &score,
-			Detail: "on a blocklist you subscribe to",
+			State:  StateListed,
+			Lists:  hits,
+			Detail: "on " + strings.Join(hits, ", "),
 		})
 		return
 	}
 	info.Signals = append(info.Signals, Signal{
 		Source: "blocklists",
+		State:  StateClean,
 		Detail: "not on your blocklists",
 	})
 }
 
-// combine reduces the per-source readings to the single number the dashboard
-// shows. The strongest reading wins rather than an average: one source with
-// solid evidence should not be diluted by three that happen not to have heard
-// of the address. When nobody had data the score stays nil, because "no
-// reports" is an absence of evidence, not evidence of absence.
+// combine reduces the per-source answers to one word. The strongest evidence
+// wins rather than an average: one source holding a firm answer should not be
+// diluted by three that never heard of the address.
+//
+// The ordering is the point. A blocklist match outranks a report count because
+// somebody curated it; reports outrank silence because they are evidence;
+// silence from sources that answered outranks silence from sources that could
+// not, because at least somebody looked. Nothing here produces a number, and
+// nothing here treats an absence of evidence as evidence of absence.
 func (s *Service) combine(info *Info) {
-	var best *int
+	verdict := VerdictUnknown
 	for _, sig := range info.Signals {
-		if sig.Score == nil {
-			continue
-		}
-		if best == nil || *sig.Score > *best {
-			v := *sig.Score
-			best = &v
+		switch sig.State {
+		case StateListed:
+			info.Verdict = VerdictListed
+			return
+		case StateReported:
+			verdict = VerdictReported
+		case StateClean:
+			if verdict != VerdictReported {
+				verdict = VerdictNoReports
+			}
 		}
 	}
-	info.AbuseScore = best
+	info.Verdict = verdict
 }
 
 // rdap fills owner and country from the registry's RDAP record.
@@ -278,46 +363,58 @@ func (s *Service) blocklistDE(ctx context.Context, ip string, info *Info) error 
 	u := s.BlocklistDEURL + "?ip=" + url.QueryEscape(ip)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
+		fail(info, "blocklist.de", "the request could not be built")
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
+		fail(info, "blocklist.de", "could not be reached")
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		fail(info, "blocklist.de", "answered "+resp.Status)
 		return fmt.Errorf("blocklist.de: %s", resp.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
+		fail(info, "blocklist.de", "the reply could not be read")
 		return err
 	}
 
 	attacks, reports, ok := parseBlocklistDE(string(body))
 	if !ok {
-		info.Signals = append(info.Signals, Signal{
-			Source: "blocklist.de", Detail: "no answer — the reply was not recognised",
-		})
+		fail(info, "blocklist.de", "the reply was not recognised")
 		return fmt.Errorf("blocklist.de: unrecognised response")
 	}
 	if reports <= 0 && attacks <= 0 {
 		info.Signals = append(info.Signals, Signal{
 			Source: "blocklist.de",
+			State:  StateClean,
 			Detail: "no reports",
 		})
 		return nil
 	}
-	score := blocklistDEScore(attacks, reports)
+	r, a := reports, attacks
 	info.Signals = append(info.Signals, Signal{
-		Source: "blocklist.de",
-		Score:  &score,
-		Detail: fmt.Sprintf("%d reports, %d attacks", reports, attacks),
+		Source:  "blocklist.de",
+		State:   StateReported,
+		Reports: &r,
+		Targets: &a,
+		Detail:  fmt.Sprintf("%d reports, %d attacks", reports, attacks),
 	})
 	if reports > info.AbuseReports {
 		info.AbuseReports = reports
 	}
 	return nil
+}
+
+// fail records that a source could not answer. A source simply missing from
+// the card is indistinguishable from one that answered "nothing here", and
+// telling those two apart is the entire job of this package.
+func fail(info *Info, source, detail string) {
+	info.Signals = append(info.Signals, Signal{Source: source, State: StateError, Detail: detail})
 }
 
 // parseBlocklistDE reads the service's plain-text reply, which is a couple of
@@ -348,27 +445,6 @@ func parseBlocklistDE(body string) (attacks, reports int, ok bool) {
 	return attacks, reports, sawAttacks && sawReports
 }
 
-// blocklistDEScore maps report volume onto the shared 0–100 scale. Its
-// reports come from operators who saw the address attack them, so even a
-// handful means something.
-func blocklistDEScore(attacks, reports int) int {
-	n := max(reports, attacks)
-	switch {
-	case n >= 500:
-		return 95
-	case n >= 100:
-		return 85
-	case n >= 20:
-		return 70
-	case n >= 5:
-		return 55
-	case n >= 1:
-		return 35
-	default:
-		return 0
-	}
-}
-
 // dshield fills the attack history from the SANS Internet Storm Center. Its
 // data comes from firewall logs submitted by thousands of sensors, which is
 // exactly the question an operator has about an address that just knocked:
@@ -383,10 +459,12 @@ func (s *Service) dshield(ctx context.Context, ip string, info *Info) error {
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
+		fail(info, "dshield", "could not be reached")
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		fail(info, "dshield", "answered "+resp.Status)
 		return fmt.Errorf("dshield: %s", resp.Status)
 	}
 	// DShield types loosely: counts arrive as numbers or strings, and unknown
@@ -427,9 +505,7 @@ func (s *Service) dshield(ctx context.Context, ip string, info *Info) error {
 	// deliberately structural rather than tied to one field name.)
 	if out.IP == nil || (out.IP.Number == "" && out.IP.Count == 0 && out.IP.Attacks == 0 &&
 		out.IP.MinDate == "" && out.IP.MaxDate == "" && out.IP.AsName == "") {
-		info.Signals = append(info.Signals, Signal{
-			Source: "dshield", Detail: "no answer — the reply carried nothing about this address",
-		})
+		fail(info, "dshield", "the reply carried nothing about this address")
 		return fmt.Errorf("dshield: unrecognised response")
 	}
 
@@ -456,48 +532,20 @@ func (s *Service) dshield(ctx context.Context, ip string, info *Info) error {
 	}
 
 	if reports <= 0 {
-		info.Signals = append(info.Signals, Signal{Source: "dshield", Detail: "no reports"})
+		info.Signals = append(info.Signals, Signal{
+			Source: "dshield", State: StateClean, Detail: "no reports",
+		})
 		return nil
 	}
-	score := dshieldScore(reports, targets)
+	r, t := reports, targets
 	info.Signals = append(info.Signals, Signal{
-		Source: "dshield",
-		Score:  &score,
-		Detail: fmt.Sprintf("%d reports, %d targets", reports, targets),
+		Source:  "dshield",
+		State:   StateReported,
+		Reports: &r,
+		Targets: &t,
+		Detail:  fmt.Sprintf("%d reports from %d targets", reports, targets),
 	})
 	return nil
-}
-
-// dshieldScore maps report volume onto the same 0–100 scale the dashboard
-// already renders. Reports are logs submitted by sensors, targets are the
-// distinct victims: an address hammering many networks scores higher than one
-// noisy log from a single sensor.
-func dshieldScore(reports, targets int) int {
-	if reports <= 0 {
-		return 0
-	}
-	score := 0
-	switch {
-	case reports >= 10000:
-		score = 75
-	case reports >= 1000:
-		score = 60
-	case reports >= 100:
-		score = 45
-	case reports >= 10:
-		score = 30
-	default:
-		score = 15
-	}
-	switch {
-	case targets >= 100:
-		score += 25
-	case targets >= 10:
-		score += 15
-	case targets >= 2:
-		score += 5
-	}
-	return min(score, 100)
 }
 
 // flexInt decodes a JSON number that may arrive as a string or null.

@@ -355,12 +355,21 @@ paths:
         "502": { description: Measurement failed }
   /api/reputation:
     get:
-      summary: Who an external address belongs to, and its attack history
+      summary: Who an external address belongs to, and what anyone has on it
       description: >
         Ownership and country from RDAP, attack history from the SANS Internet
-        Storm Center's DShield database. Both are open sources that need no
-        account or API key, so this works on a fresh install. Answers are
-        cached for a day.
+        Storm Center's DShield database and from blocklist.de, plus membership
+        of the blocklists this installation already downloads. All are open
+        sources that need no account or API key, so this works on a fresh
+        install. Answers are cached for a day.
+
+
+        The response carries a categorical `verdict` — `listed`, `reported`,
+        `no_reports` or `unknown` — and a `signals` array holding each source's
+        own answer with the counts that source published. There is no numeric
+        score: none of these sources publishes one, and the 0-100 `abuse_score`
+        this endpoint returned before 0.5.0 was computed here rather than
+        measured anywhere.
       parameters:
         - { name: ip, in: query, required: true, schema: { type: string } }
       responses:

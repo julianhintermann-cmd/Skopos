@@ -423,13 +423,29 @@ export function countryName(code: string): string {
   }
 }
 
-// ReputationSignal is one source's answer. A missing score means the source
-// answered but had no data on the address — which is not the same as zero.
+// ReputationState is what one source managed to say. The last three are
+// deliberately distinct: a source holding nothing, a source that could not be
+// asked, and a source that was asked and failed are three different facts.
+export type ReputationState = 'listed' | 'reported' | 'clean' | 'unknown' | 'error'
+
+// ReputationSignal is one source's answer, carrying only figures that source
+// published. It used to carry a 0-100 `score` that no source publishes and
+// Skopos invented; see the note on ReputationVerdict.
 export interface ReputationSignal {
   source: string
-  score?: number
+  state: ReputationState
   detail: string
+  reports?: number
+  targets?: number
+  lists?: string[]
 }
+
+// ReputationVerdict is a word, not a percentage, and that is the point. The
+// free sources publish report counts and list memberships, never a risk
+// rating. Skopos used to manufacture one — a blocklist match was hardcoded to
+// 70 — so nearly every address came back "Abuse 70%", the one figure on the
+// card that looked measured being the only one nobody had measured.
+export type ReputationVerdict = 'listed' | 'reported' | 'no_reports' | 'unknown'
 
 export interface ReputationInfo {
   ip: string
@@ -439,7 +455,7 @@ export interface ReputationInfo {
   // "geoip" (where the address is), "registry" (where its holder is
   // incorporated) or "asn".
   country_source?: string
-  abuse_score?: number
+  verdict: ReputationVerdict
   abuse_reports?: number
   isp?: string
   usage_type?: string

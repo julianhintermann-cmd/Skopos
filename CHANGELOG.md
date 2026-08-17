@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.2]
+## [0.6.0]
+
+### Added
+
+- **A startup animation.** Sonar rings bloom, the sweep turns and pings a
+  contact, SKOPOS resolves under the mark, and then the mark flies into the
+  sidebar and becomes the logo that was always there. It ends exactly on
+  `Logo.tsx` — same geometry, and the stroke weights glide to the values the
+  real mark uses — so the handoff is invisible.
+
+  It is an overlay, not a screen. The real application mounts, fetches and
+  renders underneath it from the first frame, and that is what gets revealed:
+  no stand-in dashboard, no placeholder throughput, no invented device names.
+  A splash that painted a plausible network for six seconds would be the one
+  screen in Skopos that lies, and there would be a second copy of the shell to
+  keep in sync forever. There is neither.
+
+  The flight measures the real logo in the DOM instead of assuming where it is,
+  so it lands correctly on the sidebar, on the collapsed rail — where the
+  wordmark has no target and dissolves in place instead — and on the phone
+  header, from one code path that cannot drift when the layout changes. Any
+  click or keypress ends it, which also keeps focus from wandering into an
+  application hidden behind an overlay. `prefers-reduced-motion` gets the
+  finished mark held briefly and no motion at all.
 
 ### Fixed
 
@@ -1043,8 +1066,8 @@ file.
   demo mode for a zero-privilege trial, and a full configuration reference
   generated from the source.
 
-[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.5.2...HEAD
-[0.5.2]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.2
+[Unreleased]: https://github.com/julianhintermann-cmd/skopos/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.6.0
 [0.5.1]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.1
 [0.5.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.5.0
 [0.4.0]: https://github.com/julianhintermann-cmd/skopos/releases/tag/v0.4.0

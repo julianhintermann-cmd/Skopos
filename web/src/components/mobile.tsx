@@ -193,9 +193,16 @@ export function MobileShell({
         className="sticky top-0 z-40 flex items-center justify-between gap-2 border-b px-4 py-2.5"
         style={{ background: 'var(--surface)', borderColor: 'var(--border)', paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
       >
+        {/* The same landing pads the sidebar carries, so the startup animation
+            flies to the phone header without this file or Splash knowing which
+            shell is mounted. */}
         <div className="flex items-center gap-2">
-          <Logo size={22} />
-          <span className="font-mono text-xs font-semibold uppercase tracking-[0.25em]">Skopos</span>
+          <span data-sk-brand-mark className="flex">
+            <Logo size={22} />
+          </span>
+          <span data-sk-brand-word className="font-mono text-xs font-semibold uppercase tracking-[0.25em]">
+            Skopos
+          </span>
         </div>
         <div className="flex items-center gap-2.5">
           <StatusDots />

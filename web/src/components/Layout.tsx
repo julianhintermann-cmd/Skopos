@@ -83,9 +83,19 @@ function DesktopShell({
         className={`flex shrink-0 flex-col border-r ${rail ? 'w-14' : 'w-56'}`}
         style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}
       >
+        {/* data-sk-brand-*: the landing pads for the startup animation, which
+            measures them rather than assuming where they are. That keeps the
+            flight correct in the rail, where the wordmark is not rendered at
+            all, and it cannot drift if this header is ever restyled. */}
         <div className={`flex items-center gap-2.5 py-4 ${rail ? 'justify-center px-0' : 'px-5'}`}>
-          <Logo size={26} />
-          {!rail && <div className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">Skopos</div>}
+          <span data-sk-brand-mark className="flex">
+            <Logo size={26} />
+          </span>
+          {!rail && (
+            <div data-sk-brand-word className="font-mono text-sm font-semibold uppercase tracking-[0.3em]">
+              Skopos
+            </div>
+          )}
         </div>
         <nav className={`flex flex-1 flex-col gap-3 overflow-y-auto py-2 ${rail ? 'px-1.5' : 'px-3'}`}>
           {SECTIONS.map((section) => (

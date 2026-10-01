@@ -29,3 +29,10 @@ web/node_modules/
 
 # Screenshots working dir (final PNGs are committed under docs/screenshots)
 /tmp/
+
+# Installed agent plugins and their bundled assets (brag ships ~17MB of
+# third-party audio under its own licence) plus anything /brag renders.
+/.claude/
+/brag-output/
+/brag-output-*/
+/.local/
